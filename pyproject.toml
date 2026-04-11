@@ -1,7 +1,25 @@
 [project]
 name = "neuralsignalresearcher"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-agent LangGraph orchestrator for NeuralSignal research automation"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "langgraph>=0.2",
+    "langchain>=0.3",
+    "langchain-anthropic>=0.3",
+    "langchain-openai>=0.2",
+    "arxiv>=2.1",
+    "chromadb>=0.5",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+    "mlflow>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+# neuralsignal is not installed as a package dep — its multi-package flat layout
+# prevents editable install. The experiment runner injects NEURALSIGNAL_SRC_PATH
+# into PYTHONPATH when launching generated scripts.

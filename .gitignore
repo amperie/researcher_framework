@@ -69,3 +69,11 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Application logs
+logs/
+*.log
+
+# Secrets and local tool config
+.env
+.claude/
