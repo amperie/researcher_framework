@@ -44,29 +44,41 @@ class ResearchState(TypedDict, total=False):
     # -------------------------------------------------------------------------
     # Code generation stage  (code_generation_node)
     # -------------------------------------------------------------------------
+    generated_scripts: list[dict]
+    """One generated script per feature proposal.
+    Each dict: {experiment_id, code, experiment_config, proposal_name, script_path}."""
+
+    # Legacy single-value fields — kept for downstream compat, populated from
+    # generated_scripts[0] (first entry) by code_generation_node.
     generated_code: str
-    """Complete Python script that runs the experiment and prints JSON results."""
+    """Alias for generated_scripts[0]['code']. Kept for backward compat."""
 
     experiment_config: dict
-    """Structured parameters describing the experiment (mirrors what the code uses)."""
+    """Alias for generated_scripts[0]['experiment_config']. Kept for backward compat."""
 
     # -------------------------------------------------------------------------
     # Execution stage  (experiment_runner_node)
     # -------------------------------------------------------------------------
+    experiment_results: list[dict]
+    """One result per generated script.
+    Each dict: {experiment_id, proposal_name, stdout, stderr, success, raw_results}."""
+
+    # Legacy single-value fields — populated from the first successful result
+    # (or first overall) by experiment_runner_node for downstream compat.
     experiment_id: str
-    """UUID assigned to this experiment run (also used as script filename and MLflow run name)."""
+    """UUID of the best/first successful experiment. Kept for backward compat."""
 
     execution_stdout: str
-    """Full stdout captured from the experiment subprocess."""
+    """stdout from the best/first successful experiment. Kept for backward compat."""
 
     execution_stderr: str
-    """Full stderr captured from the experiment subprocess."""
+    """stderr from the best/first successful experiment. Kept for backward compat."""
 
     execution_success: bool
-    """True if the subprocess exited with code 0 and stdout contained valid JSON."""
+    """True if at least one experiment script succeeded."""
 
     raw_results: dict
-    """Parsed JSON results emitted by the experiment script (metrics, artefact paths, etc.)."""
+    """Parsed JSON results from the best/first successful experiment."""
 
     # -------------------------------------------------------------------------
     # Result analysis stage  (result_analysis_node)
