@@ -75,5 +75,8 @@ logs/
 *.log
 
 # Secrets and local tool config
-.env
+configs/.env
 .claude/
+
+# Dev harness state fixtures (real LLM output, not for VCS)
+dev/

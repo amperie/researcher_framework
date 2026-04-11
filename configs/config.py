@@ -1,10 +1,11 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Config(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file="configs/.env", env_file_encoding="utf-8")
 
     # --- LLM ---
     llm_provider: str = "anthropic"
@@ -12,6 +13,19 @@ class Config(BaseSettings):
 
     llm_model: str | None = None
     """Model ID override. Defaults to claude-opus-4-6 (anthropic) or gpt-4o (openai)."""
+
+    @field_validator("llm_model", mode="before")
+    @classmethod
+    def _blank_comment_as_none(cls, v):
+        """Treat empty strings or comment placeholders as None.
+
+        python-dotenv does not strip inline comments, so a line like
+            LLM_MODEL=# optional override
+        is read as the literal string '# optional override...' rather than None.
+        """
+        if not v or str(v).startswith("#"):
+            return None
+        return v
 
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
@@ -46,11 +60,18 @@ class Config(BaseSettings):
     experiment_timeout_seconds: int = 1800
     """Maximum wall-clock seconds allowed for a single experiment subprocess."""
 
-    experiments_dir: str = "./experiments"
+    experiments_dir: str = "dev/experiments"
     """Directory where generated experiment scripts are written."""
 
+    # --- Code generation ---
+    claude_command: str = "claude"
+    """Shell command for the Claude Code CLI used by code_generation_node."""
+
+    code_generation_timeout_seconds: int = 180
+    """Maximum seconds to wait for the Claude Code CLI to generate a script."""
+
     # --- NeuralSignal source path ---
-    neuralsignal_src_path: str = "../neuralsignal/neuralsignal"
+    neuralsignal_src_path: str = "../../neuralsignal/neuralsignal"
     """Path to the neuralsignal source tree. Injected into PYTHONPATH when
     launching experiment subprocesses so generated scripts can import neuralsignal."""
 

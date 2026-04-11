@@ -12,8 +12,8 @@ from __future__ import annotations
 import chromadb
 from chromadb.config import Settings
 
-from config import get_config
-from logger import get_logger
+from configs.config import get_config
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 

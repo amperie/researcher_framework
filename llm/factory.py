@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from config import get_config
-from logger import get_logger
+from configs.config import get_config
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 

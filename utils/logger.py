@@ -98,7 +98,7 @@ def setup_logging(config_path: str = "config.yaml") -> None:
 
     # --- Rotating file handler ---
     if file_cfg.get("enabled", False):
-        log_path = Path(file_cfg.get("path", "./logs/neuralsignalresearcher.log"))
+        log_path = Path(file_cfg.get("path", "../logs/neuralsignalresearcher.log"))
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
         file_handler = logging.handlers.RotatingFileHandler(

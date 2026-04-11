@@ -1,3 +1,14 @@
+research_node:
+  # Minimum relevance score (0–10) a paper must receive to be included in
+  # state['arxiv_papers']. Papers below this threshold are fetched and scored
+  # but dropped before the summary and downstream nodes see them.
+  # Raise to tighten focus; lower (or set to 0) to keep everything.
+  relevance_score_threshold: 6
+  # Number of top-scored papers to download full text for and run digest
+  # extraction on. Digests are cached in dev/papers/ so each paper is only
+  # processed once across runs.
+  max_papers_to_digest: 3
+
 chromadb:
   host: hp.lan
   port: 8000

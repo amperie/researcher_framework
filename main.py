@@ -12,7 +12,7 @@ import argparse
 import json
 import sys
 
-from logger import get_logger, setup_logging
+from utils.logger import get_logger, setup_logging
 
 log = get_logger(__name__)
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from graph.state import ResearchState
-from logger import get_logger
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 

@@ -26,6 +26,13 @@ class ResearchState(TypedDict, total=False):
     research_summary: str
     """LLM-synthesised summary of the key themes and techniques found in the papers."""
 
+    paper_digests: list[dict]
+    """Structured digests extracted from the full text of the top-scored papers.
+    Each dict: {arxiv_id, title, published, abstract, digest}
+    where digest is an LLM-produced structured extraction covering methods,
+    findings, applicable techniques, and open problems (~400–700 words).
+    Cached to dev/papers/<arxiv_id>.digest to avoid redundant LLM calls."""
+
     # -------------------------------------------------------------------------
     # Feature proposal stage  (feature_proposal_node)
     # -------------------------------------------------------------------------

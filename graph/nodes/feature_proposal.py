@@ -1,58 +1,111 @@
-"""Feature proposal node — translate research findings into neuralsignal experiments."""
+"""Feature proposal node — two-stage experiment ideation and implementation planning."""
 from __future__ import annotations
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from configs.prompts import FEATURE_PROPOSAL_IDEATION, FEATURE_PROPOSAL_IMPLEMENTATION
 from graph.state import ResearchState
-from logger import get_logger
+from llm.factory import get_llm
+from utils import extract_json_array
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
 
 def feature_proposal_node(state: ResearchState) -> dict:
-    """Propose neuralsignal experiments grounded in the research summary.
+    """Propose neuralsignal experiments in two stages.
+
+    Stage 1 — Ideation:
+        Uses the research summary and paper digests to generate 3–5 feature
+        extraction ideas grounded in LLM internals and mechanistic interpretability.
+
+    Stage 2 — Implementation planning:
+        For each idea, produces a concrete neuralsignal implementation plan:
+        which classes to use, feature sets, Collector config, probe model,
+        training dataset, detector type, and step-by-step code guidance.
 
     Reads:
         state['research_direction']
         state['research_summary']
+        state['paper_digests']    — preferred; falls back to arxiv_papers abstracts
         state['arxiv_papers']
 
     Writes:
-        state['feature_proposals'] — list of experiment proposals, each with:
-            {name, description, neuralsignal_classes, feature_sets,
-             zone_config, dataset, rationale}
-
-    System prompt context includes the neuralsignal SDK API surface:
-        - Feature sets: zones, logit-lens, T-F-diff, layer_distribution
-        - Collector config: zone_size, zone_size_by_layer, layer_names_to_include
-        - Detector types: normal, scan_delta
-        - Training pipeline: DatasetRunner → DatasetCreator → S1Trainer
-        - Available HuggingFace datasets for data collection
-
-    TODO: build system prompt with neuralsignal API reference.
-    TODO: pass research_summary + top-3 abstracts in user message.
-    TODO: ask LLM to produce 3–5 proposals as a JSON list.
-    TODO: parse and validate the JSON response.
-
-    Note: on subsequent loop iterations, state['research_direction'] contains
-    the top follow-up proposal from the previous iteration, not the original
-    user input. The research_summary may still reflect the original research.
+        state['feature_proposals'] — list of fully-specified experiment proposals
     """
     direction = state.get("research_direction", "")
+    summary = state.get("research_summary", "")
+    digests = state.get("paper_digests") or []
     papers = state.get("arxiv_papers") or []
-    log.info("feature_proposal_node | Generating proposals — direction=%r", direction)
-    log.debug("feature_proposal_node | Context: %d papers, summary_len=%d",
-              len(papers), len(state.get("research_summary") or ""))
+    llm = get_llm()
 
-    # TODO: build system prompt
-    # log.debug("feature_proposal_node | System prompt length: %d chars", len(system_prompt))
+    log.info("feature_proposal_node | Starting — direction=%r, digests=%d, papers=%d",
+             direction, len(digests), len(papers))
 
-    # TODO: call LLM
-    # log.debug("feature_proposal_node | Sending request to LLM")
+    # ------------------------------------------------------------------
+    # Build research context block for the LLM
+    # ------------------------------------------------------------------
+    context_parts = [f"Research direction: {direction}", "", f"Research summary:\n{summary}"]
 
-    # TODO: parse response
-    # log.info("feature_proposal_node | Generated %d proposals: %s",
-    #          len(proposals), [p["name"] for p in proposals])
-    # for i, p in enumerate(proposals):
-    #     log.debug("feature_proposal_node | Proposal %d — name=%r, classes=%s",
-    #               i + 1, p["name"], p.get("neuralsignal_classes"))
+    if digests:
+        context_parts.append("\nPaper digests (full-text extractions):")
+        for d in digests:
+            context_parts.append(f"\n[{d['title']}]\n{d['digest']}")
+    elif papers:
+        context_parts.append("\nRelevant papers (abstracts):")
+        for p in papers[:5]:
+            context_parts.append(
+                f"\n[{p['title']} — score {p.get('relevance_score', '?')}]\n{p['abstract']}"
+            )
 
-    raise NotImplementedError("feature_proposal_node is not yet implemented")
+    research_context = "\n".join(context_parts)
+
+    # ------------------------------------------------------------------
+    # Stage 1: Ideation — generate raw feature ideas
+    # ------------------------------------------------------------------
+    log.info("feature_proposal_node | Stage 1: generating feature ideas")
+    try:
+        ideation_response = llm.invoke([
+            SystemMessage(content=FEATURE_PROPOSAL_IDEATION),
+            HumanMessage(content=research_context),
+        ])
+        ideas = extract_json_array(ideation_response.content)
+        log.info("feature_proposal_node | Stage 1 complete — %d ideas generated", len(ideas))
+        for i, idea in enumerate(ideas):
+            log.debug("  Idea %d: %s", i + 1, idea.get("name"))
+    except Exception as exc:
+        log.error("feature_proposal_node | Stage 1 failed: %s", exc, exc_info=True)
+        return {"feature_proposals": [], "errors": [f"Feature ideation failed: {exc}"]}
+
+    if not ideas:
+        log.warning("feature_proposal_node | No ideas generated — returning empty proposals")
+        return {"feature_proposals": []}
+
+    # ------------------------------------------------------------------
+    # Stage 2: Implementation planning — ground ideas in neuralsignal API
+    # ------------------------------------------------------------------
+    log.info("feature_proposal_node | Stage 2: planning neuralsignal implementation")
+
+    import json
+    ideas_json = json.dumps(ideas, indent=2)
+    implementation_prompt = (
+        f"Research direction: {direction}\n\n"
+        f"Feature ideas to implement:\n{ideas_json}"
+    )
+
+    try:
+        impl_response = llm.invoke([
+            SystemMessage(content=FEATURE_PROPOSAL_IMPLEMENTATION),
+            HumanMessage(content=implementation_prompt),
+        ])
+        proposals = extract_json_array(impl_response.content)
+        log.info("feature_proposal_node | Stage 2 complete — %d proposals with implementation plans",
+                 len(proposals))
+        for i, p in enumerate(proposals):
+            log.debug("  Proposal %d: %s | classes=%s | feature_sets=%s",
+                      i + 1, p.get("name"), p.get("neuralsignal_classes"), p.get("feature_sets"))
+    except Exception as exc:
+        log.warning("feature_proposal_node | Stage 2 failed (%s) — using stage 1 ideas as-is", exc)
+        proposals = ideas
+
+    return {"feature_proposals": proposals}
