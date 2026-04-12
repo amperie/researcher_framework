@@ -14,10 +14,14 @@ dependencies = [
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
     "mlflow>=2.0",
+    "pymongo>=4.16.0",
+    "pandas>=2.3.3",
+    "pyarrow>=23.0.1",
 ]
 
 [dependency-groups]
 dev = [
+    "mongomock>=4.3.0",
     "pytest>=9.0.3",
 ]
 # neuralsignal is not installed as a package dep — its multi-package flat layout

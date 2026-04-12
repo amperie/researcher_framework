@@ -30,6 +30,14 @@ class Config(BaseSettings):
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
 
+    # --- MongoDB ---
+    mongo_url: str = "mongodb://hp.lan:27017"
+    """pymongo-compatible connection URI for the MongoDB instance that holds
+    neuralsignal scan snapshots."""
+
+    datasets_db_name: str = "neuralsignal_datasets"
+    """MongoDB database name for the dataset registry and GridFS parquet storage."""
+
     # --- ChromaDB (remote HTTP server) ---
     chroma_host: str = "hp.lan"
     """Hostname or IP of the ChromaDB HTTP server."""
@@ -61,7 +69,7 @@ class Config(BaseSettings):
     """Maximum wall-clock seconds allowed for a single experiment subprocess."""
 
     experiments_dir: str = "dev/experiments"
-    """Directory where generated experiment scripts are written."""
+    """Directory where generated experiment scripts are written (under dev/ so gitignored)."""
 
     # --- Code generation ---
     claude_command: str = "claude"

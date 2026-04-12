@@ -9,6 +9,11 @@ research_node:
   # processed once across runs.
   max_papers_to_digest: 3
 
+mongodb:
+  # Connection URL for the MongoDB instance holding neuralsignal scan snapshots.
+  # Supports any pymongo-compatible URI (auth, replica sets, SRV, etc.)
+  url: mongodb://hp.lan:27017
+
 chromadb:
   host: hp.lan
   port: 8000
@@ -17,6 +22,26 @@ chromadb:
   # Leave blank for unauthenticated servers.
   auth_token: ""
   collection: experiments
+
+experiment_runner:
+  # MLflow experiment name for all ns_experiment_runner runs
+  mlflow_experiment: "neuralsignal_agent_experiments"
+  # MongoDB database name for full experiment records
+  agent_experiments_db: "agent_experiments"
+  # ChromaDB collection name for experiment embeddings and semantic retrieval
+  chroma_collection: "agent_experiments"
+  # Max rows fed to S1Trainer per training run (0 = no limit)
+  modeling_row_limit: 10000
+  # Hyperopt evaluations for XGBoost tuning
+  max_evals: 20
+  # Metric to optimise during training
+  optimization_metric: "auc"
+  # Fallback detector if proposal doesn't specify one
+  default_detector: "hallucination"
+  # Fallback dataset if proposal doesn't specify one
+  default_dataset: "HaluBench"
+  # Max scans to pull when creating a new dataset (0 = no limit)
+  dataset_row_limit: 0
 
 logging:
   # Global minimum level — the root logger will not pass anything below this
@@ -30,7 +55,7 @@ logging:
     # Set to DEBUG to see full trace during development.
     level: INFO
     # %(levelname)-8s left-pads the level name to 8 chars for alignment.
-    format: "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s"
+    format: "%(asctime)s [%(levelname)-8s] %(name)s (%(filename)s:%(lineno)d): %(message)s"
     datefmt: "%H:%M:%S"
 
   file:

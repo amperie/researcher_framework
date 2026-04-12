@@ -3,15 +3,15 @@
 Flow:
     research
         → feature_proposal
-            → code_generation
-                → experiment_runner
-                    ──(success)──→ result_analysis → mlflow_logger
-                                                          → generalization_eval
-                                                              → db_logger
-                                                                  → followup_proposal
-                                                                      ──(continue_loop)──→ feature_proposal (loop)
-                                                                      ──(done)──────────→ END
-                    ──(failure)──→ END
+            → ns_experiment_runner   (dataset caching + S1 training + MLflow + ChromaDB + MongoDB)
+                ──(success)──→ followup_proposal
+                                    ──(continue_loop)──→ feature_proposal (loop)
+                                    ──(done)──────────→ END
+                ──(failure)──→ END
+
+Legacy nodes (code_generation, experiment_runner, result_analysis, mlflow_logger,
+generalization_eval, db_logger) are retained in graph/nodes/ for reference but are
+not wired into the primary graph.
 """
 from __future__ import annotations
 
@@ -19,15 +19,10 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from graph.nodes import (
-    code_generation_node,
-    db_logger_node,
-    experiment_runner_node,
     feature_proposal_node,
     followup_proposal_node,
-    generalization_eval_node,
-    mlflow_logger_node,
+    ns_experiment_runner_node,
     research_node,
-    result_analysis_node,
 )
 from graph.state import ResearchState
 
@@ -37,9 +32,9 @@ from graph.state import ResearchState
 # ---------------------------------------------------------------------------
 
 def _route_after_runner(state: ResearchState) -> str:
-    """Route to result_analysis if the experiment succeeded, otherwise END."""
+    """Route to followup_proposal if ≥1 experiment succeeded, otherwise END."""
     if state.get("execution_success"):
-        return "result_analysis"
+        return "followup_proposal"
     return END
 
 
@@ -69,12 +64,7 @@ def build_graph() -> CompiledStateGraph:
     # --- Register nodes ---
     graph.add_node("research", research_node)
     graph.add_node("feature_proposal", feature_proposal_node)
-    graph.add_node("code_generation", code_generation_node)
-    graph.add_node("experiment_runner", experiment_runner_node)
-    graph.add_node("result_analysis", result_analysis_node)
-    graph.add_node("mlflow_logger", mlflow_logger_node)
-    graph.add_node("generalization_eval", generalization_eval_node)
-    graph.add_node("db_logger", db_logger_node)
+    graph.add_node("ns_experiment_runner", ns_experiment_runner_node)
     graph.add_node("followup_proposal", followup_proposal_node)
 
     # --- Entry point ---
@@ -82,24 +72,18 @@ def build_graph() -> CompiledStateGraph:
 
     # --- Linear edges ---
     graph.add_edge("research", "feature_proposal")
-    graph.add_edge("feature_proposal", "code_generation")
-    graph.add_edge("code_generation", "experiment_runner")
+    graph.add_edge("feature_proposal", "ns_experiment_runner")
 
-    # experiment_runner → result_analysis  (success)
-    #                   → END              (failure)
+    # ns_experiment_runner → followup_proposal  (success)
+    #                      → END               (failure)
     graph.add_conditional_edges(
-        "experiment_runner",
+        "ns_experiment_runner",
         _route_after_runner,
         {
-            "result_analysis": "result_analysis",
+            "followup_proposal": "followup_proposal",
             END: END,
         },
     )
-
-    graph.add_edge("result_analysis", "mlflow_logger")
-    graph.add_edge("mlflow_logger", "generalization_eval")
-    graph.add_edge("generalization_eval", "db_logger")
-    graph.add_edge("db_logger", "followup_proposal")
 
     # followup_proposal → feature_proposal  (continue_loop=True)
     #                   → END               (continue_loop=False / not set)

@@ -81,6 +81,33 @@ class ResearchState(TypedDict, total=False):
     """Parsed JSON results from the best/first successful experiment."""
 
     # -------------------------------------------------------------------------
+    # Dataset registry stage  (experiment_runner_node)
+    # -------------------------------------------------------------------------
+    dataset_ids: list[str]
+    """Dataset IDs registered or reused in this pipeline run."""
+
+    dataset_cache_hits: int
+    """Number of experiments skipped because a cached dataset was found."""
+
+    # -------------------------------------------------------------------------
+    # NS Experiment runner stage  (ns_experiment_runner_node)
+    # -------------------------------------------------------------------------
+    ns_experiment_results: list[dict]
+    """One result dict per proposal run through ns_experiment_runner_node.
+    Each: {experiment_id, proposal_name, proposal, metrics, s1_params,
+           feature_importance, dataset_ids, cache_hits, n_features,
+           detector_name, dataset_name, inserted_at, mlflow_run_id, chroma_record_id}"""
+
+    ns_best_auc: float
+    """Highest test_auc across all proposals in this pipeline run."""
+
+    ns_mlflow_run_ids: list[str]
+    """MLflow run IDs from ns_experiment_runner_node (one per proposal)."""
+
+    ns_chroma_record_ids: list[str]
+    """ChromaDB record IDs from ns_experiment_runner_node (one per proposal)."""
+
+    # -------------------------------------------------------------------------
     # Result analysis stage  (result_analysis_node)
     # -------------------------------------------------------------------------
     similar_experiments: list[dict]

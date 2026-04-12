@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from configs.config import get_config
 from graph.state import ResearchState
+from utils.dataset_manager import DatasetManager
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -183,11 +184,49 @@ def experiment_runner_node(state: ResearchState) -> dict:
     # ------------------------------------------------------------------
     log.info("experiment_runner_node | Running %d script(s)", len(scripts))
     experiment_results: list[dict] = []
+    dm = DatasetManager(cfg.mongo_url, cfg.datasets_db_name)
+    dataset_ids: list[str] = []
+    cache_hits = 0
 
     for idx, script in enumerate(scripts):
         log.info("experiment_runner_node | Script %d/%d — proposal=%r",
                  idx + 1, len(scripts), script.get("proposal_name"))
+
+        experiment_config = script.get("experiment_config") or {}
+        feature_set_name = experiment_config.get("feature_set_name", "")
+
+        # --- cache check ---
+        cached = dm.find_cached(feature_set_name, experiment_config) if feature_set_name else None
+        if cached:
+            log.info("experiment_runner_node | Cache hit — dataset_id=%s", cached["dataset_id"])
+            result = dm.build_cached_result(cached, script)
+            dataset_ids.append(cached["dataset_id"])
+            cache_hits += 1
+            experiment_results.append(result)
+            continue
+
         result = _run_single(script, cfg, env)
+
+        # --- save on success ---
+        if result["success"] and feature_set_name:
+            raw = result.get("raw_results") or {}
+            col_names = raw.get("column_names")
+            col_vals = raw.get("column_values")
+            if col_names and col_vals is not None:
+                try:
+                    entry = dm.save_dataset(
+                        result["experiment_id"], feature_set_name,
+                        experiment_config, col_names, col_vals,
+                    )
+                    result["dataset_id"] = entry["dataset_id"]
+                    result["from_cache"] = False
+                    dataset_ids.append(entry["dataset_id"])
+                    log.info("experiment_runner_node | Dataset saved — id=%s", entry["dataset_id"])
+                except Exception as exc:
+                    log.warning("experiment_runner_node | Dataset save failed: %s", exc)
+            else:
+                log.debug("experiment_runner_node | No column data in results — skipping save")
+
         experiment_results.append(result)
 
     # ------------------------------------------------------------------
@@ -213,4 +252,7 @@ def experiment_runner_node(state: ResearchState) -> dict:
         "execution_stderr": best["stderr"],
         "execution_success": n_success > 0,
         "raw_results":      best["raw_results"],
+        # Dataset registry fields
+        "dataset_ids":        dataset_ids,
+        "dataset_cache_hits": cache_hits,
     }

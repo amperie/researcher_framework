@@ -89,15 +89,12 @@ class ChromaStore:
             document:  Full-text representation of the experiment for embedding.
             metadata:  Flat dict of scalar values (mlflow_run_id, metrics, etc.).
                        ChromaDB requires all values to be str, int, float, or bool.
-
-        TODO: call self._get_collection().upsert(...).
         """
         log.info("ChromaStore.upsert — record_id=%r, doc_len=%d, metadata_keys=%s",
                  record_id, len(document), list(metadata.keys()))
-        # col = self._get_collection()
-        # col.upsert(ids=[record_id], documents=[document], metadatas=[metadata])
-        # log.debug("ChromaStore.upsert | Complete for record_id=%r", record_id)
-        raise NotImplementedError("ChromaStore.upsert is not yet implemented")
+        col = self._get_collection()
+        col.upsert(ids=[record_id], documents=[document], metadatas=[metadata])
+        log.debug("ChromaStore.upsert | Complete for record_id=%r", record_id)
 
     def query_similar(self, text: str, n_results: int) -> list[dict]:
         """Return the n most semantically similar experiment records.
@@ -108,70 +105,60 @@ class ChromaStore:
 
         Returns:
             List of dicts, each with keys: id, document, metadata, distance.
-
-        TODO: call self._get_collection().query(...) and reshape the response.
         """
         preview = text[:80] + ("…" if len(text) > 80 else "")
         log.info("ChromaStore.query_similar — query=%r, n_results=%d", preview, n_results)
-        # col = self._get_collection()
-        # raw = col.query(query_texts=[text], n_results=n_results)
-        # results = [
-        #     {"id": id_, "document": doc, "metadata": meta, "distance": dist}
-        #     for id_, doc, meta, dist in zip(
-        #         raw["ids"][0], raw["documents"][0],
-        #         raw["metadatas"][0], raw["distances"][0],
-        #     )
-        # ]
-        # log.debug("ChromaStore.query_similar | %d matches, closest distance=%s",
-        #           len(results), results[0]["distance"] if results else "n/a")
-        # return results
-        raise NotImplementedError("ChromaStore.query_similar is not yet implemented")
+        col = self._get_collection()
+        raw = col.query(query_texts=[text], n_results=n_results)
+        results = [
+            {"id": id_, "document": doc, "metadata": meta, "distance": dist}
+            for id_, doc, meta, dist in zip(
+                raw["ids"][0], raw["documents"][0],
+                raw["metadatas"][0], raw["distances"][0],
+            )
+        ]
+        log.debug("ChromaStore.query_similar | %d matches, closest distance=%s",
+                  len(results), results[0]["distance"] if results else "n/a")
+        return results
 
     def get_by_id(self, record_id: str) -> dict | None:
         """Fetch a single record by its exact ID.
 
         Returns:
             Dict with keys id, document, metadata, or None if not found.
-
-        TODO: call self._get_collection().get(ids=[record_id]).
         """
         log.debug("ChromaStore.get_by_id — record_id=%r", record_id)
-        # col = self._get_collection()
-        # raw = col.get(ids=[record_id])
-        # if not raw["ids"]:
-        #     log.warning("ChromaStore.get_by_id | Record not found: %r", record_id)
-        #     return None
-        # return {"id": raw["ids"][0], "document": raw["documents"][0],
-        #         "metadata": raw["metadatas"][0]}
-        raise NotImplementedError("ChromaStore.get_by_id is not yet implemented")
+        col = self._get_collection()
+        raw = col.get(ids=[record_id])
+        if not raw["ids"]:
+            log.warning("ChromaStore.get_by_id | Record not found: %r", record_id)
+            return None
+        return {"id": raw["ids"][0], "document": raw["documents"][0],
+                "metadata": raw["metadatas"][0]}
 
     def list_recent(self, n: int) -> list[dict]:
         """Return the n most recently inserted experiment records.
 
         Sorts client-side by the 'inserted_at' timestamp stored in each
-        record's metadata (set by db_logger_node at upsert time).
+        record's metadata (set by ns_experiment_runner_node at upsert time).
 
         Args:
             n: Number of records to return.
 
         Returns:
             List of dicts with keys: id, document, metadata.
-
-        TODO: call self._get_collection().get(), sort by metadata['inserted_at'] desc,
-              slice to n.
         """
         log.debug("ChromaStore.list_recent — n=%d", n)
-        # col = self._get_collection()
-        # raw = col.get()
-        # total = len(raw["ids"])
-        # log.debug("ChromaStore.list_recent | Total records in collection: %d", total)
-        # records = [
-        #     {"id": id_, "document": doc, "metadata": meta}
-        #     for id_, doc, meta in zip(raw["ids"], raw["documents"], raw["metadatas"])
-        # ]
-        # records.sort(key=lambda r: r["metadata"].get("inserted_at", ""), reverse=True)
-        # return records[:n]
-        raise NotImplementedError("ChromaStore.list_recent is not yet implemented")
+        col = self._get_collection()
+        raw = col.get()
+        total = len(raw["ids"])
+        log.debug("ChromaStore.list_recent | Total records in collection: %d", total)
+        records = [
+            {"id": id_, "document": doc, "metadata": meta}
+            for id_, doc, meta in zip(raw["ids"], raw["documents"], raw["metadatas"])
+        ]
+        records.sort(key=lambda r: r["metadata"].get("inserted_at", ""), reverse=True)
+        return records[:n]
 
     def ping(self) -> bool:
         """Return True if the remote ChromaDB server is reachable.

@@ -319,6 +319,9 @@ REQUIRED SCRIPT SKELETON
                 "feature_set_name": <instance>.get_feature_set_name(),
                 "num_features": len(col_names),
                 "sample_features": dict(zip(col_names[:10], col_vals[:10])),
+                # Full feature data for dataset registry — do not remove these two lines
+                "column_names": col_names,
+                "column_values": col_vals,
                 "status": "ok",
             }
             print(json.dumps(results))

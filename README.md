@@ -1,8 +1,8 @@
 # NeuralSignalResearcher
 
-A multi-agent research automation system built on [LangGraph](https://github.com/langchain-ai/langgraph) that autonomously searches for relevant papers, proposes neural signal feature extraction experiments, generates runnable experiment code, executes it, and iterates based on results.
+A multi-agent research automation system built on [LangGraph](https://github.com/langchain-ai/langgraph) that autonomously searches for relevant papers, proposes neural signal feature extraction experiments, runs them against real neuralsignal scan data, and iterates based on results.
 
-The system is designed around the [neuralsignal](https://github.com/amperie/neuralsignal) SDK, which instruments transformer LLMs to capture internal activation tensors at inference time. NeuralSignalResearcher automates the research cycle: *literature review → experiment ideation → implementation → execution → analysis → follow-up*.
+The system is designed around the [neuralsignal](https://github.com/amperie/neuralsignal) SDK, which instruments transformer LLMs to capture internal activation tensors at inference time. NeuralSignalResearcher automates the research cycle: *literature review → experiment ideation → dataset creation → S1 model training → logging → follow-up*.
 
 ---
 
@@ -12,31 +12,21 @@ The system is designed around the [neuralsignal](https://github.com/amperie/neur
 START
   └─ research_node
        └─ feature_proposal_node
-            └─ code_generation_node
-                 └─ experiment_runner_node
-                      ├─(success)─ result_analysis_node
-                      │                └─ mlflow_logger_node
-                      │                     └─ generalization_eval_node
-                      │                          └─ db_logger_node
-                      │                               └─ followup_proposal_node
-                      │                                    ├─(continue_loop)─ feature_proposal_node ↩
-                      │                                    └─(done)─ END
-                      └─(failure)─ END
+            └─ ns_experiment_runner_node
+                 ├─(success)─ followup_proposal_node
+                 │                 ├─(continue_loop)─ feature_proposal_node ↩
+                 │                 └─(done)─ END
+                 └─(failure)─ END
 ```
 
-### Node Status
+### Nodes
 
-| Node | Status | Description |
-|---|---|---|
-| `research_node` | **Implemented** | Searches arxiv, scores papers by relevance, synthesises a summary, extracts full-text digests |
-| `feature_proposal_node` | **Implemented** | Two-stage ideation: proposes feature extraction ideas, then designs `FeatureSetBase` subclasses |
-| `code_generation_node` | **Implemented** | Calls the Claude Code CLI to generate a runnable experiment script |
-| `experiment_runner_node` | **Implemented** | Executes the generated script as a subprocess, captures results |
-| `result_analysis_node` | Stub | Will compare results against past experiments in ChromaDB |
-| `mlflow_logger_node` | Stub | Will log metrics and artefacts to MLflow |
-| `generalization_eval_node` | Stub | Will run the probe on held-out data |
-| `db_logger_node` | Stub | Will persist the experiment record to ChromaDB |
-| `followup_proposal_node` | Stub | Will propose follow-up research directions |
+| Node | Description |
+|---|---|
+| `research_node` | Searches arxiv, scores papers by relevance, synthesises a summary, extracts full-text digests |
+| `feature_proposal_node` | Two-stage ideation: proposes feature extraction ideas, then designs `FeatureSetBase` subclass specs |
+| `ns_experiment_runner_node` | Resolves datasets (cache or automation), trains XGBoost S1 model, logs to MLflow + ChromaDB + MongoDB |
+| `followup_proposal_node` | Proposes follow-up research directions based on results |
 
 ---
 
@@ -50,7 +40,7 @@ Given a research direction (e.g. `"sparse autoencoders in LLMs"`):
 2. Asks the LLM to score each paper 0–10 against the research direction in a single batch call.
 3. Filters papers below `relevance_score_threshold`.
 4. Synthesises a 3–5 paragraph research summary from the top papers.
-5. Downloads the full HTML of the top `max_papers_to_digest` papers from `arxiv.org/html/<id>`, strips tags, and runs a structured LLM extraction per paper producing a ~500-word digest covering **methods**, **findings**, **applicable techniques**, and **open problems**.
+5. Downloads the full HTML of the top `max_papers_to_digest` papers, strips tags, and runs a structured LLM extraction per paper producing a ~500-word digest covering **methods**, **findings**, **applicable techniques**, and **open problems**.
 6. Digests are cached to `dev/papers/<arxiv_id>.digest` (JSON) so each paper is only processed once.
 
 State output: `arxiv_papers`, `research_summary`, `paper_digests`.
@@ -61,40 +51,44 @@ Two-stage LLM pipeline:
 
 **Stage 1 — Ideation:** Given the research summary and paper digests, proposes 3–5 feature extraction experiments grounded in transformer internals (residual stream, attention patterns, MLP activations, logit-lens projections). Each idea includes `name`, `description`, `target_behavior`, `hypothesis`, and `rationale`.
 
-**Stage 2 — Implementation design:** For each idea, designs a concrete `FeatureSetBase` subclass. The LLM is given the full neuralsignal scan field reference (activation tensors, layer topology, metadata) and produces a detailed spec including `class_name`, `process_feature_set_logic`, `init_logic`, `imports_needed`, and `output_columns`. This spec is what `code_generation_node` implements.
+**Stage 2 — Implementation design:** For each idea, designs a concrete `FeatureSetBase` subclass. The LLM is given the full neuralsignal scan field reference and produces a detailed spec including `class_name`, `feature_set_name`, `process_feature_set_logic`, `init_logic`, `zone_config`, and `scan_fields_used`.
 
 State output: `feature_proposals` — a list of fully-specified experiment proposals.
 
-### 3. Code Generation (`code_generation_node`)
+### 3. NS Experiment Runner (`ns_experiment_runner_node`)
 
-Uses the **Claude Code CLI** (`claude --print --output-format json`) invoked as a subprocess:
+For each feature proposal, runs the full experiment pipeline inline:
 
-1. Takes `feature_proposals[0]` (highest priority proposal).
-2. Assembles a prompt containing the `CODE_GENERATION` system context (FeatureSetBase API, synthetic scan template, script skeleton) plus the full proposal JSON.
-3. Calls `claude --print --output-format json` with the prompt on stdin.
-4. Parses the JSON envelope from the CLI output, strips any markdown fences.
-5. Writes the script to `experiments/<experiment_id>.py`.
-6. Assigns a UUID as `experiment_id`.
+**Dataset resolution:**
+1. Maps the proposal's `feature_set_name` and `zone_config` to a neuralsignal `feature_set_config` dict.
+2. Checks `DatasetManager` (MongoDB + GridFS) for a cached parquet dataset matching the stable config hash.
+3. On a cache hit: loads the DataFrame directly — no scan processing needed.
+4. On a miss: calls `neuralsignal.automation.create_dataset()` to query MongoDB scans, run feature extraction, and write a dataset CSV. Saves the result to `DatasetManager` for future reuse.
 
-The generated script:
-- Implements the `FeatureSetBase` subclass exactly as specified in the proposal
-- Tests it against a synthetic scan with random torch tensors (no real LLM inference required)
-- Prints a JSON results dict as the last line of stdout
+**Model training:**
+5. Feeds the DataFrame to `neuralsignal.automation.create_s1_model()` via the `cfg["dataframe"]` shortcut (bypasses file I/O).
+6. XGBoost is tuned with Hyperopt, optimising for AUC (configurable). Metrics returned: `test_auc`, `train_auc`, `test_f1`, `test_accuracy`, `test_precision`, `test_recall`, cross-validation scores, and row/feature counts.
 
-State output: `generated_code`, `experiment_id`, `experiment_config`.
+**Logging (three sinks, all non-fatal):**
+7. **MLflow** — params, all numeric S1 metrics, tags (research direction, experiment ID), and artifacts (feature importance JSON, model params, proposal JSON). Experiment name is `experiment_runner.mlflow_experiment` in `config.yaml`.
+8. **ChromaDB** — rich text embedding (research direction + proposal description + hypothesis + metrics summary) with flat scalar metadata for filtering. Collection is `experiment_runner.chroma_collection` in `config.yaml`.
+9. **MongoDB** — full result record (proposal, metrics, S1 params, feature importance, dataset IDs, timestamps, run IDs) inserted into `{agent_experiments_db}.experiments`.
 
-### 4. Experiment Runner (`experiment_runner_node`)
+State output: `ns_experiment_results`, `ns_best_auc`, `ns_mlflow_run_ids`, `ns_chroma_record_ids`, `execution_success`, `dataset_ids`, `dataset_cache_hits`.
 
-Runs the generated script as an isolated subprocess:
+### 4. Follow-up Proposal (`followup_proposal_node`)
 
-1. Verifies the script exists at `experiments/<experiment_id>.py`.
-2. Sets `PYTHONPATH` to include `neuralsignal_src_path` so the script can import neuralsignal.
-3. Launches `{neuralsignal_python} {script_path}` (default: `uv run python`).
-4. Enforces a `experiment_timeout_seconds` wall-clock limit.
-5. Parses the last non-empty stdout line as JSON → `raw_results`.
-6. Routes to `result_analysis` on success, `END` on failure.
+Proposes follow-up research directions based on the experiment results. When `continue_loop` is True, the top proposal's `suggested_direction` is promoted to `research_direction` and the graph loops back to `feature_proposal_node`.
 
-State output: `execution_stdout`, `execution_stderr`, `execution_success`, `raw_results`.
+---
+
+## Dataset Registry
+
+`DatasetManager` (`utils/dataset_manager.py`) provides persistent dataset caching backed by MongoDB + GridFS:
+
+- **Identity:** `(feature_set_name, SHA256[:16] of stable config)` — volatile keys (`experiment_id`, `script_path`) are excluded from the hash.
+- **Storage:** Feature data serialised as parquet bytes in GridFS; registry documents in `neuralsignal_datasets.datasets`.
+- **Meld:** `meld(entries)` concatenates DataFrames from multiple feature sets with prefixed column names for downstream joint modelling.
 
 ---
 
@@ -104,8 +98,11 @@ State output: `execution_stdout`, `execution_stderr`, `execution_success`, `raw_
 
 - Python 3.12
 - [uv](https://github.com/astral-sh/uv) package manager
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm install -g @anthropic-ai/claude-code`) — required for code generation
 - An Anthropic or OpenAI API key
+- MongoDB instance (default: `mongodb://hp.lan:27017`)
+- ChromaDB HTTP server (default: `hp.lan:8000`)
+- MLflow tracking server (default: `http://localhost:5000`)
+- neuralsignal SDK cloned alongside this repo (see below)
 
 ### Install
 
@@ -117,31 +114,50 @@ uv sync
 
 ### Configure
 
-Copy the example env and fill in your API key:
+Create `configs/.env`:
 
-```bash
-cp configs/.env.example configs/.env   # if provided
-# or create configs/.env manually
-```
-
-`configs/.env`:
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
-# LLM_MODEL=# leave blank to use provider default (claude-opus-4-6 / gpt-4o)
 LLM_PROVIDER=anthropic
+# LLM_MODEL=   # leave blank to use claude-opus-4-6
 
 NEURALSIGNAL_SRC_PATH=../../neuralsignal/neuralsignal
-NEURALSIGNAL_PYTHON=uv run python
-EXPERIMENTS_DIR=./experiments
-EXPERIMENT_TIMEOUT_SECONDS=1800
+MONGO_URL=mongodb://hp.lan:27017
 ```
 
-`configs/config.yaml` (controls per-node behaviour):
+`configs/config.yaml` controls per-node behaviour:
+
 ```yaml
 research_node:
   relevance_score_threshold: 6   # 0–10; papers below this are dropped
   max_papers_to_digest: 3        # full-text digests for top N papers only
+
+chromadb:
+  host: hp.lan
+  port: 8000
+  collection: experiments        # collection for generic ChromaDB use
+
+experiment_runner:
+  mlflow_experiment: "neuralsignal_agent_experiments"
+  agent_experiments_db: "agent_experiments"       # MongoDB database
+  chroma_collection: "agent_experiments"          # ChromaDB collection for experiment embeddings
+  modeling_row_limit: 10000
+  max_evals: 20
+  optimization_metric: "auc"
+  default_detector: "hallucination"
+  default_dataset: "HaluBench"
+  dataset_row_limit: 0
 ```
+
+### neuralsignal SDK
+
+neuralsignal is not a pip-installable package (flat multi-package layout). Clone it alongside this repo:
+
+```bash
+git clone <neuralsignal-repo> ../neuralsignal
+```
+
+The default `NEURALSIGNAL_SRC_PATH=../../neuralsignal/neuralsignal` resolves to the correct package root.
 
 ---
 
@@ -164,17 +180,17 @@ uv run python main.py --direction "..." --loop
 `run_node.py` is a dev harness that runs a single node against saved state:
 
 ```bash
-# Run with CLI args
+# Run research with a direction
 uv run python run_node.py research --direction "attention head superposition"
 
-# Run interactively (prompts for inputs — works in IDE debugger)
-uv run python run_node.py
-
-# Re-run feature_proposal using state saved from a previous research run
+# Re-run a node using state saved from a previous run
 uv run python run_node.py feature_proposal --state-file dev/state_after_research.json
 
+# Run the experiment runner against a saved proposal state
+uv run python run_node.py ns_experiment_runner --state-file dev/state_after_feature_proposal.json
+
 # Save output to a custom path
-uv run python run_node.py code_generation --state-file dev/state_after_feature_proposal.json --out dev/my_state.json
+uv run python run_node.py ns_experiment_runner --state-file dev/state_after_feature_proposal.json --out dev/my_state.json
 ```
 
 State is saved to `dev/state_after_<node>.json` after each run, making it easy to chain nodes manually.
@@ -185,53 +201,49 @@ State is saved to `dev/state_after_<node>.json` after each run, making it easy t
 
 ```
 NeuralSignalResearcher/
-├── main.py                        # CLI entry point
-├── run_node.py                    # Dev harness for running individual nodes
-├── pyproject.toml                 # uv-managed dependencies
+├── main.py                          # CLI entry point
+├── run_node.py                      # Dev harness for running individual nodes
+├── pyproject.toml                   # uv-managed dependencies
 │
 ├── configs/
-│   ├── config.py                  # Pydantic-settings Config class
-│   ├── config.yaml                # Per-node YAML configuration
-│   ├── prompts.py                 # All LLM prompt strings (centralised)
-│   └── .env                       # API keys and secrets (gitignored)
+│   ├── config.py                    # Pydantic-settings Config class
+│   ├── config.yaml                  # Per-node YAML configuration
+│   ├── prompts.py                   # All LLM prompt strings (centralised)
+│   └── .env                         # API keys and secrets (gitignored)
 │
 ├── graph/
-│   ├── graph.py                   # LangGraph pipeline assembly
-│   ├── state.py                   # ResearchState TypedDict
+│   ├── graph.py                     # LangGraph pipeline assembly
+│   ├── state.py                     # ResearchState TypedDict
 │   └── nodes/
-│       ├── research.py            # arxiv search + digest extraction
-│       ├── feature_proposal.py    # two-stage experiment ideation
-│       ├── code_generation.py     # Claude Code CLI script generation
-│       ├── experiment_runner.py   # subprocess execution + result capture
-│       ├── result_analysis.py     # stub
-│       ├── mlflow_logger.py       # stub
-│       ├── generalization_eval.py # stub
-│       ├── db_logger.py           # stub
-│       └── followup_proposal.py   # stub
+│       ├── research.py              # arxiv search + digest extraction
+│       ├── feature_proposal.py      # two-stage experiment ideation
+│       ├── ns_experiment_runner.py  # dataset caching + S1 training + logging
+│       └── followup_proposal.py     # follow-up direction proposal
 │
 ├── llm/
-│   └── factory.py                 # LangChain model factory (Anthropic / OpenAI)
+│   └── factory.py                   # LangChain model factory (Anthropic / OpenAI)
 │
 ├── tools/
-│   ├── arxiv_tool.py              # arxiv search, HTML download, digest cache
-│   └── chroma_tool.py             # ChromaDB client (upsert / query — stub)
+│   ├── arxiv_tool.py                # arxiv search, HTML download, digest cache
+│   ├── chroma_tool.py               # ChromaDB client (upsert / query_similar / list_recent)
+│   └── mongo_tool.py                # MongoSnapshotStore — queries neuralsignal scan data
 │
 ├── utils/
-│   ├── utils.py                   # extract_json_array, load_yaml_section, fmt_value
-│   ├── logger.py                  # structured logging setup
-│   └── __init__.py                # re-exports
+│   ├── utils.py                     # extract_json_array, load_yaml_section, fmt_value
+│   ├── logger.py                    # structured logging setup
+│   ├── dataset_manager.py           # MongoDB + GridFS parquet dataset registry
+│   └── __init__.py
 │
 ├── tests/
-│   ├── test_arxiv_tool.py         # 14 tests, all mocked
-│   └── test_chroma_tool.py        # 15 tests, all mocked
+│   ├── test_dataset_manager.py      # 11 tests (mongomock, no live DB required)
+│   └── ...
 │
-└── dev/                           # gitignored runtime artefacts
-    ├── papers/                    # cached paper digests (<arxiv_id>.digest)
-    ├── state_after_*.json         # node output snapshots (from run_node.py)
-    └── ...
+└── dev/                             # gitignored runtime artefacts
+    ├── experiments/                 # dataset CSV files from automation
+    ├── papers/                      # cached paper digests (<arxiv_id>.digest)
+    └── state_after_*.json           # node output snapshots (from run_node.py)
 
-experiments/                       # generated experiment scripts (<uuid>.py)
-logs/                              # rotating log files
+logs/                                # rotating log files (gitignored)
 ```
 
 ---
@@ -250,17 +262,21 @@ All nodes communicate through `ResearchState`, a `TypedDict` defined in `graph/s
 
 All prompt strings live in `configs/prompts.py`. Node files import them by name — no prompt strings are defined inline in node code.
 
-### JSON parsing
+### Dataset caching
 
-LLM responses that should be JSON arrays are parsed with a bracket-counting algorithm (`utils.extract_json_array`) that handles nested arrays and escaped strings correctly, regardless of markdown fences wrapping the output.
+`DatasetManager` uses a two-level store: registry documents in MongoDB (`neuralsignal_datasets.datasets`) hold metadata and a GridFS reference; parquet bytes live in GridFS. The cache key is `(feature_set_name, SHA256[:16])` where the hash covers all stable config fields, excluding `experiment_id` and `script_path`. This means the same feature set + zone config always hits the same cached dataset regardless of which pipeline run created it.
 
-### neuralsignal integration
+### Experiment logging
 
-neuralsignal is not a pip-installable dependency (flat multi-package layout). Instead, `experiment_runner_node` injects `NEURALSIGNAL_SRC_PATH` into `PYTHONPATH` when launching generated scripts, so they can `import neuralsignal` without modifying the research project's environment.
+Each experiment is written to three sinks: MLflow (metrics + params + artifacts), ChromaDB (semantic retrieval by research direction or hypothesis), and MongoDB (`agent_experiments.experiments` for full record storage). All three sinks are non-fatal — a failure in any one logs a warning and continues.
+
+### Semantic experiment comparison
+
+ChromaDB stores a rich text document per experiment combining the research direction, proposal description, hypothesis, and metric summary. `ChromaStore.query_similar(text, n)` returns the nearest neighbours by cosine distance, enabling retrieval of past experiments most relevant to a new research direction.
 
 ### Paper digest caching
 
-Full-text digests are cached as JSON at `dev/papers/<arxiv_id>.digest`. On subsequent runs the digest is loaded from cache, skipping the HTML download and LLM extraction call. This makes re-running experiments with the same papers fast and cheap.
+Full-text digests are cached as JSON at `dev/papers/<arxiv_id>.digest`. On subsequent runs the digest is loaded from cache, skipping the HTML download and LLM extraction call.
 
 ---
 
@@ -269,8 +285,6 @@ Full-text digests are cached as JSON at `dev/papers/<arxiv_id>.digest`. On subse
 ```bash
 uv run pytest tests/ -v
 ```
-
-All 29 tests are unit tests with all external calls (arxiv API, HTTP, ChromaDB) mocked.
 
 ---
 
@@ -281,7 +295,9 @@ All 29 tests are unit tests with all external calls (arxiv API, HTTP, ChromaDB) 
 | `langgraph` | Pipeline graph orchestration |
 | `langchain`, `langchain-anthropic`, `langchain-openai` | LLM abstraction |
 | `arxiv` | arxiv search API client |
-| `chromadb` | Vector store for experiment memory |
-| `mlflow` | Experiment tracking |
+| `chromadb` | Vector store for experiment semantic memory |
+| `mlflow` | Experiment tracking and artifact storage |
+| `pymongo` | MongoDB client (scan data + dataset registry + experiment logs) |
+| `pandas`, `pyarrow` | DataFrame I/O and parquet serialisation |
 | `pydantic-settings` | Typed config from `.env` |
 | `python-dotenv` | `.env` file loading |
