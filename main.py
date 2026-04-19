@@ -17,6 +17,24 @@ from utils.logger import get_logger, setup_logging
 log = get_logger(__name__)
 
 
+def _add_neuralsignal_to_path() -> None:
+    """Prepend neuralsignal_src_path to sys.path so the main process can import neuralsignal.
+
+    This is distinct from the PYTHONPATH injection done for subprocesses in
+    experiment_runner_node — here we need it for ns_experiment_runner_node which
+    imports neuralsignal directly in-process.
+    """
+    import sys
+    from pathlib import Path
+    from configs.config import get_config
+    ns_path = Path(get_config().neuralsignal_src_path).resolve()
+    if ns_path.exists() and str(ns_path) not in sys.path:
+        sys.path.insert(0, str(ns_path))
+        log.debug("Added neuralsignal to sys.path: %s", ns_path)
+    elif not ns_path.exists():
+        log.warning("neuralsignal_src_path does not exist: %s", ns_path)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Multi-agent LangGraph orchestrator for NeuralSignal research."
@@ -48,6 +66,7 @@ def main() -> None:
 
     # --- Logging must be configured before any other module emits records ---
     setup_logging(args.log_config)
+    _add_neuralsignal_to_path()
     log.debug("CLI args parsed: direction=%r, loop=%s, log_config=%r",
               args.direction, args.loop, args.log_config)
 

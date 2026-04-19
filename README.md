@@ -121,7 +121,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 LLM_PROVIDER=anthropic
 # LLM_MODEL=   # leave blank to use claude-opus-4-6
 
-NEURALSIGNAL_SRC_PATH=../../neuralsignal/neuralsignal
+NEURALSIGNAL_SRC_PATH=../neuralsignal/neuralsignal
 MONGO_URL=mongodb://hp.lan:27017
 ```
 
@@ -157,7 +157,7 @@ neuralsignal is not a pip-installable package (flat multi-package layout). Clone
 git clone <neuralsignal-repo> ../neuralsignal
 ```
 
-The default `NEURALSIGNAL_SRC_PATH=../../neuralsignal/neuralsignal` resolves to the correct package root.
+The default `NEURALSIGNAL_SRC_PATH=../neuralsignal/neuralsignal` resolves to the correct package root.
 
 ---
 

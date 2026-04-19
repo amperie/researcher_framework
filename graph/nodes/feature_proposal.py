@@ -7,6 +7,7 @@ from configs.prompts import FEATURE_PROPOSAL_IDEATION, FEATURE_PROPOSAL_IMPLEMEN
 from graph.state import ResearchState
 from llm.factory import get_llm
 from utils import extract_json_array
+from utils.dataset_registry import get_all_datasets
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -87,9 +88,51 @@ def feature_proposal_node(state: ResearchState) -> dict:
     log.info("feature_proposal_node | Stage 2: planning neuralsignal implementation")
 
     import json
+
+    # Build a compact dataset summary for the LLM so it can choose the right
+    # dataset and detector for each proposal.
+    datasets = get_all_datasets()
+    datasets_summary = json.dumps(
+        [
+            {
+                "name": d["name"],
+                "description": d.get("description", ""),
+                "available_detectors": d.get("available_detectors", []),
+            }
+            for d in datasets
+        ],
+        indent=2,
+    )
+
+    # Gather available_scan_fields across all registered datasets
+    all_guaranteed: set[str] = set()
+    all_optional: set[str] = set()
+    all_not_available: set[str] = set()
+    for d in datasets:
+        asf = d.get("available_scan_fields") or {}
+        all_guaranteed.update(asf.get("guaranteed") or [])
+        all_optional.update(asf.get("optional") or [])
+        all_not_available.update(asf.get("not_available") or [])
+
+    scan_constraints = (
+        "Scan field constraints — feature set classes MUST only access these scan document fields:\n"
+        f"  Guaranteed present: {sorted(all_guaranteed)}\n"
+        f"  Optional (may be None/empty — check before use): {sorted(all_optional)}\n"
+        f"  NOT available (do not access these — will cause zeros or errors): {sorted(all_not_available)}\n"
+        "  outputs/inputs structure: scan['outputs'][batch_idx][layer_id] → Tensor\n"
+        "  Do NOT require external files (probe weights, concept means, logit lens projections, etc.)\n"
+        "  Do NOT require activation patching, causal intervention, or attention score data.\n"
+        "  Layer pattern config keys: 'ffn_layer_patterns' (list[str]) and 'attn_layer_patterns' (list[str])\n"
+        "    — these will be injected from the dataset registry at instantiation time; use self.cfg.get() to read them.\n"
+    )
+
     ideas_json = json.dumps(ideas, indent=2)
     implementation_prompt = (
         f"Research direction: {direction}\n\n"
+        f"Available datasets (use the exact 'name' value in your proposals' "
+        f"'dataset' field; choose 'detector_name' from 'available_detectors'):\n"
+        f"{datasets_summary}\n\n"
+        f"{scan_constraints}\n"
         f"Feature ideas to implement:\n{ideas_json}"
     )
 

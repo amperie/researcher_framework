@@ -31,17 +31,24 @@ experiment_runner:
   # ChromaDB collection name for experiment embeddings and semantic retrieval
   chroma_collection: "agent_experiments"
   # Max rows fed to S1Trainer per training run (0 = no limit)
-  modeling_row_limit: 10000
+  modeling_row_limit: 10
   # Hyperopt evaluations for XGBoost tuning
   max_evals: 20
   # Metric to optimise during training
   optimization_metric: "auc"
   # Fallback detector if proposal doesn't specify one
   default_detector: "hallucination"
-  # Fallback dataset if proposal doesn't specify one
+  # Fallback dataset name if a proposal doesn't specify one.
+  # Must match a 'name' entry in configs/datasets.yaml.
   default_dataset: "HaluBench"
   # Max scans to pull when creating a new dataset (0 = no limit)
-  dataset_row_limit: 0
+  dataset_row_limit: 20
+  # Balance the training dataset so each class contributes equally.
+  # When true, the DataFrame returned by _resolve_datasets is downsampled
+  # to min(n_pos, n_neg, balanced_sample_size // 2) rows per class.
+  balanced_dataset: true
+  # Target total rows after balancing (0 = use all available balanced rows).
+  balanced_sample_size: 20
 
 logging:
   # Global minimum level — the root logger will not pass anything below this

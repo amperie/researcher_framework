@@ -79,9 +79,9 @@ class Config(BaseSettings):
     """Maximum seconds to wait for the Claude Code CLI to generate a script."""
 
     # --- NeuralSignal source path ---
-    neuralsignal_src_path: str = "../../neuralsignal/neuralsignal"
-    """Path to the neuralsignal source tree. Injected into PYTHONPATH when
-    launching experiment subprocesses so generated scripts can import neuralsignal."""
+    neuralsignal_src_path: str = "../neuralsignal/neuralsignal"
+    """Path to the neuralsignal source tree. Added to sys.path at startup and
+    injected into PYTHONPATH for experiment subprocesses."""
 
     # --- Arxiv ---
     max_arxiv_papers: int = 10
