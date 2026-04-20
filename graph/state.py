@@ -1,7 +1,10 @@
 """ResearchState — the shared state flowing through the LangGraph pipeline.
 
-Every node receives the full state and returns a dict of fields to update.
+Every node receives the full state and returns a partial dict of keys to update.
 Fields not returned by a node are left unchanged.
+
+All keys are domain-generic. No neuralsignal-specific or trading-specific fields
+belong here — those details live in the profile YAML and plugin adapters.
 """
 from __future__ import annotations
 
@@ -10,149 +13,126 @@ from typing import TypedDict
 
 class ResearchState(TypedDict, total=False):
     # -------------------------------------------------------------------------
-    # Input
+    # Input / control
     # -------------------------------------------------------------------------
+    profile_name: str
+    """Name of the active research profile (e.g. 'neuralsignal', 'trading')."""
+
     research_direction: str
-    """The research direction supplied by the user at the start of the session
-    (or promoted from a follow-up proposal in subsequent loop iterations)."""
+    """The research question supplied by the user (or promoted from next_steps)."""
+
+    continue_loop: bool
+    """When True, promote the top next_step as the new direction and loop."""
 
     # -------------------------------------------------------------------------
-    # Research stage  (research_node)
+    # research step
     # -------------------------------------------------------------------------
-    arxiv_papers: list[dict]
-    """Arxiv papers retrieved and scored for relevance.
+    research_papers: list[dict]
+    """Papers retrieved and scored for relevance.
     Each dict: {title, abstract, url, arxiv_id, published, relevance_score}."""
 
     research_summary: str
-    """LLM-synthesised summary of the key themes and techniques found in the papers."""
+    """LLM-synthesised summary of key themes and findings."""
 
     paper_digests: list[dict]
-    """Structured digests extracted from the full text of the top-scored papers.
-    Each dict: {arxiv_id, title, published, abstract, digest}
-    where digest is an LLM-produced structured extraction covering methods,
-    findings, applicable techniques, and open problems (~400–700 words).
-    Cached to dev/papers/<arxiv_id>.digest to avoid redundant LLM calls."""
+    """Structured digests from full-text of top-scored papers.
+    Each dict: {arxiv_id, title, published, abstract, digest}.
+    Cached to dev/papers/<arxiv_id>.digest."""
 
     # -------------------------------------------------------------------------
-    # Feature proposal stage  (feature_proposal_node)
+    # ideate step
     # -------------------------------------------------------------------------
-    feature_proposals: list[dict]
-    """Concrete experiment proposals grounded in neuralsignal classes.
-    Each dict: {name, description, neuralsignal_classes, feature_sets,
-                zone_config, dataset, rationale}."""
+    ideas: list[dict]
+    """Raw brainstorm from ideate step.
+    Each dict: {name, description, hypothesis, rationale}."""
 
     # -------------------------------------------------------------------------
-    # Code generation stage  (code_generation_node)
+    # refine step
     # -------------------------------------------------------------------------
-    generated_scripts: list[dict]
-    """One generated script per feature proposal.
-    Each dict: {experiment_id, code, experiment_config, proposal_name, script_path}."""
-
-    # Legacy single-value fields — kept for downstream compat, populated from
-    # generated_scripts[0] (first entry) by code_generation_node.
-    generated_code: str
-    """Alias for generated_scripts[0]['code']. Kept for backward compat."""
-
-    experiment_config: dict
-    """Alias for generated_scripts[0]['experiment_config']. Kept for backward compat."""
+    refined_ideas: list[dict]
+    """Feasibility-filtered and improved ideas from refine step."""
 
     # -------------------------------------------------------------------------
-    # Execution stage  (experiment_runner_node)
+    # propose_experiments step
+    # -------------------------------------------------------------------------
+    proposals: list[dict]
+    """Fully-specified experiment proposals including hyperparameters.
+    Each dict: {name, description, dataset, detector, hyperparameters,
+                expected_outputs, success_criterion, ...}"""
+
+    # -------------------------------------------------------------------------
+    # plan_implementation step
+    # -------------------------------------------------------------------------
+    implementation_plans: list[dict]
+    """Detailed implementation plan per proposal (structured JSON, no code).
+    Each dict: {proposal_name, base_class, init_logic, main_method_steps,
+                output_keys, ...}"""
+
+    # -------------------------------------------------------------------------
+    # implement step
+    # -------------------------------------------------------------------------
+    implementations: list[dict]
+    """Generated implementation per plan.
+    Each dict: {script_path, class_name, proposal_name, proposal, plan}."""
+
+    # -------------------------------------------------------------------------
+    # validate step
+    # -------------------------------------------------------------------------
+    validation_results: list[dict]
+    """Validation outcome per implementation.
+    Each dict: {script_path, class_name, passed, test_file, test_output, attempts}."""
+
+    # -------------------------------------------------------------------------
+    # prepare_experiment step
+    # -------------------------------------------------------------------------
+    experiment_artifacts: list[dict]
+    """Domain-specific prepared artifacts for experiment execution.
+    Examples: NeuralSignal feature datasets, trading market-data bundles,
+    parameter grids, cached backtest inputs."""
+
+    # -------------------------------------------------------------------------
+    # create_dataset step (legacy compatibility alias)
+    # -------------------------------------------------------------------------
+    datasets: list[dict]
+    """Created or cached datasets.
+    Each dict: {dataset_id, feature_set_name, file_path, rows, columns, ...}."""
+
+    # -------------------------------------------------------------------------
+    # run_experiment step
     # -------------------------------------------------------------------------
     experiment_results: list[dict]
-    """One result per generated script.
-    Each dict: {experiment_id, proposal_name, stdout, stderr, success, raw_results}."""
-
-    # Legacy single-value fields — populated from the first successful result
-    # (or first overall) by experiment_runner_node for downstream compat.
-    experiment_id: str
-    """UUID of the best/first successful experiment. Kept for backward compat."""
-
-    execution_stdout: str
-    """stdout from the best/first successful experiment. Kept for backward compat."""
-
-    execution_stderr: str
-    """stderr from the best/first successful experiment. Kept for backward compat."""
-
-    execution_success: bool
-    """True if at least one experiment script succeeded."""
-
-    raw_results: dict
-    """Parsed JSON results from the best/first successful experiment."""
+    """Raw experiment results per proposal.
+    Each dict: {experiment_id, proposal_name, proposal, metrics, feature_importance, ...}."""
 
     # -------------------------------------------------------------------------
-    # Dataset registry stage  (experiment_runner_node)
+    # create_model step
     # -------------------------------------------------------------------------
-    dataset_ids: list[str]
-    """Dataset IDs registered or reused in this pipeline run."""
-
-    dataset_cache_hits: int
-    """Number of experiments skipped because a cached dataset was found."""
+    models: list[dict]
+    """Optional trained models per experiment.
+    Each dict: {model_id, experiment_id, metrics, params, feature_importance}."""
 
     # -------------------------------------------------------------------------
-    # NS Experiment runner stage  (ns_experiment_runner_node)
+    # evaluate step
     # -------------------------------------------------------------------------
-    ns_experiment_results: list[dict]
-    """One result dict per proposal run through ns_experiment_runner_node.
-    Each: {experiment_id, proposal_name, proposal, metrics, s1_params,
-           feature_importance, dataset_ids, cache_hits, n_features,
-           detector_name, dataset_name, inserted_at, mlflow_run_id, chroma_record_id}"""
-
-    ns_best_auc: float
-    """Highest test_auc across all proposals in this pipeline run."""
-
-    ns_mlflow_run_ids: list[str]
-    """MLflow run IDs from ns_experiment_runner_node (one per proposal)."""
-
-    ns_chroma_record_ids: list[str]
-    """ChromaDB record IDs from ns_experiment_runner_node (one per proposal)."""
+    evaluation_summary: dict
+    """Analysis of results across all proposals.
+    Keys: {best_metric_value, best_proposal, per_proposal_analysis, conclusion}."""
 
     # -------------------------------------------------------------------------
-    # Result analysis stage  (result_analysis_node)
+    # store_results step
     # -------------------------------------------------------------------------
-    similar_experiments: list[dict]
-    """Past experiments retrieved from ChromaDB by semantic similarity."""
-
-    analysis_summary: str
-    """LLM analysis comparing current results against similar past experiments."""
+    stored_result_ids: list[str]
+    """IDs of records persisted (MLflow run IDs, ChromaDB IDs, MongoDB IDs, etc.)."""
 
     # -------------------------------------------------------------------------
-    # MLflow logging stage  (mlflow_logger_node)
+    # propose_next_steps step
     # -------------------------------------------------------------------------
-    mlflow_run_id: str
-    """MLflow run ID for the primary experiment run."""
-
-    mlflow_experiment_name: str
-    """Name of the MLflow experiment under which the run was logged."""
-
-    # -------------------------------------------------------------------------
-    # Generalization evaluation stage  (generalization_eval_node)
-    # -------------------------------------------------------------------------
-    generalization_results: dict
-    """Metrics from the generalization evaluation run."""
-
-    mlflow_generalization_run_id: str
-    """MLflow run ID for the generalization evaluation (child run of mlflow_run_id)."""
-
-    # -------------------------------------------------------------------------
-    # Database logging stage  (db_logger_node)
-    # -------------------------------------------------------------------------
-    chroma_record_id: str
-    """ChromaDB document ID for the persisted experiment record."""
-
-    # -------------------------------------------------------------------------
-    # Follow-up proposal stage  (followup_proposal_node)
-    # -------------------------------------------------------------------------
-    followup_proposals: list[dict]
-    """Proposed follow-up experiments.
+    next_steps: list[dict]
+    """Proposed follow-up research directions.
     Each dict: {title, rationale, suggested_direction, priority}."""
 
     # -------------------------------------------------------------------------
-    # Control / loop
+    # Accumulated non-fatal errors
     # -------------------------------------------------------------------------
-    continue_loop: bool
-    """When True, the graph loops back to feature_proposal_node using the top
-    follow-up proposal as the new research direction instead of terminating."""
-
     errors: list[str]
-    """Accumulated non-fatal error messages from any node."""
+    """Non-fatal error messages from any step. Fatal errors raise and abort."""

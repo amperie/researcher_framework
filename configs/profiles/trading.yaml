@@ -1,0 +1,261 @@
+name: trading
+description: >
+  Research and experiment automation for algorithmic trading strategies.
+  Generates strategy/signal classes, validates them for leakage-safe behavior,
+  and delegates backtesting to the trading platform adapter.
+
+pipeline:
+  steps:
+    - research
+    - ideate
+    - refine
+    - propose_experiments
+    - plan_implementation
+    - implement
+    - validate
+    - prepare_experiment
+    - execute_experiment
+    - evaluate
+    - store_results
+    - propose_next_steps
+
+llm:
+  default_model: claude-opus-4-6
+  step_overrides:
+    research: claude-sonnet-4-6
+    refine: claude-sonnet-4-6
+    evaluate: claude-sonnet-4-6
+
+platform:
+  package: trading
+  source_path: ../algorithmic-trading-platform
+
+research:
+  sources:
+    - type: arxiv
+      categories: [q-fin.TR, q-fin.PM, q-fin.ST, cs.LG]
+      max_results: 20
+      relevance_score_threshold: 6
+      max_papers_to_digest: 3
+  domain_context: >
+    Focus on systematic trading, market microstructure, robust backtesting,
+    regime detection, risk management, transaction costs, and leakage-resistant
+    machine learning for financial time series.
+
+base_classes:
+  - name: StrategyBase
+    module: trading.core.strategy
+    description: >
+      Base class for generated trading strategies or signal modules.
+    key_interface: |
+      class StrategyBase:
+          def __init__(self, cfg: dict):
+              self.cfg = cfg
+
+          def generate_signals(self, bars):
+              # bars is a time-indexed DataFrame or platform data bundle.
+              # Must use only current and past observations at each timestamp.
+              # Returns a DataFrame/Series of target signals or positions.
+              ...
+
+data_sources:
+  - name: default_ohlcv
+    description: "Platform-provided OHLCV bars with adjusted prices and volume"
+    fields:
+      guaranteed: [open, high, low, close, volume]
+      optional: [vwap, spread, borrow_cost, corporate_actions]
+
+risk_constraints:
+  no_lookahead: true
+  max_gross_exposure: 1.0
+  max_single_position: 0.10
+  require_transaction_costs: true
+  require_slippage: true
+  require_walk_forward_split: true
+
+validate:
+  auto_run: true
+  max_fix_retries: 3
+  test_runner: "uv run pytest"
+  test_output_dir: dev/experiments/trading/tests
+
+experiment_adapter: plugins.trading.adapter
+
+evaluation:
+  primary_metric: sharpe_ratio
+  metrics:
+    - sharpe_ratio
+    - sortino_ratio
+    - max_drawdown
+    - annual_return
+    - win_rate
+    - turnover
+    - exposure
+    - profit_factor
+  thresholds:
+    sharpe_ratio: 1.2
+    max_drawdown: -0.20
+
+storage:
+  mlflow_experiment: trading_agent_experiments
+  mongodb_results_db: agent_experiments
+  chroma_collection: agent_experiments
+
+prompts:
+  research:
+    score_system: |
+      You are an expert in quantitative finance, systematic trading, and robust
+      backtesting. Score the following paper 0-10 for relevance to the research
+      direction. Prefer papers with implementable methods and realistic market
+      assumptions. Respond with valid JSON only:
+      {"score": <int 0-10>, "reason": "<one sentence>"}
+
+    summary_system: |
+      Synthesize the provided papers into a concise research summary focused on
+      actionable systematic trading experiments. Highlight strategy concepts,
+      data requirements, validation methods, risk controls, costs/slippage, and
+      known failure modes such as lookahead bias and overfitting.
+
+    digest_system: |
+      Extract a structured digest from the paper. Focus on methodology, data,
+      target markets, trading rules or model design, backtest protocol, costs,
+      risk management, reported metrics, limitations, and implementation ideas.
+
+  ideate:
+    system: |
+      Propose 3-5 algorithmic trading research ideas grounded in the research
+      summary and paper digests.
+
+      Each idea must:
+      - Be implementable as a StrategyBase subclass or signal module
+      - Use only current and past market data at each timestamp
+      - Include explicit risk and transaction-cost considerations
+      - Be testable with historical backtesting
+
+      Return a JSON array:
+      [
+        {
+          "name": "snake_case_strategy_name",
+          "description": "What the strategy or signal measures",
+          "hypothesis": "Why it should produce risk-adjusted returns",
+          "rationale": "What research inspired this"
+        }
+      ]
+
+  refine:
+    system: |
+      Review these trading ideas for feasibility and leakage risk.
+
+      Reject or revise ideas that require future data, unavailable fields,
+      unrealistic fills, missing transaction costs, or vague position sizing.
+      Improve accepted ideas with concrete signal logic, risk controls, and
+      validation guidance.
+
+      Return a JSON array of refined ideas using the same schema.
+
+  propose_experiments:
+    system: |
+      For each refined idea, specify a complete trading experiment.
+
+      Include:
+      - name: same as the idea name
+      - description
+      - data_source: exact data source name
+      - universe: symbols or selection rule
+      - timeframe
+      - start and end dates if known
+      - transaction_cost_bps
+      - slippage_bps
+      - hyperparameters
+      - train_test_split or walk_forward protocol
+      - benchmark
+      - success_criterion using sharpe_ratio and max_drawdown
+
+      Return a JSON array of proposals.
+
+  plan_implementation:
+    system: |
+      For each trading experiment proposal, write a detailed implementation
+      plan. Do NOT write Python code.
+
+      Include:
+      - proposal_name
+      - class_name
+      - base_class: "StrategyBase"
+      - init_fields
+      - main_method: "generate_signals"
+      - method_steps with explicit no-lookahead rolling/window logic
+      - output_keys
+      - imports_needed
+
+      Return a JSON array of plans.
+
+  implement:
+    system: |
+      Implement the Python class described in the implementation plan.
+
+      Requirements:
+      - Subclass StrategyBase from trading.core.strategy
+      - Use pandas/numpy only unless the plan requires standard library modules
+      - Never use future rows to compute current signals
+      - Use rolling/expanding calculations with proper lagging where needed
+      - Include conservative defaults for missing data
+      - Return deterministic signals or target positions
+      - Include a standalone if __name__ == '__main__': synthetic smoke test
+
+      Return ONLY Python source code. No markdown fences.
+
+  validate:
+    system: |
+      Generate pytest unit tests for this StrategyBase subclass.
+
+      Tests must:
+      - Import the generated class
+      - Build a small synthetic OHLCV DataFrame
+      - Call generate_signals
+      - Assert output length aligns with input
+      - Assert output has finite numeric values
+      - Include a basic no-lookahead check by changing the final row and
+        verifying earlier signals do not change
+
+      Return ONLY Python test code. No markdown fences.
+
+    fix_system: |
+      The following tests failed for the StrategyBase implementation.
+      Fix the implementation, not the tests. Prioritize no-lookahead behavior,
+      finite outputs, and stable DataFrame alignment. Return ONLY Python source.
+
+  evaluate:
+    system: |
+      Analyze these trading experiment results. For each proposal, assess:
+      - Risk-adjusted return
+      - Drawdown and tail risk
+      - Turnover/cost sensitivity
+      - Benchmark comparison
+      - Whether the hypothesis was supported
+      - Whether results suggest overfitting or leakage risk
+
+      Return a JSON object:
+      {
+        "per_proposal": [
+          {
+            "proposal_name": "...",
+            "assessment": "strong|moderate|weak|none",
+            "interpretation": "...",
+            "key_drivers": [...],
+            "hypothesis_supported": true
+          }
+        ],
+        "conclusion": "...",
+        "promising_directions": ["...", "..."]
+      }
+
+  propose_next_steps:
+    system: |
+      Based on the backtest results and original research direction, propose 3
+      high-value follow-up trading research directions. Prioritize robust,
+      leakage-safe improvements, cost sensitivity checks, and walk-forward
+      validation.
+
+      Return a JSON array with title, rationale, suggested_direction, priority.
+

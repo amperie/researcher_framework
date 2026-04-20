@@ -1,8 +1,4 @@
-"""Arxiv search tool.
-
-Thin wrapper around the `arxiv` Python client focused on LLM internals,
-mechanistic interpretability, and activation-based probing research.
-"""
+"""Arxiv search and paper download tool."""
 from __future__ import annotations
 
 import json
@@ -19,16 +15,10 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 _PAPERS_CACHE_DIR = Path("dev/papers")
-_HTML_TIMEOUT = 15  # seconds
+_HTML_TIMEOUT = 15
 
-
-# ---------------------------------------------------------------------------
-# HTML stripping
-# ---------------------------------------------------------------------------
 
 class _TextExtractor(HTMLParser):
-    """Minimal HTMLParser subclass that collects visible text."""
-
     _SKIP_TAGS = {"script", "style", "head", "meta", "link", "noscript"}
 
     def __init__(self):
@@ -55,20 +45,12 @@ class _TextExtractor(HTMLParser):
 
 
 def _html_to_text(html: str) -> str:
-    """Strip HTML tags and return plain text."""
     parser = _TextExtractor()
     parser.feed(html)
-    # Collapse runs of blank lines
-    text = parser.get_text()
-    return re.sub(r"\n{3,}", "\n\n", text)
+    return re.sub(r"\n{3,}", "\n\n", parser.get_text())
 
-
-# ---------------------------------------------------------------------------
-# Digest cache (dev/papers/<safe_id>.digest)
-# ---------------------------------------------------------------------------
 
 def _safe_id(arxiv_id: str) -> str:
-    """Convert an arxiv ID to a filesystem-safe filename stem."""
     return re.sub(r"[^\w\-]", "_", arxiv_id)
 
 
@@ -77,43 +59,26 @@ def _digest_cache_path(arxiv_id: str) -> Path:
 
 
 def load_cached_digest(arxiv_id: str) -> dict | None:
-    """Return the cached digest record for *arxiv_id*, or None if not cached."""
     path = _digest_cache_path(arxiv_id)
     if not path.exists():
         return None
     try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-        log.debug("arxiv_tool | Cache hit — %s", arxiv_id)
-        return record
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         log.warning("arxiv_tool | Failed to read digest cache for %s: %s", arxiv_id, exc)
         return None
 
 
 def save_digest(arxiv_id: str, record: dict) -> None:
-    """Write *record* to the digest cache for *arxiv_id*."""
     path = _digest_cache_path(arxiv_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
-    log.debug("arxiv_tool | Digest cached — %s -> %s", arxiv_id, path)
+    log.debug("arxiv_tool | Digest cached — %s", arxiv_id)
 
 
 def search_arxiv(query: str, max_results: int) -> list[dict]:
-    """Search arxiv and return the top results as structured dicts.
-
-    Args:
-        query: Free-text search query (e.g. 'activation patching transformer').
-        max_results: Maximum number of papers to return.
-
-    Returns:
-        List of dicts with keys:
-            - title (str)
-            - abstract (str)
-            - url (str)          — HTML abstract page URL
-            - arxiv_id (str)     — short ID like '2310.01234'
-            - published (str)    — ISO date string
-    """
-    log.info("Searching arxiv — query=%r, max_results=%d", query, max_results)
+    """Search arxiv and return scored paper dicts."""
+    log.info("arxiv_tool | Searching — query=%r, max_results=%d", query, max_results)
     results = list(
         arxiv.Search(
             query=query,
@@ -121,10 +86,8 @@ def search_arxiv(query: str, max_results: int) -> list[dict]:
             sort_by=arxiv.SortCriterion.Relevance,
         ).results()
     )
-    log.debug("arxiv returned %d raw results", len(results))
     papers = []
     for r in results:
-        log.debug("  [%s] %s", r.get_short_id(), r.title)
         papers.append({
             "title": r.title,
             "abstract": r.summary.replace("\n", " "),
@@ -132,61 +95,24 @@ def search_arxiv(query: str, max_results: int) -> list[dict]:
             "arxiv_id": r.get_short_id(),
             "published": r.published.date().isoformat(),
         })
+    log.debug("arxiv_tool | Returned %d papers", len(papers))
     return papers
 
 
-def get_paper_details(arxiv_id: str) -> dict:
-    """Fetch full metadata for a single paper by its arxiv ID.
-
-    Args:
-        arxiv_id: Short arxiv ID (e.g. '2310.01234') or full URL.
-
-    Returns:
-        Dict with the same keys as search_arxiv results plus:
-            - authors (list[str])
-            - pdf_url (str)
-            - categories (list[str])
-    """
-    log.debug("Fetching paper details — arxiv_id=%r", arxiv_id)
-    result = next(arxiv.Search(id_list=[arxiv_id]).results())
-    log.info("Fetched paper: %r (%s)", result.title, arxiv_id)
-    return {
-        "title": result.title,
-        "abstract": result.summary.replace("\n", " "),
-        "url": result.entry_id,
-        "arxiv_id": result.get_short_id(),
-        "published": result.published.date().isoformat(),
-        "authors": [a.name for a in result.authors],
-        "pdf_url": result.pdf_url,
-        "categories": result.categories,
-    }
-
-
 def download_paper_text(arxiv_id: str) -> str | None:
-    """Download and return the plain-text content of a paper's arxiv HTML page.
-
-    arxiv provides an HTML rendering for most papers submitted after ~2022 at
-    https://arxiv.org/html/<id>. Older papers or those without HTML versions
-    return a 404, in which case this function returns None.
-
-    Args:
-        arxiv_id: Short arxiv ID (e.g. '2310.01234v1').
-
-    Returns:
-        Plain text extracted from the HTML, or None if unavailable.
-    """
+    """Download plain text from the arxiv HTML page for *arxiv_id*."""
     url = f"https://arxiv.org/html/{arxiv_id}"
     log.debug("arxiv_tool | Fetching HTML — %s", url)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "NeuralSignalResearcher/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "ResearchPipeline/1.0"})
         with urllib.request.urlopen(req, timeout=_HTML_TIMEOUT) as resp:
             html = resp.read().decode("utf-8", errors="replace")
         text = _html_to_text(html)
-        log.info("arxiv_tool | Downloaded paper HTML — %s (%d chars)", arxiv_id, len(text))
+        log.info("arxiv_tool | Downloaded %s (%d chars)", arxiv_id, len(text))
         return text
     except urllib.error.HTTPError as exc:
-        log.warning("arxiv_tool | No HTML version for %s (HTTP %d)", arxiv_id, exc.code)
+        log.warning("arxiv_tool | No HTML for %s (HTTP %d)", arxiv_id, exc.code)
         return None
     except Exception as exc:
-        log.warning("arxiv_tool | Failed to fetch HTML for %s: %s", arxiv_id, exc)
+        log.warning("arxiv_tool | Failed to fetch %s: %s", arxiv_id, exc)
         return None

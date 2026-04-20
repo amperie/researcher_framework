@@ -1,78 +1,57 @@
-research_node:
-  # Minimum relevance score (0–10) a paper must receive to be included in
-  # state['arxiv_papers']. Papers below this threshold are fetched and scored
-  # but dropped before the summary and downstream nodes see them.
-  # Raise to tighten focus; lower (or set to 0) to keep everything.
-  relevance_score_threshold: 6
-  # Number of top-scored papers to download full text for and run digest
-  # extraction on. Digests are cached in dev/papers/ so each paper is only
-  # processed once across runs.
-  max_papers_to_digest: 3
+# Global runtime configuration for the research pipeline.
+# Profile-specific settings (prompts, datasets, base classes, metrics, step list)
+# belong in configs/profiles/<name>.yaml — not here.
+#
+# Secrets use ${ENV_VAR} or ${ENV_VAR:default} syntax.
+# Values are resolved from environment variables or configs/.env (if present).
 
-mongodb:
-  # Connection URL for the MongoDB instance holding neuralsignal scan snapshots.
-  # Supports any pymongo-compatible URI (auth, replica sets, SRV, etc.)
-  url: mongodb://hp.lan:27017
+# ── LLM ───────────────────────────────────────────────────────────────────────
+llm_provider: anthropic                        # anthropic | openai
+llm_model: ~                                   # null = use profile default
+anthropic_api_key: ${ANTHROPIC_API_KEY:}
+openai_api_key: ${OPENAI_API_KEY:}
 
-chromadb:
-  host: hp.lan
-  port: 8000
-  # Set ssl: true and provide a token if the server requires authentication.
-  ssl: false
-  # Leave blank for unauthenticated servers.
-  auth_token: ""
-  collection: experiments
+# ── MongoDB ───────────────────────────────────────────────────────────────────
+mongo_url: ${MONGO_URL:mongodb://hp.lan:27017}
+datasets_db_name: researcher_datasets
 
-experiment_runner:
-  # MLflow experiment name for all ns_experiment_runner runs
-  mlflow_experiment: "neuralsignal_agent_experiments"
-  # MongoDB database name for full experiment records
-  agent_experiments_db: "agent_experiments"
-  # ChromaDB collection name for experiment embeddings and semantic retrieval
-  chroma_collection: "agent_experiments"
-  # Max rows fed to S1Trainer per training run (0 = no limit)
-  modeling_row_limit: 10
-  # Hyperopt evaluations for XGBoost tuning
-  max_evals: 20
-  # Metric to optimise during training
-  optimization_metric: "auc"
-  # Fallback detector if proposal doesn't specify one
-  default_detector: "hallucination"
-  # Fallback dataset name if a proposal doesn't specify one.
-  # Must match a 'name' entry in configs/datasets.yaml.
-  default_dataset: "HaluBench"
-  # Max scans to pull when creating a new dataset (0 = no limit)
-  dataset_row_limit: 20
-  # Balance the training dataset so each class contributes equally.
-  # When true, the DataFrame returned by _resolve_datasets is downsampled
-  # to min(n_pos, n_neg, balanced_sample_size // 2) rows per class.
-  balanced_dataset: true
-  # Target total rows after balancing (0 = use all available balanced rows).
-  balanced_sample_size: 20
+# ── ChromaDB ──────────────────────────────────────────────────────────────────
+chroma_host: ${CHROMA_HOST:hp.lan}
+chroma_port: ${CHROMA_PORT:8000}
+chroma_ssl: false
+chroma_auth_token: ${CHROMA_AUTH_TOKEN:}
+chroma_collection: experiments
 
+# ── MLflow ────────────────────────────────────────────────────────────────────
+mlflow_uri: ${MLFLOW_URI:http://localhost:5000}
+
+# ── Experiment execution ──────────────────────────────────────────────────────
+experiment_timeout_seconds: 1800
+validate_timeout_seconds: 120
+experiments_dir: dev/experiments
+
+# ── neuralsignal plugin ───────────────────────────────────────────────────────
+neuralsignal_python: ${NEURALSIGNAL_PYTHON:uv run python}
+neuralsignal_src_path: ${NEURALSIGNAL_SRC_PATH:../neuralsignal/neuralsignal}
+
+# ── Arxiv ─────────────────────────────────────────────────────────────────────
+max_arxiv_papers: 20
+
+# ── Logging ───────────────────────────────────────────────────────────────────
 logging:
-  # Global minimum level — the root logger will not pass anything below this
-  # to any handler. Effectively the floor for both console and file.
-  # Values: DEBUG | INFO | WARNING | ERROR | CRITICAL
   level: DEBUG
 
   console:
     enabled: true
-    # Console shows INFO+ by default — keeps the terminal readable.
-    # Set to DEBUG to see full trace during development.
     level: INFO
-    # %(levelname)-8s left-pads the level name to 8 chars for alignment.
     format: "%(asctime)s [%(levelname)-8s] %(name)s (%(filename)s:%(lineno)d): %(message)s"
     datefmt: "%H:%M:%S"
 
   file:
     enabled: true
-    # File captures DEBUG+ — full detail for post-run analysis.
     level: DEBUG
-    path: "./logs/neuralsignalresearcher.log"
-    # Rotate at 10 MB, keep 5 backups (50 MB total).
-    max_bytes: 10485760
+    path: "logs/research.log"
+    max_bytes: 10485760   # 10 MB
     backup_count: 5
-    # File format includes filename and line number for easier debugging.
     format: "%(asctime)s [%(levelname)-8s] %(name)-40s (%(filename)s:%(lineno)d): %(message)s"
     datefmt: "%Y-%m-%d %H:%M:%S"

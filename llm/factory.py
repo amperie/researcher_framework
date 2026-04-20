@@ -1,7 +1,10 @@
 """LLM provider factory.
 
-Returns a configured LangChain chat model for the requested provider,
-defaulting to the values in Config.
+Model resolution order (first non-None wins):
+  1. profile['llm']['step_overrides'][step_name]  (per-step override in profile)
+  2. profile['llm']['default_model']              (profile-level default)
+  3. Config.llm_model                             (global .env override)
+  4. Provider built-in default                   (claude-opus-4-6 / gpt-4o)
 """
 from __future__ import annotations
 
@@ -13,38 +16,55 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 
-def get_llm(provider: str | None = None, model: str | None = None) -> BaseChatModel:
-    """Return a configured chat model for the given provider.
+def get_llm(
+    step_name: str | None = None,
+    profile: dict | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> BaseChatModel:
+    """Return a configured chat model.
 
     Args:
-        provider: 'anthropic' or 'openai'. Falls back to Config.llm_provider.
-        model: Model ID override. Falls back to Config.llm_model, then provider default.
-
-    Returns:
-        An instantiated BaseChatModel ready for invocation.
-
-    TODO: implement Anthropic branch (ChatAnthropic, default model claude-opus-4-6).
-    TODO: implement OpenAI branch (ChatOpenAI, default model gpt-4o).
-    TODO: raise ValueError with clear message for unknown providers.
+        step_name: Pipeline step name (e.g. 'implement'). Used to resolve
+                   per-step model overrides from the profile.
+        profile:   Loaded profile dict. If given, model is resolved from
+                   profile['llm']['step_overrides'][step_name] or
+                   profile['llm']['default_model'].
+        provider:  'anthropic' or 'openai'. Falls back to Config.llm_provider.
+        model:     Explicit model ID override (highest priority).
     """
     cfg = get_config()
     provider = provider or cfg.llm_provider
-    model = model or cfg.llm_model
 
-    log.info("Creating LLM — provider=%r, model=%r", provider, model or "(provider default)")
-    log.debug("API key present: %s",
-              bool(cfg.anthropic_api_key if provider == "anthropic" else cfg.openai_api_key))
+    # Resolve model: explicit arg → step override → profile default → global → provider default
+    resolved_model = model
+    if resolved_model is None and profile:
+        llm_cfg = profile.get("llm") or {}
+        overrides = llm_cfg.get("step_overrides") or {}
+        if step_name and step_name in overrides:
+            resolved_model = overrides[step_name]
+            log.debug("get_llm | step override — step=%r model=%r", step_name, resolved_model)
+        elif llm_cfg.get("default_model"):
+            resolved_model = llm_cfg["default_model"]
+            log.debug("get_llm | profile default — model=%r", resolved_model)
+    if resolved_model is None:
+        resolved_model = cfg.llm_model
+
+    log.info(
+        "get_llm | provider=%r model=%r (step=%r)",
+        provider, resolved_model or "(provider default)", step_name,
+    )
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(
-            model=model or "claude-opus-4-6",
+            model=resolved_model or "claude-opus-4-6",
             api_key=cfg.anthropic_api_key,
         )
     if provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
-            model=model or "gpt-4o",
+            model=resolved_model or "gpt-4o",
             api_key=cfg.openai_api_key,
         )
     raise ValueError(

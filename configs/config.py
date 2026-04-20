@@ -1,94 +1,91 @@
+"""Global runtime configuration — loaded from configs/config.yaml.
+
+Secrets are read from environment variables using ${VAR} or ${VAR:default} syntax.
+Optionally reads configs/.env before interpolation (for local dev convenience).
+Environment variables always take precedence over .env values.
+
+Profile-specific settings (prompts, datasets, base classes, metrics) belong in
+configs/profiles/<name>.yaml — not here.
+"""
+from __future__ import annotations
+
+import os
+import re
 from functools import lru_cache
+from pathlib import Path
+from types import SimpleNamespace
 
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import yaml
+
+_ENV_PAT = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
+_CONFIG_PATH = Path("configs/config.yaml")
+_ENV_PATH = Path("configs/.env")
 
 
-class Config(BaseSettings):
-    model_config = SettingsConfigDict(env_file="configs/.env", env_file_encoding="utf-8")
+def _load_dotenv() -> None:
+    """Load key=value pairs from configs/.env into os.environ.
 
-    # --- LLM ---
-    llm_provider: str = "anthropic"
-    """Provider name: 'anthropic' or 'openai'."""
+    No-op if the file does not exist. Environment variables already set
+    take precedence over .env values (twelve-factor app convention).
+    """
+    if not _ENV_PATH.exists():
+        return
+    for line in _ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
 
-    llm_model: str | None = None
-    """Model ID override. Defaults to claude-opus-4-6 (anthropic) or gpt-4o (openai)."""
 
-    @field_validator("llm_model", mode="before")
-    @classmethod
-    def _blank_comment_as_none(cls, v):
-        """Treat empty strings or comment placeholders as None.
+def _interpolate(val: object) -> object:
+    """Substitute ${VAR} / ${VAR:default} patterns with environment variable values."""
+    if not isinstance(val, str):
+        return val
 
-        python-dotenv does not strip inline comments, so a line like
-            LLM_MODEL=# optional override
-        is read as the literal string '# optional override...' rather than None.
-        """
-        if not v or str(v).startswith("#"):
-            return None
-        return v
+    def _sub(m: re.Match) -> str:
+        return os.environ.get(m.group(1), m.group(2) or "")
 
-    anthropic_api_key: str | None = None
-    openai_api_key: str | None = None
+    return _ENV_PAT.sub(_sub, val)
 
-    # --- MongoDB ---
-    mongo_url: str = "mongodb://hp.lan:27017"
-    """pymongo-compatible connection URI for the MongoDB instance that holds
-    neuralsignal scan snapshots."""
 
-    datasets_db_name: str = "neuralsignal_datasets"
-    """MongoDB database name for the dataset registry and GridFS parquet storage."""
-
-    # --- ChromaDB (remote HTTP server) ---
-    chroma_host: str = "hp.lan"
-    """Hostname or IP of the ChromaDB HTTP server."""
-
-    chroma_port: int = 8000
-    """Port the ChromaDB HTTP server listens on."""
-
-    chroma_ssl: bool = False
-    """Use HTTPS when connecting to the ChromaDB server."""
-
-    chroma_auth_token: str | None = None
-    """Bearer token for ChromaDB server auth. Leave unset for open servers."""
-
-    chroma_collection: str = "experiments"
-    """ChromaDB collection name for experiment records."""
-
-    # --- MLflow ---
-    mlflow_uri: str = "http://localhost:5000"
-    """MLflow tracking server URI. Use 'databricks' for Databricks-hosted tracking."""
-
-    mlflow_experiment: str = "neuralsignal_researcher"
-    """MLflow experiment name under which all runs are logged."""
-
-    # --- Experiment execution ---
-    neuralsignal_python: str = "uv run python"
-    """Shell command used to launch generated experiment scripts in the neuralsignal venv."""
-
-    experiment_timeout_seconds: int = 1800
-    """Maximum wall-clock seconds allowed for a single experiment subprocess."""
-
-    experiments_dir: str = "dev/experiments"
-    """Directory where generated experiment scripts are written (under dev/ so gitignored)."""
-
-    # --- Code generation ---
-    claude_command: str = "claude"
-    """Shell command for the Claude Code CLI used by code_generation_node."""
-
-    code_generation_timeout_seconds: int = 180
-    """Maximum seconds to wait for the Claude Code CLI to generate a script."""
-
-    # --- NeuralSignal source path ---
-    neuralsignal_src_path: str = "../neuralsignal/neuralsignal"
-    """Path to the neuralsignal source tree. Added to sys.path at startup and
-    injected into PYTHONPATH for experiment subprocesses."""
-
-    # --- Arxiv ---
-    max_arxiv_papers: int = 10
-    """Maximum number of arxiv papers fetched per research query."""
+def _walk(obj: object) -> object:
+    if isinstance(obj, dict):
+        return {k: _walk(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_walk(v) for v in obj]
+    return _interpolate(obj)
 
 
 @lru_cache(maxsize=1)
-def get_config() -> Config:
-    """Return the singleton Config instance (loaded from .env on first call)."""
-    return Config()
+def get_config() -> SimpleNamespace:
+    """Return the singleton runtime config, loaded from configs/config.yaml."""
+    _load_dotenv()
+    raw = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
+    data: dict = _walk(raw)
+
+    # The logging section is consumed only by utils/logger.py — strip it here.
+    data.pop("logging", None)
+
+    # Type coercions: env var substitution always produces strings, so cast explicitly.
+    for int_key in (
+        "chroma_port",
+        "experiment_timeout_seconds",
+        "validate_timeout_seconds",
+        "max_arxiv_papers",
+    ):
+        if int_key in data and data[int_key] is not None:
+            data[int_key] = int(data[int_key])
+
+    if "chroma_ssl" in data and isinstance(data["chroma_ssl"], str):
+        data["chroma_ssl"] = data["chroma_ssl"].lower() in ("true", "1", "yes")
+
+    # Normalise empty strings to None for optional fields.
+    for opt_key in ("llm_model", "anthropic_api_key", "openai_api_key", "chroma_auth_token"):
+        if not data.get(opt_key):
+            data[opt_key] = None
+
+    return SimpleNamespace(**data)

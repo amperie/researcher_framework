@@ -1,10 +1,10 @@
-"""NeuralSignalResearcher — CLI entry point.
+"""Research Pipeline — CLI entry point.
 
 Usage:
-    uv run python main.py --direction "activation patching in transformer FFN layers"
-    uv run python main.py               # prompts interactively for direction
-    uv run python main.py --loop        # automatically loop using top follow-up
-    uv run python main.py --log-config path/to/config.yaml
+    uv run python main.py --profile neuralsignal --direction "attention head specialization"
+    uv run python main.py --profile neuralsignal          # prompts for direction
+    uv run python main.py --profile neuralsignal --loop   # loop using top next_step
+    uv run python main.py --list-profiles
 """
 from __future__ import annotations
 
@@ -12,161 +12,145 @@ import argparse
 import json
 import sys
 
-from utils.logger import get_logger, setup_logging
+from utils.logger import setup_logging, get_logger
 
+setup_logging()
 log = get_logger(__name__)
-
-
-def _add_neuralsignal_to_path() -> None:
-    """Prepend neuralsignal_src_path to sys.path so the main process can import neuralsignal.
-
-    This is distinct from the PYTHONPATH injection done for subprocesses in
-    experiment_runner_node — here we need it for ns_experiment_runner_node which
-    imports neuralsignal directly in-process.
-    """
-    import sys
-    from pathlib import Path
-    from configs.config import get_config
-    ns_path = Path(get_config().neuralsignal_src_path).resolve()
-    if ns_path.exists() and str(ns_path) not in sys.path:
-        sys.path.insert(0, str(ns_path))
-        log.debug("Added neuralsignal to sys.path: %s", ns_path)
-    elif not ns_path.exists():
-        log.warning("neuralsignal_src_path does not exist: %s", ns_path)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Multi-agent LangGraph orchestrator for NeuralSignal research."
+        description="Configuration-driven agentic research pipeline."
     )
-    parser.add_argument(
-        "--direction",
-        type=str,
-        default=None,
-        help="Research direction to investigate (e.g. 'layer-wise activation probing').",
-    )
-    parser.add_argument(
-        "--loop",
-        action="store_true",
-        default=False,
-        help="Automatically loop: promote top follow-up proposal as the next direction.",
-    )
-    parser.add_argument(
-        "--log-config",
-        type=str,
-        default="config.yaml",
-        metavar="PATH",
-        help="Path to the YAML config file for logging (default: config.yaml).",
-    )
+    parser.add_argument("--profile", type=str, default=None,
+                        help="Research profile name (e.g. 'neuralsignal', 'trading').")
+    parser.add_argument("--direction", type=str, default=None,
+                        help="Research direction / question to investigate.")
+    parser.add_argument("--loop", action="store_true", default=False,
+                        help="Auto-loop: use top next_step as the next direction.")
+    parser.add_argument("--list-profiles", action="store_true",
+                        help="List available profiles and exit.")
     return parser.parse_args()
+
+
+def _add_plugin_to_path(profile: dict) -> None:
+    """Add any plugin-specific source paths to sys.path."""
+    from pathlib import Path
+    from configs.config import get_config
+    cfg = get_config()
+
+    if profile.get("name") == "neuralsignal":
+        ns_path = Path(cfg.neuralsignal_src_path).resolve()
+        if ns_path.exists() and str(ns_path) not in sys.path:
+            sys.path.insert(0, str(ns_path))
+            log.debug("Added neuralsignal to sys.path: %s", ns_path)
+        elif not ns_path.exists():
+            log.warning("neuralsignal_src_path not found: %s", ns_path)
 
 
 def main() -> None:
     args = parse_args()
 
-    # --- Logging must be configured before any other module emits records ---
-    setup_logging(args.log_config)
-    _add_neuralsignal_to_path()
-    log.debug("CLI args parsed: direction=%r, loop=%s, log_config=%r",
-              args.direction, args.loop, args.log_config)
+    if args.list_profiles:
+        from utils.profile_loader import list_profiles
+        profiles = list_profiles()
+        if profiles:
+            print("Available profiles:")
+            for p in profiles:
+                print(f"  {p}")
+        else:
+            print("No profiles found in configs/profiles/")
+        return
 
-    # --- Resolve research direction ---
+    # Resolve profile
+    profile_name = args.profile
+    if not profile_name:
+        from utils.profile_loader import list_profiles
+        available = list_profiles()
+        if not available:
+            print("Error: no profiles found in configs/profiles/", file=sys.stderr)
+            sys.exit(1)
+        if len(available) == 1:
+            profile_name = available[0]
+            log.info("Auto-selected only available profile: %r", profile_name)
+        else:
+            print(f"Available profiles: {available}")
+            profile_name = input("Profile: ").strip()
+
+    from utils.profile_loader import load_profile
+    try:
+        profile = load_profile(profile_name)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error loading profile {profile_name!r}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    _add_plugin_to_path(profile)
+
+    # Resolve direction
     direction = args.direction
     if not direction:
-        direction = input("Research direction: ").strip()
+        direction = input(f"[{profile_name}] Research direction: ").strip()
     if not direction:
-        log.error("No research direction provided — aborting.")
         print("Error: a research direction is required.", file=sys.stderr)
         sys.exit(1)
 
-    log.info("Starting NeuralSignalResearcher — direction: %r", direction)
+    log.info("Starting pipeline — profile=%r, direction=%r", profile_name, direction)
 
-    # --- Build graph ---
-    log.debug("Importing and compiling LangGraph pipeline")
-    from graph.graph import build_graph
+    from graph.builder import build_graph
+    graph = build_graph(profile)
 
-    graph = build_graph()
-    log.info("Pipeline compiled — %d nodes", len(graph.nodes))
-
-    # --- Initial state ---
     initial_state = {
+        "profile_name": profile_name,
         "research_direction": direction,
         "continue_loop": args.loop,
         "errors": [],
     }
-    log.debug("Initial state: %s", initial_state)
 
-    # --- Run pipeline ---
-    print(f"\n[NeuralSignalResearcher] Starting research: {direction!r}\n")
-    log.info("Invoking pipeline")
+    print(f"\n[{profile_name}] Researching: {direction!r}\n")
 
     try:
-        # TODO: replace invoke with stream() to log per-node progress
         final_state = graph.invoke(initial_state)
     except Exception:
         log.critical("Pipeline raised an unhandled exception", exc_info=True)
         raise
 
-    log.info("Pipeline finished — experiment_id=%r, success=%s",
-             final_state.get("experiment_id"), final_state.get("execution_success"))
-
-    errors = final_state.get("errors") or []
-    if errors:
-        log.warning("Pipeline completed with %d error(s): %s", len(errors), errors)
-
-    # --- Print results ---
-    _print_results(final_state)
+    _print_results(final_state, profile_name)
 
 
-def _print_results(state: dict) -> None:
-    """Print a human-readable summary of the pipeline results to stdout."""
-    log.debug("Rendering results summary")
-
+def _print_results(state: dict, profile_name: str) -> None:
     print("\n" + "=" * 72)
-    print("PIPELINE COMPLETE")
+    print(f"PIPELINE COMPLETE  [{profile_name}]")
     print("=" * 72)
 
-    if state.get("mlflow_run_id"):
-        print(f"MLflow run:              {state['mlflow_run_id']}")
-        log.info("MLflow primary run: %s", state["mlflow_run_id"])
-    if state.get("mlflow_generalization_run_id"):
-        print(f"MLflow gen. eval run:    {state['mlflow_generalization_run_id']}")
-        log.info("MLflow generalization run: %s", state["mlflow_generalization_run_id"])
-    if state.get("chroma_record_id"):
-        print(f"ChromaDB record:         {state['chroma_record_id']}")
-        log.info("ChromaDB record: %s", state["chroma_record_id"])
+    stored = state.get("stored_result_ids") or []
+    if stored:
+        print(f"Stored results ({len(stored)}): {stored}")
 
-    if state.get("raw_results"):
-        print(f"\nExperiment results:\n{json.dumps(state['raw_results'], indent=2)}")
-        log.debug("Raw results: %s", state["raw_results"])
+    eval_summary = state.get("evaluation_summary") or {}
+    if eval_summary:
+        best = eval_summary.get("best_proposal")
+        best_val = eval_summary.get("best_metric_value")
+        metric = eval_summary.get("best_metric_name", "")
+        if best:
+            print(f"Best result: {best} — {metric}={best_val:.4f}" if isinstance(best_val, float) else f"Best: {best}")
 
-    if state.get("analysis_summary"):
-        print(f"\nAnalysis:\n{state['analysis_summary']}")
-
-    proposals = state.get("followup_proposals") or []
-    if proposals:
-        print(f"\nSuggested follow-up experiments ({len(proposals)}):")
-        log.info("Follow-up proposals (%d):", len(proposals))
-        for i, p in enumerate(proposals, 1):
-            title = p.get("title", "(no title)")
-            rationale = p.get("rationale", "")
-            direction = p.get("suggested_direction", "")
-            print(f"  {i}. {title}")
-            if rationale:
-                print(f"     Rationale: {rationale}")
-            if direction:
-                print(f"     Direction:  {direction}")
-            log.info("  %d. %s — %s", i, title, direction)
+    next_steps = state.get("next_steps") or []
+    if next_steps:
+        print(f"\nProposed next steps ({len(next_steps)}):")
+        for i, s in enumerate(next_steps, 1):
+            print(f"  {i}. [{s.get('priority', '?')}] {s.get('title', '(no title)')}")
+            if s.get("rationale"):
+                print(f"     {s['rationale']}")
+            if s.get("suggested_direction"):
+                print(f"     → {s['suggested_direction']}")
 
     errors = state.get("errors") or []
     if errors:
-        print(f"\nErrors encountered ({len(errors)}):")
+        print(f"\nErrors ({len(errors)}):")
         for e in errors:
             print(f"  - {e}")
-            log.warning("Pipeline error: %s", e)
 
     print("=" * 72 + "\n")
-    log.debug("Results summary complete")
 
 
 if __name__ == "__main__":

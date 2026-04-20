@@ -1,0 +1,341 @@
+# Research profile: neuralsignal LLM internals probing experiments.
+#
+# This file is the single source of truth for the neuralsignal research domain.
+# It controls: pipeline steps, LLM models, prompts, datasets, base classes,
+# evaluation metrics, experiment adapter, and storage targets.
+
+name: neuralsignal
+description: >
+  Research and experiment automation for neuralsignal LLM internals probing.
+  Generates FeatureSetBase subclasses that extract activation-based features
+  from LLM scan snapshots and trains XGBoost detectors (e.g. hallucination).
+
+# ── Pipeline ──────────────────────────────────────────────────────────────────
+# Ordered step list. Remove a step name to skip it.
+pipeline:
+  steps:
+    - research
+    - ideate
+    - refine
+    - propose_experiments
+    - plan_implementation
+    - implement
+    - validate
+    - prepare_experiment
+    - execute_experiment
+    - evaluate
+    - store_results
+    - propose_next_steps
+
+# ── LLM Model Selection ────────────────────────────────────────────────────────
+llm:
+  default_model: claude-opus-4-6
+  step_overrides:
+    research: claude-sonnet-4-6     # faster for scoring/summarizing many papers
+    refine: claude-sonnet-4-6
+    evaluate: claude-sonnet-4-6
+
+# ── Research Sources ──────────────────────────────────────────────────────────
+research:
+  sources:
+    - type: arxiv
+      categories: [cs.LG, cs.AI, cs.CL]
+      max_results: 20
+      relevance_score_threshold: 6
+      max_papers_to_digest: 3
+  domain_context: >
+    Focus on mechanistic interpretability, probing classifiers, activation analysis,
+    feature engineering over LLM internal representations, and hallucination detection.
+
+# ── Base Classes ──────────────────────────────────────────────────────────────
+# The implement step generates code subclassing one of these.
+base_classes:
+  - name: FeatureSetBase
+    module: neuralsignal.core.modules.feature_sets.feature_set_base
+    description: >
+      Base class for all neuralsignal feature extraction strategies.
+      Subclass this to define a new probing feature set.
+    key_interface: |
+      class FeatureSetBase:
+          def __init__(self, cfg: dict):
+              self.cfg = cfg
+              # cfg keys injected at runtime:
+              #   name (str), output_format (str)
+              #   ffn_layer_patterns (list[str]) — substrings matching FFN layer names
+              #   attn_layer_patterns (list[str]) — substrings matching attention layer names
+
+          def extract_features(self, scan: dict) -> dict[str, float]:
+              # scan keys: outputs, inputs, layer_id_to_name, layer_order, layer_passes,
+              #            zone_size, ground_truth
+              # scan['outputs'] structure: {batch_idx: {layer_id: Tensor}}
+              # Returns: flat dict mapping feature_name -> float value
+              ...
+
+# ── Validate Step ──────────────────────────────────────────────────────────────
+validate:
+  auto_run: true
+  max_fix_retries: 3
+  test_runner: "uv run pytest"
+  test_output_dir: dev/experiments/neuralsignal/tests
+
+# ── Datasets ──────────────────────────────────────────────────────────────────
+datasets:
+  - name: HaluBench
+    description: "Hallucination detection benchmark — RAG, summarization, and QA tasks"
+    storage:
+      type: mongodb
+      application_name: HaluBench              # MongoDB database name
+      sub_application_name: GranularAttentioAndWO  # MongoDB collection name
+    available_detectors:
+      - hallucination
+    available_scan_fields:
+      guaranteed:
+        - outputs           # {batch_idx: {layer_id: Tensor}} — primary activation data
+        - inputs            # {batch_idx: {layer_id: Tensor}}
+        - layer_id_to_name  # {layer_id: str}
+        - layer_order       # [layer_id, ...] in execution order
+        - layer_passes      # {layer_id: int}
+        - zone_size         # int — default token zone size
+        - ground_truth      # int (0 or 1) — binary label
+      optional:
+        - metadata          # dict — present but NOT auto-populated; avoid
+        - zone_sizes_by_layer
+        - layer_names_to_include
+        - layer_indexes_to_include
+      not_available:
+        - patched_logit_diffs
+        - attention_scores
+        - probe_weights
+        - concept_mean_activations
+        - logit_lens_projections
+    layer_name_patterns:
+      ffn:  [mlp, feed_forward, .wi, .wo, .act, .w1, .w2, .w3, "ff.", fc]
+      attn: [.q, .k, .v, .o, SelfAttention, attention, attn]
+
+# ── Experiment Adapter ────────────────────────────────────────────────────────
+experiment_adapter: plugins.neuralsignal.dataset_adapter
+
+# ── Evaluation Metrics ────────────────────────────────────────────────────────
+evaluation:
+  primary_metric: test_auc
+  metrics:
+    - test_auc
+    - train_auc
+    - test_f1
+    - test_accuracy
+  thresholds:
+    test_auc: 0.65    # minimum to be considered a useful result
+
+# ── Results Storage ───────────────────────────────────────────────────────────
+storage:
+  mlflow_experiment: neuralsignal_agent_experiments
+  mongodb_results_db: agent_experiments
+  chroma_collection: agent_experiments
+
+# ── Prompts ────────────────────────────────────────────────────────────────────
+# All LLM system prompts for this domain. Node code reads:
+#   profile['prompts'][step_name]['system']  (or other keys like 'score_system')
+prompts:
+  research:
+    score_system: |
+      You are an expert in mechanistic interpretability, LLM internals, and probing classifiers.
+      Score the following paper 0–10 for relevance to the given research direction.
+      10 = directly applicable methodology or findings.
+      0  = completely unrelated.
+      Respond with valid JSON only: {"score": <int 0-10>, "reason": "<one sentence>"}
+
+    summary_system: |
+      You are a research scientist specializing in LLM mechanistic interpretability.
+      Synthesize the key findings from the provided papers into a concise research summary
+      (300–500 words) focused on actionable insights for feature engineering over LLM
+      internal activations. Highlight: novel techniques, surprising findings, open problems,
+      and connections to hallucination detection.
+
+    digest_system: |
+      Extract a structured digest from the following paper. Focus on:
+      1. Core methodology (how activations or internal representations are used)
+      2. Key findings relevant to probing or feature extraction
+      3. Specific techniques applicable to FeatureSetBase implementations
+      4. Limitations and open questions
+      Write 400–600 words. Be concrete — name specific layers, operations, or metrics.
+
+  ideate:
+    system: |
+      You are a research scientist specializing in LLM mechanistic interpretability
+      and probing-based hallucination detection.
+
+      Based on the research summary and paper digests, propose 3–5 novel feature extraction
+      ideas. Each idea must:
+      - Be grounded in LLM internal representations (attention patterns, MLP activations,
+        residual stream geometry, etc.)
+      - Be implementable as a FeatureSetBase subclass
+      - Access only scan fields: outputs, inputs, layer_id_to_name, layer_order, ground_truth
+        (NO patched logits, probe weights, attention scores, or external files)
+      - Produce a flat dict[str, float] of features
+
+      Return a JSON array of ideas:
+      [
+        {
+          "name": "snake_case_class_name",
+          "description": "What this feature set measures",
+          "hypothesis": "Why this should correlate with hallucination",
+          "rationale": "What research inspired this"
+        }
+      ]
+
+  refine:
+    system: |
+      Review these feature extraction ideas for feasibility.
+
+      Constraints:
+      - Only scan fields 'outputs', 'inputs', 'layer_id_to_name', 'layer_order',
+        'layer_passes', 'zone_size', 'ground_truth' are available.
+      - NO external files, probe weights, concept means, patched logits, or attention scores.
+      - Layer patterns are read from cfg: self.cfg.get('ffn_layer_patterns', []) and
+        self.cfg.get('attn_layer_patterns', []).
+      - Features must be extractable from Tensor values: mean, std, norm, cosine similarity,
+        directional statistics — no cross-attention or patching operations.
+
+      For each idea:
+      1. Accept if it only uses available data.
+      2. Reject (and explain) if it requires unavailable fields.
+      3. Improve accepted ideas with more specific extraction logic guidance.
+
+      Return a JSON array of refined ideas (same schema as input, with improved descriptions).
+
+  propose_experiments:
+    system: |
+      For each refined feature extraction idea, specify a complete experiment.
+      Use the available datasets and detectors listed in the context.
+
+      For each experiment specify:
+      - name: same as the idea's name
+      - description: what this experiment tests
+      - dataset: exact dataset name from the available list
+      - detector: exact detector name from that dataset's available_detectors
+      - hyperparameters: {zone_size: int, layer_selection: str, ...}
+      - expected_output_columns: list of feature column name patterns
+      - success_criterion: minimum test_auc to consider it useful (e.g. 0.65)
+      - mongo_query: {} (empty unless specific filtering is needed)
+
+      Return a JSON array of fully-specified experiment proposals.
+
+  plan_implementation:
+    system: |
+      For each experiment proposal, write a detailed implementation plan.
+      Do NOT write Python code — write a structured JSON plan.
+
+      For each proposal, produce a plan with these fields:
+      - proposal_name: matches the proposal name
+      - class_name: PascalCase Python class name
+      - base_class: "FeatureSetBase"
+      - init_fields: list of cfg keys to store in __init__ (e.g. ffn_layer_patterns)
+      - main_method: "extract_features"
+      - method_steps: ordered list of steps the method should perform
+        (e.g. "1. Iterate layer_order, filter by ffn_layer_patterns",
+              "2. For each matching layer, get outputs[0][layer_id]",
+              "3. Compute mean activation across token dimension")
+      - output_keys: list of feature name patterns this class will return
+      - imports_needed: list of Python import statements required
+
+      Return a JSON array of plans.
+
+  implement:
+    system: |
+      Implement the Python class described in the implementation plan.
+
+      Requirements:
+      - Subclass FeatureSetBase from neuralsignal.core.modules.feature_sets.feature_set_base
+      - Import only standard Python + numpy/torch (no neuralsignal internals beyond base class)
+      - Only access guaranteed scan fields: outputs, inputs, layer_id_to_name, layer_order,
+        layer_passes, zone_size, ground_truth
+      - Read layer patterns from: self.cfg.get('ffn_layer_patterns', [])
+        and self.cfg.get('attn_layer_patterns', [])
+      - Layer matching: a layer matches if any pattern string is a substring of
+        layer_id_to_name[layer_id]
+      - Return a flat dict[str, float] from extract_features(). Never return NaN or None values.
+      - Include error handling: skip layers where tensor operations fail
+      - Include a standalone if __name__ == '__main__': block with a synthetic test
+        (creates a mock scan dict and prints the result)
+
+      Return ONLY the Python source code. No explanation, no markdown fences.
+
+  validate:
+    system: |
+      Generate pytest unit tests for this FeatureSetBase subclass.
+
+      The tests must:
+      1. Import the class from the script (use importlib or direct import)
+      2. Create a minimal but realistic cfg dict with:
+         - name: "test_feature_set"
+         - output_format: "name_and_value_columns"
+         - ffn_layer_patterns: ["mlp", "fc"]
+         - attn_layer_patterns: [".q", ".k", ".v"]
+      3. Create a synthetic scan dict with guaranteed fields:
+         - outputs: {0: {0: torch.randn(8, 16), 1: torch.randn(8, 16)}}
+         - inputs: {0: {0: torch.randn(8, 16), 1: torch.randn(8, 16)}}
+         - layer_id_to_name: {0: "model.layers.0.mlp.fc", 1: "model.layers.0.attn.q_proj"}
+         - layer_order: [0, 1]
+         - layer_passes: {0: 1, 1: 1}
+         - zone_size: 512
+         - ground_truth: 1
+      4. Call extract_features(scan) and assert:
+         - Result is a dict
+         - All values are float (not NaN, not None)
+         - At least one key-value pair is returned
+         - At least one value is non-zero
+
+      Return ONLY the Python test code. No explanation, no markdown fences.
+
+    fix_system: |
+      The following unit tests failed for the FeatureSetBase implementation.
+      Fix the IMPLEMENTATION (not the tests) to make the tests pass.
+      Common issues: wrong tensor indexing, NaN from empty tensors, wrong layer filtering logic.
+      Return ONLY the corrected Python source code. No explanation, no markdown fences.
+
+  evaluate:
+    system: |
+      Analyze these neuralsignal experiment results. For each proposal:
+
+      1. Interpret the test_auc score:
+         - >= 0.75: Strong signal — the feature captures meaningful hallucination-related patterns
+         - 0.65–0.75: Moderate signal — worth investigating further
+         - 0.55–0.65: Weak signal — marginal improvement over chance
+         - < 0.55: No signal — feature does not correlate with hallucination
+
+      2. Note which features had the highest importance (if available)
+      3. Assess whether the hypothesis was supported
+      4. Suggest what might explain the result (e.g. which layers were most informative)
+
+      Return a JSON object:
+      {
+        "per_proposal": [
+          {
+            "proposal_name": "...",
+            "assessment": "strong|moderate|weak|none",
+            "interpretation": "...",
+            "key_features": [...],
+            "hypothesis_supported": true/false
+          }
+        ],
+        "conclusion": "Overall summary of what was learned",
+        "promising_directions": ["...", "..."]
+      }
+
+  propose_next_steps:
+    system: |
+      Based on the experiment results and original research direction, propose 3
+      high-value follow-up research directions.
+
+      Prioritize:
+      1. Directions that build on the most promising result (highest AUC)
+      2. Directions that address unexpected findings or failures
+      3. Directions that combine complementary feature sets
+
+      For each direction specify:
+      - title: short descriptive title
+      - rationale: why this is the right next step given the results
+      - suggested_direction: the research question to investigate (used as next iteration's direction)
+      - priority: 1 (highest) to 3 (lowest)
+
+      Return a JSON array of 3 next step proposals.

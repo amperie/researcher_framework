@@ -1,165 +1,135 @@
-"""Research node — arxiv search and summarization."""
+"""Research step — search for relevant papers and build a research context.
+
+Reads:
+    state['research_direction']
+
+Writes:
+    state['research_papers']   — papers scored for relevance
+    state['research_summary']  — LLM-synthesised summary
+    state['paper_digests']     — structured full-text extractions (cached)
+"""
 from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from configs.config import get_config
 from graph.state import ResearchState
 from llm.factory import get_llm
+from tools.arxiv_tool import search_arxiv, load_cached_digest, save_digest, download_paper_text
+from utils import extract_json_object
 from utils.logger import get_logger
-from configs.prompts import RESEARCH_DIGEST, RESEARCH_SCORE, RESEARCH_SUMMARY
-from tools.arxiv_tool import download_paper_text, load_cached_digest, save_digest, search_arxiv
-from utils import extract_json_array, load_yaml_section
+from utils.profile_loader import get_prompt
 
 log = get_logger(__name__)
 
 
-def research_node(state: ResearchState) -> dict:
-    """Search arxiv and summarise relevant papers.
-
-    Reads:
-        state['research_direction']
-
-    Writes:
-        state['arxiv_papers']      — papers sorted by relevance_score descending
-        state['research_summary']  — LLM synthesis of the top papers
-    """
+def research_node(state: ResearchState, profile: dict) -> dict:
     direction = state.get("research_direction", "")
-    cfg = get_config()
-    llm = get_llm()
+    if not direction:
+        return {"errors": (state.get("errors") or []) + ["research: no research_direction in state"]}
 
-    log.info("research_node | Searching arxiv — direction=%r, max=%d",
-             direction, cfg.max_arxiv_papers)
+    research_cfg = profile.get("research") or {}
+    sources = research_cfg.get("sources") or []
+    domain_context = research_cfg.get("domain_context", "")
 
-    papers = search_arxiv(direction, max_results=cfg.max_arxiv_papers)
-    log.info("research_node | Fetched %d papers", len(papers))
+    # --- Gather papers from all configured sources ---
+    all_papers: list[dict] = []
+    for source in sources:
+        src_type = source.get("type", "arxiv")
+        if src_type == "arxiv":
+            max_results = source.get("max_results", 20)
+            query = f"{direction} {domain_context}"[:300]
+            papers = search_arxiv(query, max_results)
+            all_papers.extend(papers)
+        else:
+            log.warning("research_node | Unknown source type %r — skipping", src_type)
 
-    if not papers:
-        log.warning("research_node | No papers found — returning empty state")
-        return {"arxiv_papers": [], "research_summary": "No relevant papers found."}
+    if not all_papers:
+        log.warning("research_node | No papers found for direction=%r", direction)
+        return {"research_papers": [], "research_summary": "", "paper_digests": []}
 
-    # ------------------------------------------------------------------
-    # Score all papers in a single LLM call
-    # ------------------------------------------------------------------
-    papers_block = "\n\n".join(
-        f"[{i + 1}] Title: {p['title']}\nAbstract: {p['abstract']}"
-        for i, p in enumerate(papers)
-    )
-    score_prompt = (
-        f"Research direction: {direction}\n\n"
-        f"Papers to score ({len(papers)} total):\n\n{papers_block}\n\n"
-        f"Return a JSON array of {len(papers)} integers (0–10), one per paper."
-    )
+    log.info("research_node | Fetched %d papers total", len(all_papers))
 
-    try:
-        score_response = llm.invoke([
-            SystemMessage(content=RESEARCH_SCORE),
-            HumanMessage(content=score_prompt),
-        ])
-        scores = extract_json_array(score_response.content)
-        if len(scores) != len(papers):
-            raise ValueError(
-                f"Expected {len(papers)} scores, got {len(scores)}"
-            )
-        log.debug("research_node | Scores: %s", scores)
-    except Exception as exc:
-        log.warning("research_node | Scoring failed (%s) — defaulting all scores to 5", exc)
-        scores = [5] * len(papers)
+    # --- Score papers for relevance ---
+    score_prompt = get_prompt(profile, "research", "score_system")
+    llm = get_llm("research", profile)
+    threshold = max(s.get("relevance_score_threshold", 6) for s in sources if s.get("type") == "arxiv") if sources else 6
 
-    for paper, score in zip(papers, scores):
-        paper["relevance_score"] = int(score)
+    scored: list[dict] = []
+    for paper in all_papers:
+        try:
+            resp = llm.invoke([
+                SystemMessage(content=score_prompt),
+                HumanMessage(content=f"Research direction: {direction}\n\nPaper title: {paper['title']}\n\nAbstract: {paper['abstract']}"),
+            ])
+            result = extract_json_object(resp.content)
+            paper["relevance_score"] = int(result.get("score", 0))
+            paper["relevance_reason"] = result.get("reason", "")
+        except Exception as exc:
+            log.warning("research_node | Scoring failed for %r: %s", paper.get("title"), exc)
+            paper["relevance_score"] = 0
 
-    papers.sort(key=lambda p: p["relevance_score"], reverse=True)
-    log.info("research_node | Top paper — %r (score=%d)",
-             papers[0]["title"], papers[0]["relevance_score"])
+        if paper["relevance_score"] >= threshold:
+            scored.append(paper)
 
-    # ------------------------------------------------------------------
-    # Filter by relevance threshold
-    # ------------------------------------------------------------------
-    node_cfg = load_yaml_section("research_node")
-    threshold = int(node_cfg.get("relevance_score_threshold", 0))
-    if threshold > 0:
-        before = len(papers)
-        papers = [p for p in papers if p["relevance_score"] >= threshold]
-        log.info("research_node | Threshold=%d — kept %d/%d papers",
-                 threshold, len(papers), before)
-        if not papers:
-            log.warning("research_node | All papers filtered out at threshold=%d", threshold)
-            return {"arxiv_papers": [], "research_summary": "No papers met the relevance threshold."}
+    scored.sort(key=lambda p: p["relevance_score"], reverse=True)
+    log.info("research_node | %d/%d papers passed threshold %d", len(scored), len(all_papers), threshold)
 
-    # ------------------------------------------------------------------
-    # Synthesise a research summary from the top papers
-    # ------------------------------------------------------------------
-    top_n = min(5, len(papers))
-    top_block = "\n\n".join(
-        f"[{i + 1}] {p['title']} (score {p['relevance_score']})\n{p['abstract']}"
-        for i, p in enumerate(papers[:top_n])
-    )
-    summary_prompt = (
-        f"Research direction: {direction}\n\n"
-        f"Top {top_n} papers by relevance:\n\n{top_block}"
-    )
-
-    try:
-        summary_response = llm.invoke([
-            SystemMessage(content=RESEARCH_SUMMARY),
-            HumanMessage(content=summary_prompt),
-        ])
-        research_summary = summary_response.content.strip()
-        log.info("research_node | Summary generated — %d chars", len(research_summary))
-    except Exception as exc:
-        log.warning("research_node | Summary generation failed (%s) — using fallback", exc)
-        research_summary = "\n".join(
-            f"- {p['title']} (score {p['relevance_score']})" for p in papers[:top_n]
+    # --- Research summary ---
+    summary = ""
+    if scored:
+        summary_prompt = get_prompt(profile, "research", "summary_system")
+        papers_text = "\n\n".join(
+            f"[{p['title']} — score {p['relevance_score']}]\n{p['abstract']}"
+            for p in scored[:10]
         )
+        try:
+            resp = llm.invoke([
+                SystemMessage(content=summary_prompt),
+                HumanMessage(content=f"Research direction: {direction}\n\nPapers:\n{papers_text}"),
+            ])
+            summary = resp.content
+            log.info("research_node | Summary generated (%d chars)", len(summary))
+        except Exception as exc:
+            log.error("research_node | Summary generation failed: %s", exc, exc_info=True)
 
-    # ------------------------------------------------------------------
-    # Download and digest full paper text for the top N papers
-    # ------------------------------------------------------------------
-    max_to_digest = int(node_cfg.get("max_papers_to_digest", 3))
+    # --- Digest top papers ---
+    max_digest = max((s.get("max_papers_to_digest", 3) for s in sources if s.get("type") == "arxiv"), default=3)
+    digest_prompt = get_prompt(profile, "research", "digest_system")
     digests: list[dict] = []
 
-    for paper in papers[:max_to_digest]:
-        arxiv_id = paper["arxiv_id"]
-
-        cached = load_cached_digest(arxiv_id)
+    for paper in scored[:max_digest]:
+        arxiv_id = paper.get("arxiv_id", "")
+        cached = load_cached_digest(arxiv_id) if arxiv_id else None
         if cached:
-            log.info("research_node | Digest loaded from cache — %s", arxiv_id)
             digests.append(cached)
+            log.debug("research_node | Digest cache hit — %s", arxiv_id)
             continue
 
-        full_text = download_paper_text(arxiv_id)
-        if not full_text:
-            log.warning("research_node | No HTML available for %s — skipping digest", arxiv_id)
+        text = download_paper_text(arxiv_id) if arxiv_id else None
+        if not text:
+            log.warning("research_node | No full text for %s — skipping digest", arxiv_id)
             continue
 
         try:
-            digest_response = llm.invoke([
-                SystemMessage(content=RESEARCH_DIGEST),
-                HumanMessage(content=(
-                    f"Research direction: {direction}\n\n"
-                    f"Paper: {paper['title']}\n\n"
-                    f"{full_text[:40000]}"
-                )),
+            resp = llm.invoke([
+                SystemMessage(content=digest_prompt),
+                HumanMessage(content=f"Paper: {paper['title']}\n\n{text[:8000]}"),
             ])
             record = {
                 "arxiv_id": arxiv_id,
                 "title": paper["title"],
-                "published": paper["published"],
+                "published": paper.get("published", ""),
                 "abstract": paper["abstract"],
-                "digest": digest_response.content.strip(),
+                "digest": resp.content,
             }
             save_digest(arxiv_id, record)
             digests.append(record)
-            log.info("research_node | Digest extracted and cached — %s (%d chars)",
-                     arxiv_id, len(record["digest"]))
+            log.info("research_node | Digest generated — %s", arxiv_id)
         except Exception as exc:
-            log.warning("research_node | Digest extraction failed for %s: %s", arxiv_id, exc)
-
-    log.info("research_node | Digests ready: %d/%d", len(digests), max_to_digest)
+            log.warning("research_node | Digest failed for %s: %s", arxiv_id, exc)
 
     return {
-        "arxiv_papers": papers,
-        "research_summary": research_summary,
+        "research_papers": scored,
+        "research_summary": summary,
         "paper_digests": digests,
     }

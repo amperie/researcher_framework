@@ -1,23 +1,53 @@
-from graph.nodes.code_generation import code_generation_node
-from graph.nodes.db_logger import db_logger_node
-from graph.nodes.experiment_runner import experiment_runner_node
-from graph.nodes.feature_proposal import feature_proposal_node
-from graph.nodes.followup_proposal import followup_proposal_node
-from graph.nodes.generalization_eval import generalization_eval_node
-from graph.nodes.mlflow_logger import mlflow_logger_node
-from graph.nodes.ns_experiment_runner import ns_experiment_runner_node
+"""All pipeline step node functions, discoverable by run_node.py."""
 from graph.nodes.research import research_node
-from graph.nodes.result_analysis import result_analysis_node
+from graph.nodes.ideate import ideate_node
+from graph.nodes.refine import refine_node
+from graph.nodes.propose_experiments import propose_experiments_node
+from graph.nodes.plan_implementation import plan_implementation_node
+from graph.nodes.implement import implement_node
+from graph.nodes.validate import validate_node
+from graph.nodes.prepare_experiment import prepare_experiment_node
+from graph.nodes.execute_experiment import execute_experiment_node
+from graph.nodes.create_dataset import create_dataset_node
+from graph.nodes.run_experiment import run_experiment_node
+from graph.nodes.create_model import create_model_node
+from graph.nodes.evaluate import evaluate_node
+from graph.nodes.store_results import store_results_node
+from graph.nodes.propose_next_steps import propose_next_steps_node
 
 __all__ = [
     "research_node",
-    "feature_proposal_node",
-    "ns_experiment_runner_node",
-    "code_generation_node",
-    "experiment_runner_node",
-    "result_analysis_node",
-    "mlflow_logger_node",
-    "generalization_eval_node",
-    "db_logger_node",
-    "followup_proposal_node",
+    "ideate_node",
+    "refine_node",
+    "propose_experiments_node",
+    "plan_implementation_node",
+    "implement_node",
+    "validate_node",
+    "prepare_experiment_node",
+    "execute_experiment_node",
+    "create_dataset_node",
+    "run_experiment_node",
+    "create_model_node",
+    "evaluate_node",
+    "store_results_node",
+    "propose_next_steps_node",
 ]
+
+# Map step names (as declared in profile pipeline.steps) to node functions
+STEP_REGISTRY: dict[str, object] = {
+    "research": research_node,
+    "ideate": ideate_node,
+    "refine": refine_node,
+    "propose_experiments": propose_experiments_node,
+    "plan_implementation": plan_implementation_node,
+    "implement": implement_node,
+    "validate": validate_node,
+    "prepare_experiment": prepare_experiment_node,
+    "execute_experiment": execute_experiment_node,
+    "create_dataset": create_dataset_node,
+    "run_experiment": run_experiment_node,
+    "create_model": create_model_node,
+    "evaluate": evaluate_node,
+    "store_results": store_results_node,
+    "propose_next_steps": propose_next_steps_node,
+}
