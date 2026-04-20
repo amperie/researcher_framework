@@ -25,6 +25,7 @@ def ideate_node(state: ResearchState, profile: dict) -> dict:
     summary = state.get("research_summary", "")
     digests = state.get("paper_digests") or []
     papers = state.get("research_papers") or []
+    artifacts = state.get("research_artifacts") or []
 
     system_prompt = get_prompt(profile, "ideate")
     llm = get_llm("ideate", profile)
@@ -38,6 +39,15 @@ def ideate_node(state: ResearchState, profile: dict) -> dict:
         context_parts.append("\nRelevant papers (abstracts):")
         for p in papers[:5]:
             context_parts.append(f"\n[{p['title']} — score {p.get('relevance_score', '?')}]\n{p['abstract']}")
+
+    if artifacts:
+        context_parts.append("\nTop scored research artifacts:")
+        for a in artifacts[:10]:
+            context_parts.append(
+                f"\n[{a.get('source_type')} | {a.get('source')} | score {a.get('relevance_score', '?')}]\n"
+                f"{a.get('title', '')}\n{a.get('summary', '')}\n"
+                f"Usefulness: {a.get('usefulness', '')}\nRisks: {a.get('risks', '')}"
+            )
 
     context = "\n".join(context_parts)
 

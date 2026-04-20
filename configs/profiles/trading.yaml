@@ -31,12 +31,29 @@ platform:
   source_path: ../algorithmic-trading-platform
 
 research:
-  sources:
-    - type: arxiv
+  max_summary_artifacts: 14
+  tools:
+    - name: arxiv
+      tool: tools.research_tools.collect_arxiv
       categories: [q-fin.TR, q-fin.PM, q-fin.ST, cs.LG]
       max_results: 20
       relevance_score_threshold: 6
       max_papers_to_digest: 3
+    - name: prior_experiments
+      tool: tools.research_tools.collect_prior_experiments
+      n_results: 8
+      relevance_score_threshold: 7
+    - name: adapter_context
+      tool: tools.research_tools.collect_adapter_context
+      relevance_score_threshold: 5
+    - name: profile_context
+      tool: tools.research_tools.collect_profile_context
+      relevance_score_threshold: 5
+    - name: strategy_library
+      tool: tools.research_tools.collect_strategy_library
+      patterns: ["*strategy*.py", "*signal*.py", "*backtest*.py", "*portfolio*.py", "*risk*.py"]
+      max_files: 80
+      relevance_score_threshold: 5
   domain_context: >
     Focus on systematic trading, market microstructure, robust backtesting,
     regime detection, risk management, transaction costs, and leakage-resistant
@@ -103,6 +120,24 @@ storage:
 
 prompts:
   research:
+    artifact_score_system: |
+      You are an expert in quantitative finance, systematic trading, and robust
+      backtesting. Score the following research artifact 0-10 for relevance,
+      usefulness, and reliability for the research direction. Prefer artifacts
+      with implementable methods, realistic market assumptions, available data,
+      leakage-safe validation, transaction costs, and clear risk controls.
+      Penalize vague ideas, unavailable data, lookahead risk, and unrealistic fills.
+      Respond with valid JSON only:
+      {"score": <int 0-10>, "reason": "<one sentence>", "usefulness": "<how to use it>", "risks": "<limitations>"}
+
+    artifact_summary_system: |
+      Synthesize the top scored research artifacts into a concise research
+      summary focused on actionable systematic trading experiments. Use academic
+      papers, prior experiment results, platform inventory, data availability,
+      strategy-library context, and risk constraints when available. Highlight
+      strategy concepts, data requirements, validation methods, risk controls,
+      costs/slippage, and known failure modes such as lookahead bias and overfitting.
+
     score_system: |
       You are an expert in quantitative finance, systematic trading, and robust
       backtesting. Score the following paper 0-10 for relevance to the research
@@ -258,4 +293,3 @@ prompts:
       validation.
 
       Return a JSON array with title, rationale, suggested_direction, priority.
-

@@ -2,7 +2,9 @@
 
 A configuration-driven, plug-and-play agentic research pipeline built on LangGraph. The system automates the full research loop — from literature review through implementation, validation, experimentation, and result storage — for any research domain described by a **profile YAML file**.
 
-Current profiles: `neuralsignal` (LLM internals probing & hallucination detection).
+Current profiles:
+- `neuralsignal` - LLM internals probing and hallucination detection
+- `trading` - algorithmic trading strategy research and backtest automation scaffold
 
 ---
 
@@ -10,13 +12,13 @@ Current profiles: `neuralsignal` (LLM internals probing & hallucination detectio
 
 Given a research direction like `"attention head specialization"`, the pipeline:
 
-1. Searches arxiv, scores papers for relevance, and synthesises a research summary
-2. Proposes novel feature extraction ideas grounded in the summary
+1. Runs profile-configured research tools, scores every artifact, and synthesises a research summary
+2. Proposes novel experiment ideas grounded in the highest-scored artifacts
 3. Refines ideas for feasibility against available data and base class APIs
 4. Specifies concrete experiments with datasets, hyperparameters, and success criteria
 5. Writes implementation plans, then generates Python classes (always subclassing a declared base class)
 6. Validates the generated code: runs pytest, feeds failures back to the LLM for fixes (up to N retries)
-7. Creates feature datasets, runs experiments, trains models
+7. Prepares domain artifacts and executes experiments through the profile plugin
 8. Evaluates results against configured thresholds and produces an analysis
 9. Persists everything to MLflow, ChromaDB, and MongoDB
 10. Proposes 3 high-value follow-up research directions
@@ -102,8 +104,8 @@ A **profile** is a YAML file in `configs/profiles/` that fully describes a resea
 |---|---|
 | `pipeline.steps` | Which steps run and in what order (omit any step to skip it) |
 | `llm` | Default model + optional per-step overrides |
-| `research.sources` | arxiv categories, result count, relevance threshold |
-| `research.domain_context` | Injected into all research/scoring prompts |
+| `research.tools` | Dotted research tool functions, limits, and scoring thresholds |
+| `research.domain_context` | Injected into research collection/scoring prompts |
 | `base_classes` | Base class name, import path, and interface — injected into the code-gen prompt |
 | `validate` | Whether to auto-run tests, retry limit, test runner command |
 | `datasets` / domain data config | Dataset or data-source definitions for the domain |
@@ -137,7 +139,21 @@ Full reference: [`configs/profiles/neuralsignal.yaml`](configs/profiles/neuralsi
 
 1. **Create a profile**: Copy `configs/profiles/neuralsignal.yaml` to `configs/profiles/<domain>.yaml` and fill in every section — especially `prompts` (domain-specific LLM instructions for each step) and `base_classes`.
 
-2. **Add a plugin adapter**: Create `plugins/<domain>/adapter.py` with `get_adapter()` returning an object that implements:
+2. **Choose research tools**: Add `research.tools` entries. Each tool is a dotted function path and can set its own limits and `relevance_score_threshold`.
+   ```yaml
+   research:
+     tools:
+       - name: arxiv
+         tool: tools.research_tools.collect_arxiv
+         max_results: 20
+         relevance_score_threshold: 6
+       - name: prior_experiments
+         tool: tools.research_tools.collect_prior_experiments
+         n_results: 8
+         relevance_score_threshold: 7
+   ```
+
+3. **Add a plugin adapter**: Create `plugins/<domain>/adapter.py` with `get_adapter()` returning an object that implements:
    ```python
    def validate_environment(profile) -> dict: ...
    def build_context(profile, state) -> dict: ...
@@ -146,7 +162,32 @@ Full reference: [`configs/profiles/neuralsignal.yaml`](configs/profiles/neuralsi
    def summarize_result(profile, result) -> dict: ...
    ```
 
-3. **Done** — no changes to `graph/`, `utils/`, `tools/`, or `llm/` are needed.
+4. **Done** - no changes to `graph/`, `utils/`, `tools/`, or `llm/` are needed unless the domain needs a new reusable research tool.
+
+---
+
+## Research Tools
+
+The `research` node is modular. Profiles declare which tools to run, and each tool returns structured artifacts. The node then asks the LLM to score every artifact with `prompts.research.artifact_score_system`, filters by the tool's threshold, and writes the selected artifacts to `state['research_artifacts']`.
+
+Built-in tools:
+
+| Tool | Purpose |
+|---|---|
+| `tools.research_tools.collect_arxiv` | Search arXiv and return paper artifacts |
+| `tools.research_tools.collect_prior_experiments` | Retrieve similar past experiments from ChromaDB |
+| `tools.research_tools.collect_adapter_context` | Ask the active domain adapter for environment/platform context |
+| `tools.research_tools.collect_profile_context` | Expose selected profile sections as scoreable artifacts |
+| `tools.research_tools.collect_strategy_library` | Inspect a local trading platform tree for strategy/backtest/risk files |
+
+Custom tools should implement:
+
+```python
+def collect_x(direction: str, profile: dict, tool_cfg: dict, state: dict) -> list[dict]:
+    ...
+```
+
+Each returned artifact should include `artifact_id`, `source`, `source_type`, `title`, `summary`, `metadata`, and optional `raw`.
 
 ---
 
@@ -193,6 +234,14 @@ Configure the neuralsignal paths in `.env`:
 NEURALSIGNAL_PYTHON=uv run python          # or: /path/to/neuralsignal/venv/python
 NEURALSIGNAL_SRC_PATH=../neuralsignal/neuralsignal
 ```
+
+---
+
+## Trading Plugin
+
+The `trading` profile is wired into the same graph and research-tool infrastructure. It currently provides prompts, risk constraints, research tools, and a plugin scaffold in `plugins/trading/adapter.py`.
+
+To run trading experiments end to end, implement `TradingAdapter.execute_experiment()` against your trading platform's backtest engine. That method should load the generated strategy class, run a leakage-safe backtest with configured costs/slippage, and return normalized metrics such as `sharpe_ratio`, `max_drawdown`, `annual_return`, `turnover`, and `win_rate`.
 
 ---
 

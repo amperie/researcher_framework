@@ -31,6 +31,10 @@ class ResearchState(TypedDict, total=False):
     """Papers retrieved and scored for relevance.
     Each dict: {title, abstract, url, arxiv_id, published, relevance_score}."""
 
+    research_artifacts: list[dict]
+    """All selected, scored research inputs from profile-configured tools.
+    Examples: papers, prior experiments, platform inventories, profile context."""
+
     research_summary: str
     """LLM-synthesised summary of key themes and findings."""
 

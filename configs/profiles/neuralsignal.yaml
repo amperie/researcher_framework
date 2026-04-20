@@ -37,12 +37,21 @@ llm:
 
 # ── Research Sources ──────────────────────────────────────────────────────────
 research:
-  sources:
-    - type: arxiv
+  max_summary_artifacts: 12
+  tools:
+    - name: arxiv
+      tool: tools.research_tools.collect_arxiv
       categories: [cs.LG, cs.AI, cs.CL]
       max_results: 20
       relevance_score_threshold: 6
       max_papers_to_digest: 3
+    - name: prior_experiments
+      tool: tools.research_tools.collect_prior_experiments
+      n_results: 5
+      relevance_score_threshold: 7
+    - name: profile_context
+      tool: tools.research_tools.collect_profile_context
+      relevance_score_threshold: 5
   domain_context: >
     Focus on mechanistic interpretability, probing classifiers, activation analysis,
     feature engineering over LLM internal representations, and hallucination detection.
@@ -137,6 +146,24 @@ storage:
 #   profile['prompts'][step_name]['system']  (or other keys like 'score_system')
 prompts:
   research:
+    artifact_score_system: |
+      You are an expert in mechanistic interpretability, LLM internals, and probing classifiers.
+      Score the following research artifact 0-10 for relevance and usefulness to
+      the given research direction.
+      10 = directly actionable methodology, prior result, or implementation constraint.
+      0 = unrelated or misleading.
+      Prefer artifacts that can improve feature engineering over LLM activations.
+      Respond with valid JSON only:
+      {"score": <int 0-10>, "reason": "<one sentence>", "usefulness": "<how to use it>", "risks": "<limitations>"}
+
+    artifact_summary_system: |
+      You are a research scientist specializing in LLM mechanistic interpretability.
+      Synthesize the top scored research artifacts into a concise research summary
+      (300-500 words) focused on actionable insights for feature engineering over
+      LLM internal activations. Use papers, prior experiments, and profile/platform
+      constraints when available. Highlight novel techniques, surprising findings,
+      open problems, implementation constraints, and connections to hallucination detection.
+
     score_system: |
       You are an expert in mechanistic interpretability, LLM internals, and probing classifiers.
       Score the following paper 0–10 for relevance to the given research direction.
