@@ -21,11 +21,19 @@ pipeline:
     - plan_implementation
     - implement
     - validate
-    - prepare_experiment
-    - execute_experiment
+    - submit_experiment_jobs
+    - check_experiment_jobs
     - evaluate
     - store_results
     - propose_next_steps
+
+execution:
+  mode: async
+  runner: local_process
+  max_parallel_jobs: 2
+  auto_submit_next_stage: true
+  poll_interval_seconds: 30
+  job_timeout_seconds: 7200
 
 # ── LLM Model Selection ────────────────────────────────────────────────────────
 llm:
@@ -297,6 +305,10 @@ prompts:
 
       Requirements:
       - Subclass FeatureSetBase from neuralsignal.core.modules.feature_sets.feature_set_base
+      - Import FeatureSetBase from neuralsignal.core.modules.feature_sets.feature_set_base
+      - Do NOT define a local FeatureSetBase class
+      - Do NOT create fake neuralsignal modules or mutate sys.modules
+      - Do NOT include offline package stubs; validation provides any needed stubs outside the implementation
       - Implement __init__(self, config: dict), get_feature_set_name(self), and process_feature_set(self, scan: dict)
       - __init__ should call super().__init__(config) and set up anything reused while processing scans
       - get_feature_set_name must return the feature set name, matching the idea/proposal name

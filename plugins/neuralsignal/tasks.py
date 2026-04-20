@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import sys
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -57,7 +58,9 @@ def _inject_feature_processor(cfg: dict[str, Any]) -> None:
         return
 
     from neuralsignal.core.modules.feature_sets.feature_processor import FeatureProcessor  # type: ignore
-    from neuralsignal.core.modules.feature_sets.feature_set_base import FeatureSetBase  # type: ignore
+    from neuralsignal.core.modules.feature_sets import feature_set_base as real_base_module  # type: ignore
+
+    FeatureSetBase = real_base_module.FeatureSetBase
 
     class_path = cfg["feature_set_class_path"]
     class_name = cfg.get("feature_set_class_name", "")
@@ -71,16 +74,18 @@ def _inject_feature_processor(cfg: dict[str, Any]) -> None:
         spec.loader.exec_module(module)
     except SystemExit:
         pass
+    finally:
+        # Generated files may install offline validation stubs into sys.modules.
+        # Restore the real runtime base class before NeuralSignal imports use it.
+        sys.modules[
+            "neuralsignal.core.modules.feature_sets.feature_set_base"
+        ].FeatureSetBase = FeatureSetBase
 
-    cls = next(
-        (
-            obj for obj in vars(module).values()
-            if isinstance(obj, type) and issubclass(obj, FeatureSetBase) and obj is not FeatureSetBase
-        ),
-        None,
-    )
+    cls = _find_feature_set_class(module, class_name, FeatureSetBase)
     if cls is None:
         raise RuntimeError(f"No FeatureSetBase subclass found in {class_path}")
+    if not issubclass(cls, FeatureSetBase):
+        cls = _wrap_feature_set_class(cls, FeatureSetBase)
 
     fs_cfg: dict[str, Any] = {
         "name": class_name or cls.__name__,
@@ -94,4 +99,41 @@ def _inject_feature_processor(cfg: dict[str, Any]) -> None:
     cfg["feature_processor"] = FeatureProcessor(feature_sets=[cls(fs_cfg)])
     cfg["feature_set_configs"] = None
     log.info("Injected FeatureProcessor for %s", cls.__name__)
+
+
+def _find_feature_set_class(module: Any, class_name: str, feature_set_base: type) -> type | None:
+    """Find a generated feature set by nominal or structural contract."""
+    if class_name:
+        cls = getattr(module, class_name, None)
+        if isinstance(cls, type) and _looks_like_feature_set_class(cls):
+            return cls
+
+    strict = [
+        obj for obj in vars(module).values()
+        if isinstance(obj, type)
+        and obj is not feature_set_base
+        and issubclass(obj, feature_set_base)
+        and _looks_like_feature_set_class(obj)
+    ]
+    if strict:
+        return strict[0]
+
+    structural = [
+        obj for obj in vars(module).values()
+        if isinstance(obj, type)
+        and obj.__name__ != "FeatureSetBase"
+        and _looks_like_feature_set_class(obj)
+    ]
+    return structural[0] if structural else None
+
+
+def _looks_like_feature_set_class(cls: type) -> bool:
+    return callable(getattr(cls, "get_feature_set_name", None)) and callable(
+        getattr(cls, "process_feature_set", None)
+    )
+
+
+def _wrap_feature_set_class(cls: type, feature_set_base: type) -> type:
+    """Make structurally valid generated classes nominally inherit the real base."""
+    return type(cls.__name__, (cls, feature_set_base), {"__module__": cls.__module__})
 

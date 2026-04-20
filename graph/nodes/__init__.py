@@ -8,6 +8,8 @@ from graph.nodes.implement import implement_node
 from graph.nodes.validate import validate_node
 from graph.nodes.prepare_experiment import prepare_experiment_node
 from graph.nodes.execute_experiment import execute_experiment_node
+from graph.nodes.submit_experiment_jobs import submit_experiment_jobs_node
+from graph.nodes.check_experiment_jobs import check_experiment_jobs_node
 from graph.nodes.create_dataset import create_dataset_node
 from graph.nodes.run_experiment import run_experiment_node
 from graph.nodes.create_model import create_model_node
@@ -25,6 +27,8 @@ __all__ = [
     "validate_node",
     "prepare_experiment_node",
     "execute_experiment_node",
+    "submit_experiment_jobs_node",
+    "check_experiment_jobs_node",
     "create_dataset_node",
     "run_experiment_node",
     "create_model_node",
@@ -44,6 +48,8 @@ STEP_REGISTRY: dict[str, object] = {
     "validate": validate_node,
     "prepare_experiment": prepare_experiment_node,
     "execute_experiment": execute_experiment_node,
+    "submit_experiment_jobs": submit_experiment_jobs_node,
+    "check_experiment_jobs": check_experiment_jobs_node,
     "create_dataset": create_dataset_node,
     "run_experiment": run_experiment_node,
     "create_model": create_model_node,

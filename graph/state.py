@@ -108,6 +108,10 @@ class ResearchState(TypedDict, total=False):
     """Raw experiment results per proposal.
     Each dict: {experiment_id, proposal_name, proposal, metrics, feature_importance, ...}."""
 
+    experiment_jobs: list[dict]
+    """Long-running submitted experiment jobs.
+    Each dict: {job_id, runner, stage, proposal_name, status, job_dir, result_path, ...}."""
+
     # -------------------------------------------------------------------------
     # create_model step
     # -------------------------------------------------------------------------

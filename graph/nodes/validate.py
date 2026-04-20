@@ -345,6 +345,12 @@ CLASS_NAME = {class_name_json}
 EXPECTED_FEATURE_SET_NAME = {expected_name_json}
 
 
+def test_implementation_does_not_install_runtime_stubs():
+    source = open(SCRIPT_PATH, "r", encoding="utf-8").read()
+    assert "class FeatureSetBase" not in source, "Implementation must import FeatureSetBase, not define a local stub"
+    assert "sys.modules" not in source, "Implementation must not create fake neuralsignal modules"
+
+
 class FeatureSetBase:
     def __init__(self, config):
         self.config = config

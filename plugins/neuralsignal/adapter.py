@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from configs.config import get_config
 from plugins.base import ResearchAdapter
+from plugins.job_runner import TERMINAL_STATUSES, get_runner
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -90,7 +91,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         datasets: list[dict[str, Any]] = []
         errors = list(state.get("errors") or [])
         cfg = get_config()
-        cwd = str(Path(cfg.neuralsignal_src_path).resolve())
+        cwd = str(_neuralsignal_workdir(cfg))
 
         for proposal in proposals:
             proposal_name = proposal.get("name", "unknown")
@@ -150,7 +151,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         results: list[dict[str, Any]] = []
         models: list[dict[str, Any]] = []
         cfg = get_config()
-        cwd = str(Path(cfg.neuralsignal_src_path).resolve())
+        cwd = str(_neuralsignal_workdir(cfg))
 
         for artifact in artifacts:
             proposal_name = artifact.get("proposal_name", "unknown")
@@ -196,6 +197,123 @@ class NeuralSignalPlugin(ResearchAdapter):
             "models": models,
             "errors": errors,
         }
+
+    def submit_experiment_jobs(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        """Submit long-running NeuralSignal dataset/model jobs and return immediately."""
+        jobs = list(state.get("experiment_jobs") or [])
+        artifacts = list(state.get("experiment_artifacts") or [])
+        errors = list(state.get("errors") or [])
+        runner = get_runner(_execution_cfg(profile).get("runner", "local_process"))
+
+        active_count = sum(1 for job in jobs if job.get("status") not in TERMINAL_STATUSES)
+        max_parallel = int(_execution_cfg(profile).get("max_parallel_jobs", 1) or 1)
+
+        proposals = state.get("proposals") or []
+        implementations = state.get("implementations") or []
+        impl_by_name = _implementations_by_proposal(implementations)
+
+        submitted: list[dict[str, Any]] = []
+        for proposal in proposals:
+            if active_count >= max_parallel:
+                break
+            proposal_name = proposal.get("name", "unknown")
+            if _has_dataset_artifact(artifacts, proposal_name) or _has_job(jobs, "dataset", proposal_name):
+                continue
+            try:
+                payload = self._build_dataset_config(profile, proposal, impl_by_name.get(proposal_name))
+                job = runner.submit(self._job_spec(profile, "dataset", proposal_name, _CREATE_DATASET_TASK, payload))
+                jobs.append(job)
+                submitted.append(job)
+                active_count += 1
+            except Exception as exc:
+                log.error("NeuralSignalPlugin.submit_experiment_jobs | dataset %s failed: %s", proposal_name, exc, exc_info=True)
+                errors.append(f"submit_experiment_jobs: dataset {proposal_name} failed: {exc}")
+
+        for artifact in artifacts:
+            if active_count >= max_parallel:
+                break
+            if artifact.get("artifact_type") != "dataset" or artifact.get("status") != "ready":
+                continue
+            proposal_name = artifact.get("proposal_name", "unknown")
+            if _has_result(state.get("experiment_results") or [], proposal_name) or _has_job(jobs, "model", proposal_name, artifact.get("artifact_id")):
+                continue
+            try:
+                experiment_id = str(uuid4())
+                payload = self._build_model_config(profile, artifact, experiment_id)
+                spec = self._job_spec(
+                    profile,
+                    "model",
+                    proposal_name,
+                    _CREATE_S1_MODEL_TASK,
+                    payload,
+                    artifact_id=artifact.get("artifact_id"),
+                    experiment_id=experiment_id,
+                )
+                job = runner.submit(spec)
+                jobs.append(job)
+                submitted.append(job)
+                active_count += 1
+            except Exception as exc:
+                log.error("NeuralSignalPlugin.submit_experiment_jobs | model %s failed: %s", proposal_name, exc, exc_info=True)
+                errors.append(f"submit_experiment_jobs: model {proposal_name} failed: {exc}")
+
+        return {
+            "experiment_jobs": jobs,
+            "submitted_jobs": submitted,
+            "errors": errors,
+        }
+
+    def check_experiment_jobs(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        """Poll NeuralSignal jobs and collect completed dataset/model outputs."""
+        jobs = list(state.get("experiment_jobs") or [])
+        artifacts = list(state.get("experiment_artifacts") or [])
+        datasets = list(state.get("datasets") or [])
+        results = list(state.get("experiment_results") or [])
+        models = list(state.get("models") or [])
+        errors = list(state.get("errors") or [])
+        runner = get_runner(_execution_cfg(profile).get("runner", "local_process"))
+
+        updated_jobs: list[dict[str, Any]] = []
+        for job in jobs:
+            checked = runner.check(job)
+            updated_jobs.append(checked)
+            if checked.get("status") == "succeeded" and not checked.get("collected"):
+                try:
+                    result = _read_result(checked)
+                    if checked.get("stage") == "dataset":
+                        new_artifacts = self._dataset_artifacts_from_job(checked, result)
+                        artifacts.extend(new_artifacts)
+                        datasets.extend(new_artifacts)
+                    elif checked.get("stage") == "model":
+                        experiment_result, model = self._model_result_from_job(checked, result, artifacts)
+                        results.append(experiment_result)
+                        models.append(model)
+                    checked["collected"] = True
+                    _write_job_status(checked)
+                except Exception as exc:
+                    log.error("NeuralSignalPlugin.check_experiment_jobs | collect %s failed: %s", checked.get("job_id"), exc, exc_info=True)
+                    checked["collected"] = True
+                    _write_job_status(checked)
+                    errors.append(f"check_experiment_jobs: collect {checked.get('job_id')} failed: {exc}")
+            elif checked.get("status") == "failed" and not checked.get("reported"):
+                checked["reported"] = True
+                _write_job_status(checked)
+                errors.append(f"check_experiment_jobs: {checked.get('proposal_name')} {checked.get('stage')} failed: {checked.get('error')}")
+
+        delta = {
+            "experiment_jobs": updated_jobs,
+            "experiment_artifacts": artifacts,
+            "datasets": datasets,
+            "experiment_results": results,
+            "models": models,
+            "errors": errors,
+        }
+        if _execution_cfg(profile).get("auto_submit_next_stage", True):
+            submitted_delta = self.submit_experiment_jobs(profile, delta)
+            delta["experiment_jobs"] = submitted_delta.get("experiment_jobs", updated_jobs)
+            delta["submitted_jobs"] = submitted_delta.get("submitted_jobs", [])
+            delta["errors"] = submitted_delta.get("errors", errors)
+        return delta
 
     def summarize_result(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Return a compact NeuralSignal-specific result summary."""
@@ -314,6 +432,106 @@ class NeuralSignalPlugin(ResearchAdapter):
             "proposal_name": proposal_name,
         }
 
+    def _job_spec(
+        self,
+        profile: dict[str, Any],
+        stage: str,
+        proposal_name: str,
+        task_path: str,
+        payload: dict[str, Any],
+        artifact_id: str | None = None,
+        experiment_id: str | None = None,
+    ) -> dict[str, Any]:
+        cfg = get_config()
+        jobs_dir = Path(cfg.experiments_dir) / profile.get("name", "neuralsignal") / "jobs"
+        job_id = _slug("_".join(item for item in (stage, proposal_name, artifact_id or experiment_id or str(uuid4())[:8]) if item))
+        env = os.environ.copy()
+        pythonpath_entries = [str(path) for path in _pythonpath_entries(cfg)]
+        existing = env.get("PYTHONPATH", "")
+        if existing:
+            pythonpath_entries.append(existing)
+        return {
+            "job_id": job_id,
+            "job_dir": str(jobs_dir / job_id),
+            "runner": _execution_cfg(profile).get("runner", "local_process"),
+            "stage": stage,
+            "proposal_name": proposal_name,
+            "artifact_id": artifact_id,
+            "experiment_id": experiment_id,
+            "task_path": task_path,
+            "payload": payload,
+            "python": cfg.neuralsignal_python,
+            "cwd": str(_neuralsignal_workdir(cfg)),
+            "env": {"PYTHONPATH": os.pathsep.join(pythonpath_entries)},
+        }
+
+    def _dataset_artifacts_from_job(self, job: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
+        cfg = get_config()
+        cwd = str(_neuralsignal_workdir(cfg))
+        file_paths = _as_list(result.get("file_paths") or result.get("paths"))
+        if not file_paths:
+            raise RuntimeError("dataset job returned no file_paths")
+
+        spec = _read_job_spec(job)
+        payload = spec.get("payload") or _read_payload(job)
+        artifacts: list[dict[str, Any]] = []
+        for idx, file_path in enumerate(file_paths):
+            resolved_path = _resolve_task_path(file_path, cwd)
+            metadata = _csv_metadata(resolved_path)
+            artifact = {
+                "artifact_id": f"{job.get('proposal_name', 'unknown')}_dataset_{idx}",
+                "artifact_type": "dataset",
+                "dataset_id": f"{job.get('proposal_name', 'unknown')}_{idx}",
+                "proposal_name": job.get("proposal_name", "unknown"),
+                "status": "ready" if metadata.get("exists") else "missing_file",
+                "file_path": str(resolved_path),
+                "dataset_path": str(resolved_path),
+                "task_file_path": str(file_path),
+                "dataset": payload.get("dataset", ""),
+                "detector": (payload.get("detector_names") or [None])[0],
+                "rows": metadata.get("rows"),
+                "columns": metadata.get("columns"),
+                "column_names": metadata.get("column_names", []),
+                "dataset_config": payload,
+                "task_result": _json_safe(result),
+            }
+            artifacts.append(artifact)
+        return artifacts
+
+    def _model_result_from_job(
+        self,
+        job: dict[str, Any],
+        result: dict[str, Any],
+        artifacts: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        experiment_id = job.get("experiment_id") or str(uuid4())
+        proposal_name = job.get("proposal_name", "unknown")
+        artifact = next((a for a in artifacts if a.get("artifact_id") == job.get("artifact_id")), {})
+        metrics = _as_dict(result.get("metrics"))
+        feature_importance = _as_dict(result.get("feature_importance"))
+        params = _as_dict(result.get("params"))
+        model = {
+            "model_id": f"{proposal_name}_{experiment_id}",
+            "experiment_id": experiment_id,
+            "proposal_name": proposal_name,
+            "metrics": metrics,
+            "params": params,
+            "feature_importance": feature_importance,
+            "task_result": _json_safe(result),
+            "job_id": job.get("job_id"),
+        }
+        experiment_result = {
+            "experiment_id": experiment_id,
+            "proposal_name": proposal_name,
+            "metrics": metrics,
+            "feature_importance": feature_importance,
+            "params": params,
+            "artifact": _serializable_artifact_summary(artifact),
+            "model": model,
+            "job_id": job.get("job_id"),
+        }
+        return experiment_result, model
+
     def _call_task(
         self,
         task_path: str,
@@ -326,11 +544,13 @@ class NeuralSignalPlugin(ResearchAdapter):
         timeout = timeout or cfg.experiment_timeout_seconds
         env = os.environ.copy()
 
-        ns_src = str(Path(cfg.neuralsignal_src_path).resolve())
+        pythonpath_entries = [str(path) for path in _pythonpath_entries(cfg)]
         existing = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = f"{ns_src}{os.pathsep}{existing}" if existing else ns_src
+        if existing:
+            pythonpath_entries.append(existing)
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
 
-        cmd = cfg.neuralsignal_python.split() + ["-u", str(_TASK_RUNNER.resolve()), task_path]
+        cmd = cfg.neuralsignal_python.split() + ["-u", "-m", "plugins.task_runner", task_path]
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -430,6 +650,58 @@ def _serializable_artifact_summary(artifact: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _execution_cfg(profile: dict[str, Any]) -> dict[str, Any]:
+    return profile.get("execution") or {}
+
+
+def _has_dataset_artifact(artifacts: list[dict[str, Any]], proposal_name: str) -> bool:
+    return any(
+        artifact.get("artifact_type") == "dataset"
+        and artifact.get("proposal_name") == proposal_name
+        and artifact.get("status") == "ready"
+        for artifact in artifacts
+    )
+
+
+def _has_job(
+    jobs: list[dict[str, Any]],
+    stage: str,
+    proposal_name: str,
+    artifact_id: str | None = None,
+) -> bool:
+    for job in jobs:
+        if job.get("stage") != stage or job.get("proposal_name") != proposal_name:
+            continue
+        if artifact_id is not None and job.get("artifact_id") != artifact_id:
+            continue
+        return True
+    return False
+
+
+def _has_result(results: list[dict[str, Any]], proposal_name: str) -> bool:
+    return any(result.get("proposal_name") == proposal_name for result in results)
+
+
+def _read_result(job: dict[str, Any]) -> dict[str, Any]:
+    path = Path(job["result_path"])
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_job_spec(job: dict[str, Any]) -> dict[str, Any]:
+    path = Path(job["job_dir"]) / "job.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_payload(job: dict[str, Any]) -> dict[str, Any]:
+    path = Path(job["job_dir"]) / "payload.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_job_status(job: dict[str, Any]) -> None:
+    path = Path(job["job_dir"]) / "status.json"
+    path.write_text(json.dumps(job, indent=2, default=str), encoding="utf-8")
+
+
 def _backend_config(cfg: Any) -> dict[str, Any]:
     return {
         "backend_type": "neuralsignal_v1",
@@ -437,6 +709,36 @@ def _backend_config(cfg: Any) -> dict[str, Any]:
         "mlflow_uri": getattr(cfg, "mlflow_uri", "http://hp.lan:8899/"),
         "mlflow_register_model": False,
     }
+
+
+def _neuralsignal_workdir(cfg: Any) -> Path:
+    configured = Path(getattr(cfg, "neuralsignal_src_path", "")).resolve()
+    if _is_package_dir(configured):
+        return configured.parent
+    return configured
+
+
+def _pythonpath_entries(cfg: Any) -> list[Path]:
+    configured = Path(getattr(cfg, "neuralsignal_src_path", "")).resolve()
+    workdir = _neuralsignal_workdir(cfg)
+    researcher_root = _TASK_RUNNER.resolve().parents[1]
+
+    entries = [workdir, configured, researcher_root]
+    if _is_package_dir(configured):
+        entries.insert(0, configured.parent)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for entry in entries:
+        key = str(entry)
+        if key not in seen:
+            unique.append(entry)
+            seen.add(key)
+    return unique
+
+
+def _is_package_dir(path: Path) -> bool:
+    return path.name == "neuralsignal" and (path / "__init__.py").exists()
 
 
 def _csv_metadata(file_path: str | os.PathLike[str]) -> dict[str, Any]:
