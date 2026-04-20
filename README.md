@@ -1,4 +1,4 @@
-# NeuralSignalResearcher
+# researcher_framework
 
 A configuration-driven, plug-and-play agentic research pipeline built on LangGraph. The system automates the full research loop — from literature review through implementation, validation, experimentation, and result storage — for any research domain described by a **profile YAML file**.
 
