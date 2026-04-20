@@ -100,7 +100,9 @@ implementation_examples:
 # ── Validate Step ──────────────────────────────────────────────────────────────
 validate:
   auto_run: true
-  max_fix_retries: 3
+  contract_test: neuralsignal_feature_set
+  llm_generate_tests: false
+  max_fix_retries: 1
   test_runner: "uv run pytest"
   test_output_dir: dev/experiments/neuralsignal/tests
 

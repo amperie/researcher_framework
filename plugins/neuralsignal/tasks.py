@@ -14,10 +14,10 @@ log = logging.getLogger(__name__)
 
 def create_dataset(payload: dict[str, Any]) -> dict[str, Any]:
     """Create a NeuralSignal feature dataset and return output file paths."""
-    cfg = dict(payload)
+    cfg = _automation_config(payload)
     _inject_feature_processor(cfg)
 
-    from neuralsignal.automation.dataset_automation_core import create_dataset as ns_create_dataset  # type: ignore
+    from neuralsignal.automation import create_dataset as ns_create_dataset  # type: ignore
 
     file_paths = ns_create_dataset(cfg, create_dataset=True) or []
     return {"file_paths": [str(path) for path in file_paths]}
@@ -25,10 +25,10 @@ def create_dataset(payload: dict[str, Any]) -> dict[str, Any]:
 
 def create_s1_model(payload: dict[str, Any]) -> dict[str, Any]:
     """Train a NeuralSignal S1 model and return best-model metrics."""
-    cfg = dict(payload)
+    cfg = _automation_config(payload)
     _inject_feature_processor(cfg)
 
-    from neuralsignal.automation.dataset_automation_core import create_s1_model as ns_create_s1_model  # type: ignore
+    from neuralsignal.automation import create_s1_model as ns_create_s1_model  # type: ignore
 
     models = ns_create_s1_model(cfg)
     if not models:
@@ -42,9 +42,18 @@ def create_s1_model(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _automation_config(payload: dict[str, Any]) -> dict[str, Any]:
+    """Merge task payload over NeuralSignal's packaged automation defaults."""
+    from neuralsignal.automation import get_config  # type: ignore
+
+    cfg = get_config()
+    cfg.update(payload)
+    return cfg
+
+
 def _inject_feature_processor(cfg: dict[str, Any]) -> None:
     """Load a generated FeatureSetBase subclass and inject FeatureProcessor."""
-    if "feature_set_class_path" not in cfg:
+    if not cfg.get("feature_set_class_path"):
         return
 
     from neuralsignal.core.modules.feature_sets.feature_processor import FeatureProcessor  # type: ignore
@@ -83,5 +92,6 @@ def _inject_feature_processor(cfg: dict[str, Any]) -> None:
         fs_cfg["attn_layer_patterns"] = cfg["attn_layer_patterns"]
 
     cfg["feature_processor"] = FeatureProcessor(feature_sets=[cls(fs_cfg)])
+    cfg["feature_set_configs"] = None
     log.info("Injected FeatureProcessor for %s", cls.__name__)
 
