@@ -22,6 +22,28 @@ _CONFIG_PATH = Path("configs/config.yaml")
 _ENV_PATH = Path("configs/.env")
 
 
+def _strip_inline_comment(value: str) -> str:
+    """Strip unquoted inline comments from a dotenv value."""
+    quote: str | None = None
+    escaped = False
+    for idx, ch in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch in ("'", '"'):
+            if quote == ch:
+                quote = None
+            elif quote is None:
+                quote = ch
+            continue
+        if ch == "#" and quote is None and (idx == 0 or value[idx - 1].isspace()):
+            return value[:idx].rstrip()
+    return value
+
+
 def _load_dotenv() -> None:
     """Load key=value pairs from configs/.env into os.environ.
 
@@ -36,7 +58,7 @@ def _load_dotenv() -> None:
             continue
         k, _, v = line.partition("=")
         k = k.strip()
-        v = v.strip().strip('"').strip("'")
+        v = _strip_inline_comment(v.strip()).strip('"').strip("'")
         if k and k not in os.environ:
             os.environ[k] = v
 

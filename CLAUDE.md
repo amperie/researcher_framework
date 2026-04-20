@@ -94,7 +94,7 @@ NeuralSignalResearcher/
 ¦   +-- loader.py              # load_adapter(profile), resolves get_adapter() or legacy module
 ¦   +-- task_runner.py         # generic subprocess runner for dotted Python callables
 ¦   +-- neuralsignal/
-¦   ¦   +-- neuralsignal_plugin.py # ResearchAdapter skeleton for neuralsignal
+¦   ¦   +-- adapter.py          # ResearchAdapter skeleton for neuralsignal
 ¦   ¦   +-- tasks.py           # NeuralSignal task callables for subprocess execution
 ¦   ¦   +-- bridge.py          # compatibility wrapper around task_runner.py
 ¦   +-- trading/               # trading adapter scaffold
@@ -365,7 +365,7 @@ Everything else (timeouts, paths, logging levels) is edited directly in `configs
 
 ## neuralsignal Plugin Notes
 
-- `plugins/neuralsignal/neuralsignal_plugin.py` implements the `ResearchAdapter` skeleton; exposes `get_adapter()`
+- `plugins/neuralsignal/adapter.py` implements the `ResearchAdapter` skeleton; exposes `get_adapter()`
 - `prepare_experiment` currently builds dataset manifests and marks them `pending_bridge`; task-runner-backed dataset creation still needs wiring
 - `execute_experiment` currently reports pending task-runner work; future implementation should call `plugins.neuralsignal.tasks.create_s1_model` through `plugins/task_runner.py`
 - Heavy NeuralSignal functions live in `plugins/neuralsignal/tasks.py` and run under `plugins/task_runner.py`

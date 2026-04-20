@@ -65,6 +65,7 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
             f"  Attn layer patterns (injected via cfg): {layer_patterns.get('attn', [])}"
         )
     scan_constraints = "\n".join(scan_constraints_parts)
+    implementation_examples = _load_implementation_examples(profile)
 
     cache_dir = _script_cache_dir(profile_name)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -90,6 +91,7 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
         user_content = (
             f"Base classes available:\n{base_class_docs}\n\n"
             f"Scan field constraints:\n{scan_constraints}\n\n"
+            f"Reference implementation examples:\n{implementation_examples}\n\n"
             f"Implementation plan:\n{json.dumps(plan, indent=2)}"
         )
 
@@ -132,3 +134,30 @@ def _strip_fences(text: str) -> str:
     text = re.sub(r"^```(?:python)?\s*\n", "", text)
     text = re.sub(r"\n```\s*$", "", text)
     return text.strip()
+
+
+def _load_implementation_examples(profile: dict) -> str:
+    """Load profile-declared implementation examples for code-generation context."""
+    examples = profile.get("implementation_examples") or []
+    if not examples:
+        return "(none)"
+
+    rendered: list[str] = []
+    for example in examples:
+        path = Path(example.get("path", ""))
+        purpose = example.get("purpose", "")
+        if not path.exists():
+            rendered.append(f"[missing example: {path}] {purpose}")
+            continue
+        try:
+            code = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            rendered.append(f"[unreadable example: {path}] {exc}")
+            continue
+        rendered.append(
+            f"Example path: {path}\n"
+            f"Purpose: {purpose}\n"
+            "Use this as API/style reference only; do not copy feature logic unless explicitly requested.\n"
+            f"```python\n{code}\n```"
+        )
+    return "\n\n".join(rendered)

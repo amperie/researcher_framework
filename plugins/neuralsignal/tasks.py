@@ -1,7 +1,7 @@
 """NeuralSignal task callables for the generic subprocess runner.
 
 These functions run inside the NeuralSignal-capable Python process. Keep heavy
-imports here instead of in ``neuralsignal_plugin.py``.
+imports here instead of in ``adapter.py``.
 """
 from __future__ import annotations
 

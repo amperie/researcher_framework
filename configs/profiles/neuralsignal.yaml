@@ -66,19 +66,36 @@ base_classes:
       Subclass this to define a new probing feature set.
     key_interface: |
       class FeatureSetBase:
-          def __init__(self, cfg: dict):
-              self.cfg = cfg
-              # cfg keys injected at runtime:
+          def __init__(self, config: dict):
+              super().__init__(config)
+              # __init__ should do all setup reused while processing any scans.
+              # Store reusable config/model/layer-selection state here; do not
+              # redo expensive setup inside process_feature_set.
+              # config keys injected at runtime:
               #   name (str), output_format (str)
-              #   ffn_layer_patterns (list[str]) — substrings matching FFN layer names
-              #   attn_layer_patterns (list[str]) — substrings matching attention layer names
+              #   ffn_layer_patterns (list[str]) - substrings matching FFN layer names
+              #   attn_layer_patterns (list[str]) - substrings matching attention layer names
+              # FeatureSetBase exposes self.config and helper methods such as
+              # self.make_column_name(...).
 
-          def extract_features(self, scan: dict) -> dict[str, float]:
-              # scan keys: outputs, inputs, layer_id_to_name, layer_order, layer_passes,
-              #            zone_size, ground_truth
-              # scan['outputs'] structure: {batch_idx: {layer_id: Tensor}}
-              # Returns: flat dict mapping feature_name -> float value
+          def get_feature_set_name(self) -> str:
+              # Return the feature set name. This should match the idea/proposal name.
               ...
+
+          def process_feature_set(self, scan: dict):
+              # Process exactly one scan and return features in the requested output format.
+              # Default output_format is "name_and_value_columns": return (cols, vals),
+              # where cols is list[str] and vals is list[float].
+              # If output_format == "tensor_dict": return None unless explicitly supported.
+              # If output_format == "pandas": return pd.DataFrame([vals], columns=cols).
+              ...
+
+implementation_examples:
+  - path: plugins/neuralsignal/feature_set_example.py
+    purpose: >
+      Reference FeatureSetBase implementation showing __init__, get_feature_set_name,
+      process_feature_set, self.config, make_column_name, layer filtering, and
+      output_format handling. Use as API/style reference; do not copy feature logic.
 
 # ── Validate Step ──────────────────────────────────────────────────────────────
 validate:
@@ -122,7 +139,7 @@ datasets:
       attn: [.q, .k, .v, .o, SelfAttention, attention, attn]
 
 # ── Experiment Adapter ────────────────────────────────────────────────────────
-experiment_adapter: plugins.neuralsignal.neuralsignal_plugin
+experiment_adapter: plugins.neuralsignal.adapter
 
 # ── Evaluation Metrics ────────────────────────────────────────────────────────
 evaluation:
@@ -191,19 +208,21 @@ prompts:
       You are a research scientist specializing in LLM mechanistic interpretability
       and probing-based hallucination detection.
 
-      Based on the research summary and paper digests, propose 3–5 novel feature extraction
-      ideas. Each idea must:
+      Based on the research summary, paper digests, and scored research artifacts,
+      propose 3-5 novel feature extraction ideas. Each idea must:
       - Be grounded in LLM internal representations (attention patterns, MLP activations,
         residual stream geometry, etc.)
-      - Be implementable as a FeatureSetBase subclass
-      - Access only scan fields: outputs, inputs, layer_id_to_name, layer_order, ground_truth
+      - Be implementable as a FeatureSetBase subclass with get_feature_set_name()
+        and process_feature_set(scan)
+      - Access only scan fields: outputs, inputs, layer_id_to_name, layer_order,
+        layer_passes, zone_size, ground_truth
         (NO patched logits, probe weights, attention scores, or external files)
-      - Produce a flat dict[str, float] of features
+      - Produce cols and vals for the default "name_and_value_columns" output format
 
       Return a JSON array of ideas:
       [
         {
-          "name": "snake_case_class_name",
+          "name": "snake_case_feature_set_name",
           "description": "What this feature set measures",
           "hypothesis": "Why this should correlate with hallucination",
           "rationale": "What research inspired this"
@@ -218,15 +237,16 @@ prompts:
       - Only scan fields 'outputs', 'inputs', 'layer_id_to_name', 'layer_order',
         'layer_passes', 'zone_size', 'ground_truth' are available.
       - NO external files, probe weights, concept means, patched logits, or attention scores.
-      - Layer patterns are read from cfg: self.cfg.get('ffn_layer_patterns', []) and
-        self.cfg.get('attn_layer_patterns', []).
+      - Layer patterns are read from self.config, e.g. self.config.get('ffn_layer_patterns', [])
+        and self.config.get('attn_layer_patterns', []).
       - Features must be extractable from Tensor values: mean, std, norm, cosine similarity,
-        directional statistics — no cross-attention or patching operations.
+        directional statistics - no cross-attention or patching operations.
+      - process_feature_set(scan) must process one scan and return the configured output format.
 
       For each idea:
       1. Accept if it only uses available data.
       2. Reject (and explain) if it requires unavailable fields.
-      3. Improve accepted ideas with more specific extraction logic guidance.
+      3. Improve accepted ideas with more specific process_feature_set implementation guidance.
 
       Return a JSON array of refined ideas (same schema as input, with improved descriptions).
 
@@ -250,19 +270,21 @@ prompts:
   plan_implementation:
     system: |
       For each experiment proposal, write a detailed implementation plan.
-      Do NOT write Python code — write a structured JSON plan.
+      Do NOT write Python code - write a structured JSON plan.
 
       For each proposal, produce a plan with these fields:
       - proposal_name: matches the proposal name
       - class_name: PascalCase Python class name
       - base_class: "FeatureSetBase"
-      - init_fields: list of cfg keys to store in __init__ (e.g. ffn_layer_patterns)
-      - main_method: "extract_features"
+      - init_fields: list of config keys to store/setup in __init__ (e.g. ffn_layer_patterns)
+      - feature_set_name: exact string get_feature_set_name() should return; must match proposal_name/name
+      - main_method: "process_feature_set"
       - method_steps: ordered list of steps the method should perform
-        (e.g. "1. Iterate layer_order, filter by ffn_layer_patterns",
-              "2. For each matching layer, get outputs[0][layer_id]",
-              "3. Compute mean activation across token dimension")
-      - output_keys: list of feature name patterns this class will return
+        (e.g. "1. Iterate layer_order or outputs keys, filter by configured layer patterns",
+              "2. For each matching layer, get outputs[layer_id]",
+              "3. Compute mean activation across token/hidden dimensions",
+              "4. Append self.make_column_name(...) names to cols and float values to vals")
+      - output_keys: list of feature column name patterns this class will return
       - imports_needed: list of Python import statements required
 
       Return a JSON array of plans.
@@ -273,15 +295,20 @@ prompts:
 
       Requirements:
       - Subclass FeatureSetBase from neuralsignal.core.modules.feature_sets.feature_set_base
-      - Import only standard Python + numpy/torch (no neuralsignal internals beyond base class)
+      - Implement __init__(self, config: dict), get_feature_set_name(self), and process_feature_set(self, scan: dict)
+      - __init__ should call super().__init__(config) and set up anything reused while processing scans
+      - get_feature_set_name must return the feature set name, matching the idea/proposal name
+      - process_feature_set processes one scan at a time
       - Only access guaranteed scan fields: outputs, inputs, layer_id_to_name, layer_order,
         layer_passes, zone_size, ground_truth
-      - Read layer patterns from: self.cfg.get('ffn_layer_patterns', [])
-        and self.cfg.get('attn_layer_patterns', [])
-      - Layer matching: a layer matches if any pattern string is a substring of
-        layer_id_to_name[layer_id]
-      - Return a flat dict[str, float] from extract_features(). Never return NaN or None values.
-      - Include error handling: skip layers where tensor operations fail
+      - Read layer patterns from self.config, e.g. self.config.get('ffn_layer_patterns', [])
+        and self.config.get('attn_layer_patterns', [])
+      - Use self.make_column_name(...) for output column names when appropriate
+      - Default output_format is "name_and_value_columns": return (cols, vals)
+      - If output_format == "tensor_dict", return None unless explicitly implementing tensor output
+      - If output_format == "pandas", return pd.DataFrame([vals], columns=cols)
+      - Otherwise raise ValueError for invalid output_format
+      - Never return NaN or None values in vals; include error handling and skip layers where tensor operations fail
       - Include a standalone if __name__ == '__main__': block with a synthetic test
         (creates a mock scan dict and prints the result)
 
@@ -293,31 +320,35 @@ prompts:
 
       The tests must:
       1. Import the class from the script (use importlib or direct import)
-      2. Create a minimal but realistic cfg dict with:
+      2. Create a minimal but realistic config dict with:
          - name: "test_feature_set"
          - output_format: "name_and_value_columns"
          - ffn_layer_patterns: ["mlp", "fc"]
          - attn_layer_patterns: [".q", ".k", ".v"]
       3. Create a synthetic scan dict with guaranteed fields:
-         - outputs: {0: {0: torch.randn(8, 16), 1: torch.randn(8, 16)}}
-         - inputs: {0: {0: torch.randn(8, 16), 1: torch.randn(8, 16)}}
+         - outputs: {0: torch.randn(8, 16), 1: torch.randn(8, 16)}
+         - inputs: {0: torch.randn(8, 16), 1: torch.randn(8, 16)}
          - layer_id_to_name: {0: "model.layers.0.mlp.fc", 1: "model.layers.0.attn.q_proj"}
          - layer_order: [0, 1]
          - layer_passes: {0: 1, 1: 1}
          - zone_size: 512
          - ground_truth: 1
-      4. Call extract_features(scan) and assert:
-         - Result is a dict
-         - All values are float (not NaN, not None)
-         - At least one key-value pair is returned
-         - At least one value is non-zero
+      4. Assert get_feature_set_name() returns a non-empty string matching the feature set idea/proposal name
+      5. Call process_feature_set(scan) with output_format="name_and_value_columns" and assert:
+         - Result is a tuple: (cols, vals)
+         - cols and vals are lists of equal length
+         - All cols are strings
+         - All vals are finite floats or ints (not NaN, not None)
+         - At least one feature is returned and at least one value is non-zero
+      6. Also test output_format="pandas" returns a one-row pandas DataFrame with matching columns
 
       Return ONLY the Python test code. No explanation, no markdown fences.
 
     fix_system: |
       The following unit tests failed for the FeatureSetBase implementation.
       Fix the IMPLEMENTATION (not the tests) to make the tests pass.
-      Common issues: wrong tensor indexing, NaN from empty tensors, wrong layer filtering logic.
+      Common issues: wrong tensor indexing, using self.cfg instead of self.config, missing output_format handling,
+      NaN from empty tensors, wrong layer filtering logic, or implementing extract_features instead of process_feature_set.
       Return ONLY the corrected Python source code. No explanation, no markdown fences.
 
   evaluate:
