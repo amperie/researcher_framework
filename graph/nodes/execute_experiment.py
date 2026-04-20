@@ -11,14 +11,6 @@ log = get_logger(__name__)
 
 
 def execute_experiment_node(state: ResearchState, profile: dict) -> dict:
-    proposals = state.get("proposals") or []
-    implementations = state.get("implementations") or []
-    artifacts = state.get("experiment_artifacts") or state.get("datasets") or []
-
-    if not proposals:
-        log.warning("execute_experiment_node | No proposals - skipping")
-        return {"experiment_results": []}
-
     try:
         adapter = load_adapter(profile)
     except Exception as exc:
@@ -26,6 +18,27 @@ def execute_experiment_node(state: ResearchState, profile: dict) -> dict:
             "experiment_results": [],
             "errors": (state.get("errors") or []) + [f"execute_experiment: adapter load failed: {exc}"],
         }
+
+    if adapter_has(adapter, "execute_experiment"):
+        log.info("execute_experiment_node | Delegating full state to adapter")
+        try:
+            delta = adapter.execute_experiment(profile, state)
+        except Exception as exc:
+            log.error("execute_experiment_node | Adapter failed: %s", exc, exc_info=True)
+            return {
+                "experiment_results": [],
+                "errors": (state.get("errors") or []) + [f"execute_experiment: adapter failed: {exc}"],
+            }
+        return _normalize_delta(delta, state)
+
+    # Legacy fallback for modules exposing run_experiment/train_model functions.
+    proposals = state.get("proposals") or []
+    implementations = state.get("implementations") or []
+    artifacts = state.get("experiment_artifacts") or state.get("datasets") or []
+
+    if not proposals:
+        log.warning("execute_experiment_node | No proposals - skipping")
+        return {"experiment_results": []}
 
     proposal_by_name = {p.get("name", ""): p for p in proposals}
     impl_by_name = {i.get("proposal_name", ""): i for i in implementations}
@@ -44,16 +57,7 @@ def execute_experiment_node(state: ResearchState, profile: dict) -> dict:
 
         log.info("execute_experiment_node | Running proposal=%r", proposal_name)
         try:
-            if adapter_has(adapter, "execute_experiment"):
-                result = adapter.execute_experiment(
-                    profile=profile,
-                    proposal=proposal,
-                    implementation=impl,
-                    artifact=artifact,
-                    experiment_id=experiment_id,
-                    state=state,
-                )
-            elif adapter_has(adapter, "run_experiment"):
+            if adapter_has(adapter, "run_experiment"):
                 result = adapter.run_experiment(profile, proposal, impl, artifact, experiment_id)
                 if result and adapter_has(adapter, "train_model"):
                     model = adapter.train_model(profile, result, artifact)
@@ -83,3 +87,11 @@ def execute_experiment_node(state: ResearchState, profile: dict) -> dict:
         delta["models"] = models
     return delta
 
+
+def _normalize_delta(delta: dict | None, state: ResearchState) -> dict:
+    if not delta:
+        return {"experiment_results": [], "errors": list(state.get("errors") or [])}
+    normalized = dict(delta)
+    if "errors" not in normalized:
+        normalized["errors"] = list(state.get("errors") or [])
+    return normalized

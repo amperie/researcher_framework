@@ -95,7 +95,7 @@ def collect_adapter_context(
     records: list[dict[str, Any]] = []
 
     if adapter_has(adapter, "validate_environment"):
-        env = adapter.validate_environment(profile)
+        env = adapter.validate_environment(profile, state)
         records.append({
             "artifact_id": f"{profile.get('name', 'profile')}:adapter_environment",
             "source": tool_cfg.get("name", "adapter_context"),
@@ -208,4 +208,3 @@ def _compact_mapping(value: Any, max_chars: int = 3000) -> str:
     if len(text) > max_chars:
         return text[:max_chars] + "... [truncated]"
     return text
-

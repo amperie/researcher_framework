@@ -122,7 +122,7 @@ datasets:
       attn: [.q, .k, .v, .o, SelfAttention, attention, attn]
 
 # ── Experiment Adapter ────────────────────────────────────────────────────────
-experiment_adapter: plugins.neuralsignal.dataset_adapter
+experiment_adapter: plugins.neuralsignal.neuralsignal_plugin
 
 # ── Evaluation Metrics ────────────────────────────────────────────────────────
 evaluation:

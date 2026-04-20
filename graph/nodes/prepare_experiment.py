@@ -14,13 +14,6 @@ log = get_logger(__name__)
 
 
 def prepare_experiment_node(state: ResearchState, profile: dict) -> dict:
-    proposals = state.get("proposals") or []
-    implementations = state.get("implementations") or []
-
-    if not proposals:
-        log.warning("prepare_experiment_node | No proposals - skipping")
-        return {"experiment_artifacts": []}
-
     try:
         adapter = load_adapter(profile)
     except Exception as exc:
@@ -28,6 +21,26 @@ def prepare_experiment_node(state: ResearchState, profile: dict) -> dict:
             "experiment_artifacts": [],
             "errors": (state.get("errors") or []) + [f"prepare_experiment: adapter load failed: {exc}"],
         }
+
+    if adapter_has(adapter, "prepare_experiment"):
+        log.info("prepare_experiment_node | Delegating full state to adapter")
+        try:
+            delta = adapter.prepare_experiment(profile, state)
+        except Exception as exc:
+            log.error("prepare_experiment_node | Adapter failed: %s", exc, exc_info=True)
+            return {
+                "experiment_artifacts": [],
+                "errors": (state.get("errors") or []) + [f"prepare_experiment: adapter failed: {exc}"],
+            }
+        return _normalize_delta(delta, state)
+
+    # Legacy fallback for modules exposing create_dataset(profile, proposal, implementation).
+    proposals = state.get("proposals") or []
+    implementations = state.get("implementations") or []
+
+    if not proposals:
+        log.warning("prepare_experiment_node | No proposals - skipping")
+        return {"experiment_artifacts": []}
 
     impl_by_name = {
         impl.get("proposal_name", ""): impl
@@ -44,9 +57,7 @@ def prepare_experiment_node(state: ResearchState, profile: dict) -> dict:
         log.info("prepare_experiment_node | Preparing proposal=%r", proposal_name)
 
         try:
-            if adapter_has(adapter, "prepare_experiment"):
-                artifact = adapter.prepare_experiment(profile, proposal, impl, state)
-            elif adapter_has(adapter, "create_dataset"):
+            if adapter_has(adapter, "create_dataset"):
                 artifact = adapter.create_dataset(profile, proposal, impl)
             else:
                 artifact = {
@@ -74,3 +85,19 @@ def prepare_experiment_node(state: ResearchState, profile: dict) -> dict:
 
     return delta
 
+
+def _normalize_delta(delta: dict | None, state: ResearchState) -> dict:
+    if not delta:
+        return {"experiment_artifacts": [], "errors": list(state.get("errors") or [])}
+
+    normalized = dict(delta)
+    artifacts = normalized.get("experiment_artifacts") or []
+    datasets = normalized.get("datasets") or [
+        a for a in artifacts
+        if isinstance(a, dict) and (a.get("artifact_type") == "dataset" or a.get("dataset_id"))
+    ]
+    if datasets and "datasets" not in normalized:
+        normalized["datasets"] = datasets
+    if "errors" not in normalized:
+        normalized["errors"] = list(state.get("errors") or [])
+    return normalized

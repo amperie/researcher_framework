@@ -155,11 +155,11 @@ Full reference: [`configs/profiles/neuralsignal.yaml`](configs/profiles/neuralsi
 
 3. **Add a plugin adapter**: Create `plugins/<domain>/adapter.py` with `get_adapter()` returning an object that implements:
    ```python
-   def validate_environment(profile) -> dict: ...
+   def validate_environment(profile, state) -> dict: ...
    def build_context(profile, state) -> dict: ...
-   def prepare_experiment(profile, proposal, implementation, state) -> dict | None: ...
-   def execute_experiment(profile, proposal, implementation, artifact, experiment_id, state) -> dict | None: ...
-   def summarize_result(profile, result) -> dict: ...
+   def prepare_experiment(profile, state) -> dict: ...
+   def execute_experiment(profile, state) -> dict: ...
+   def summarize_result(profile, state) -> dict: ...
    ```
 
 4. **Done** - no changes to `graph/`, `utils/`, `tools/`, or `llm/` are needed unless the domain needs a new reusable research tool.
@@ -219,15 +219,15 @@ Key rules:
 
 ## neuralsignal Plugin
 
-The neuralsignal plugin generates `FeatureSetBase` subclasses that extract activation-based features from LLM scan snapshots and trains XGBoost hallucination detectors.
+The neuralsignal plugin is currently a fresh `ResearchAdapter` skeleton for experiments that generate `FeatureSetBase` subclasses and run NeuralSignal automation through the subprocess bridge.
 
 **Data flow:**
 1. `implement` generates a Python class → cached at `dev/experiments/neuralsignal/implementations/<ClassName>.py`
 2. `validate` generates and runs pytest tests; auto-fixes failures
-3. `prepare_experiment` loads the class, wraps it in a `FeatureProcessor`, calls `neuralsignal.automation.dataset_automation_core.create_dataset()` to produce CSV output
-4. `execute_experiment` records the prepared dataset and trains an XGBoost model via `create_s1_model()`, returning `test_auc` and feature importances
+3. `prepare_experiment` builds dataset manifests and marks them `pending_bridge`
+4. `execute_experiment` currently reports pending task-runner work until dataset/model execution is wired in
 
-**Subprocess bridge**: When the neuralsignal SDK (torch, transformers) cannot be imported into the main venv, `plugins/neuralsignal/bridge.py` runs as a subprocess under the neuralsignal Python interpreter. Config is piped via stdin; results come back as JSON on stdout.
+**Subprocess tasks**: Heavy NeuralSignal calls live in `plugins/neuralsignal/tasks.py` and are run through the generic `plugins/task_runner.py` subprocess runner. `plugins/neuralsignal/bridge.py` remains as a compatibility wrapper for old `create_dataset` / `create_s1_model` commands.
 
 Configure the neuralsignal paths in `.env`:
 ```ini

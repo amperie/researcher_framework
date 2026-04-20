@@ -10,7 +10,6 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
-from configs.config import get_config
 from plugins.base import ResearchAdapter
 from utils.logger import get_logger
 
@@ -20,7 +19,11 @@ log = get_logger(__name__)
 class TradingAdapter(ResearchAdapter):
     """ResearchAdapter implementation boundary for trading experiments."""
 
-    def validate_environment(self, profile: dict[str, Any]) -> dict[str, Any]:
+    def validate_environment(
+        self,
+        profile: dict[str, Any],
+        state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         platform = profile.get("platform") or {}
         package = platform.get("package")
         source_path = platform.get("source_path")
@@ -46,33 +49,37 @@ class TradingAdapter(ResearchAdapter):
     def prepare_experiment(
         self,
         profile: dict[str, Any],
-        proposal: dict[str, Any],
-        implementation: dict[str, Any] | None,
         state: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        data_source = proposal.get("data_source") or _first_name(profile.get("data_sources") or [])
+    ) -> dict[str, Any]:
+        proposals = state.get("proposals") or []
+        artifacts = []
+
+        for proposal in proposals:
+            data_source = proposal.get("data_source") or _first_name(profile.get("data_sources") or [])
+            artifacts.append({
+                "artifact_id": f"{proposal.get('name', 'unknown')}_backtest_config",
+                "artifact_type": "backtest_config",
+                "proposal_name": proposal.get("name", "unknown"),
+                "data_source": data_source,
+                "universe": proposal.get("universe") or [],
+                "timeframe": proposal.get("timeframe"),
+                "start": proposal.get("start"),
+                "end": proposal.get("end"),
+                "transaction_cost_bps": proposal.get("transaction_cost_bps"),
+                "slippage_bps": proposal.get("slippage_bps"),
+                "risk_constraints": profile.get("risk_constraints") or {},
+            })
+
         return {
-            "artifact_id": f"{proposal.get('name', 'unknown')}_backtest_config",
-            "artifact_type": "backtest_config",
-            "proposal_name": proposal.get("name", "unknown"),
-            "data_source": data_source,
-            "universe": proposal.get("universe") or [],
-            "timeframe": proposal.get("timeframe"),
-            "start": proposal.get("start"),
-            "end": proposal.get("end"),
-            "transaction_cost_bps": proposal.get("transaction_cost_bps"),
-            "slippage_bps": proposal.get("slippage_bps"),
+            "experiment_artifacts": artifacts,
+            "errors": list(state.get("errors") or []),
         }
 
     def execute_experiment(
         self,
         profile: dict[str, Any],
-        proposal: dict[str, Any],
-        implementation: dict[str, Any] | None,
-        artifact: dict[str, Any] | None,
-        experiment_id: str,
         state: dict[str, Any],
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         """Run a trading backtest.
 
         Replace this method with calls into your trading platform's backtest
@@ -85,19 +92,24 @@ class TradingAdapter(ResearchAdapter):
             "trading profile end to end."
         )
 
-    def summarize_result(self, profile: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
-        metrics = result.get("metrics") or {}
+    def summarize_result(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        results = state.get("experiment_results") or []
         primary = (profile.get("evaluation") or {}).get("primary_metric")
         return {
-            "proposal_name": result.get("proposal_name"),
             "primary_metric": primary,
-            "primary_metric_value": metrics.get(primary) if primary else None,
-            "metrics": metrics,
-            "risk": {
-                "max_drawdown": metrics.get("max_drawdown"),
-                "turnover": metrics.get("turnover"),
-                "exposure": metrics.get("exposure"),
-            },
+            "results": [
+                {
+                    "proposal_name": result.get("proposal_name"),
+                    "primary_metric_value": (result.get("metrics") or {}).get(primary) if primary else None,
+                    "metrics": result.get("metrics") or {},
+                    "risk": {
+                        "max_drawdown": (result.get("metrics") or {}).get("max_drawdown"),
+                        "turnover": (result.get("metrics") or {}).get("turnover"),
+                        "exposure": (result.get("metrics") or {}).get("exposure"),
+                    },
+                }
+                for result in results
+            ],
         }
 
 
@@ -107,4 +119,3 @@ def get_adapter() -> TradingAdapter:
 
 def _first_name(items: list[dict[str, Any]]) -> str:
     return items[0].get("name", "") if items else ""
-
