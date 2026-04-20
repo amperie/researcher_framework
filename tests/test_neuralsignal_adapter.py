@@ -84,6 +84,7 @@ def test_build_dataset_config_contains_neuralsignal_payload(tmp_path):
     assert payload["row_limit"] == 25
     assert payload["dataset_row_limit"] == 25
     assert payload["query"] == {"split": "train"}
+    assert payload["balanced_target"] == {"enabled": True, "field": "ground_truth", "values": [0, 1]}
     assert payload["feature_set_class_name"] == "ActivationSparsity"
     assert payload["feature_set_configs"] is None
     assert payload["ffn_layer_patterns"] == ["mlp", "fc"]

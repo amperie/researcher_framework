@@ -145,6 +145,10 @@ datasets:
         - concept_mean_activations
         - logit_lens_projections
     row_limit: 20                # max scans pulled when creating dataset (0 = no limit)
+    balanced_target:
+      enabled: true
+      field: ground_truth
+      values: [0, 1]
     layer_name_patterns:
       ffn:  [mlp, feed_forward, .wi, .wo, .act, .w1, .w2, .w3, "ff.", fc]
       attn: [.q, .k, .v, .o, SelfAttention, attention, attn]

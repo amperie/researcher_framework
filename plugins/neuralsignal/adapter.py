@@ -377,6 +377,13 @@ class NeuralSignalPlugin(ResearchAdapter):
             "build_in_memory": False,
             "use_gt_as_target": True,
             "query": proposal.get("mongo_query") or {},
+            "balanced_target": hyperparameters.get(
+                "balanced_target",
+                dataset_meta.get(
+                    "balanced_target",
+                    {"enabled": True, "field": "ground_truth", "values": [0, 1]},
+                ),
+            ),
             "file_out": _slug(f"{feature_set_name}_{detector or 'detector'}"),
             "feature_set_class_path": str(Path(script_path).resolve()) if script_path else "",
             "feature_set_class_name": class_name,

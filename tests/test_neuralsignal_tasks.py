@@ -41,6 +41,71 @@ def test_create_dataset_uses_public_automation_api_and_defaults(monkeypatch):
     assert seen["cfg"]["feature_set_configs"] == [{"name": "zones"}]
 
 
+def test_create_dataset_balances_target_values(monkeypatch):
+    calls = []
+    automation = ModuleType("neuralsignal.automation")
+    automation.get_config = lambda: {
+        "dataset_row_limit": 100,
+        "row_limit": 100,
+        "query": {},
+        "feature_set_configs": [{"name": "zones"}],
+    }
+
+    def create_dataset(cfg, create_dataset):
+        calls.append(dict(cfg))
+        return ["features.csv"]
+
+    automation.create_dataset = create_dataset
+    monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
+    monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+
+    result = tasks.create_dataset({
+        "dataset_row_limit": 50,
+        "query": {"split": "train"},
+        "balanced_target": {
+            "enabled": True,
+            "field": "ground_truth",
+            "values": [0, 1],
+        },
+    })
+
+    assert result["file_paths"] == ["features.csv"]
+    assert len(calls) == 2
+    assert calls[0]["query"] == {"split": "train", "ground_truth": 0}
+    assert calls[0]["dataset_row_limit"] == 25
+    assert calls[0]["row_limit"] == 25
+    assert calls[0]["overwrite_dataset_file"] is True
+    assert calls[0]["write_header"] is True
+    assert calls[1]["query"] == {"split": "train", "ground_truth": 1}
+    assert calls[1]["dataset_row_limit"] == 25
+    assert calls[1]["row_limit"] == 25
+    assert calls[1]["overwrite_dataset_file"] is False
+    assert calls[1]["write_header"] is False
+    assert result["balanced_target"]["pulls"][0]["row_limit"] == 25
+    assert result["balanced_target"]["pulls"][1]["row_limit"] == 25
+
+
+def test_create_dataset_balanced_target_distributes_remainder(monkeypatch):
+    limits = []
+    automation = ModuleType("neuralsignal.automation")
+    automation.get_config = lambda: {"dataset_row_limit": 51, "query": {}}
+
+    def create_dataset(cfg, create_dataset):
+        limits.append(cfg["dataset_row_limit"])
+        return ["features.csv"]
+
+    automation.create_dataset = create_dataset
+    monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
+    monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+
+    tasks.create_dataset({
+        "dataset_row_limit": 51,
+        "balanced_target": {"enabled": True, "field": "ground_truth", "values": [0, 1]},
+    })
+
+    assert limits == [26, 25]
+
+
 def test_create_s1_model_uses_public_automation_api_and_normalizes_best_model(monkeypatch):
     class Model:
         def __init__(self, auc):

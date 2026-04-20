@@ -20,6 +20,10 @@ def create_dataset(payload: dict[str, Any]) -> dict[str, Any]:
 
     from neuralsignal.automation import create_dataset as ns_create_dataset  # type: ignore
 
+    balanced_cfg = cfg.get("balanced_target") or {}
+    if balanced_cfg.get("enabled"):
+        return _create_balanced_dataset(cfg, ns_create_dataset)
+
     file_paths = ns_create_dataset(cfg, create_dataset=True) or []
     return {"file_paths": [str(path) for path in file_paths]}
 
@@ -50,6 +54,72 @@ def _automation_config(payload: dict[str, Any]) -> dict[str, Any]:
     cfg = get_config()
     cfg.update(payload)
     return cfg
+
+
+def _create_balanced_dataset(cfg: dict[str, Any], ns_create_dataset: Any) -> dict[str, Any]:
+    """Create a class-balanced dataset by running one query per target value."""
+    balanced_cfg = cfg.get("balanced_target") or {}
+    field = balanced_cfg.get("field", "ground_truth")
+    values = list(balanced_cfg.get("values") or [0, 1])
+    if not values:
+        raise ValueError("balanced_target.values must contain at least one target value")
+
+    total_limit = int(cfg.get("dataset_row_limit", cfg.get("row_limit", 0)) or 0)
+    if total_limit <= 0:
+        raise ValueError("balanced_target requires dataset_row_limit > 0")
+
+    per_value_limits = _split_limit(total_limit, len(values))
+    base_query = dict(cfg.get("query") or {})
+    all_paths: list[str] = []
+    pulls: list[dict[str, Any]] = []
+
+    for idx, (value, limit) in enumerate(zip(values, per_value_limits)):
+        if limit <= 0:
+            continue
+        class_cfg = dict(cfg)
+        class_cfg["query"] = {**base_query, field: value}
+        class_cfg["dataset_row_limit"] = limit
+        class_cfg["row_limit"] = limit
+        class_cfg["overwrite_dataset_file"] = idx == 0
+        class_cfg["write_header"] = idx == 0
+
+        file_paths = ns_create_dataset(class_cfg, create_dataset=True) or []
+        str_paths = [str(path) for path in file_paths]
+        all_paths.extend(str_paths)
+        pulls.append({
+            "field": field,
+            "value": value,
+            "row_limit": limit,
+            "query": class_cfg["query"],
+            "file_paths": str_paths,
+        })
+
+    return {
+        "file_paths": _dedupe_preserve_order(all_paths),
+        "balanced_target": {
+            "enabled": True,
+            "field": field,
+            "values": values,
+            "total_row_limit": total_limit,
+            "pulls": pulls,
+        },
+    }
+
+
+def _split_limit(total: int, buckets: int) -> list[int]:
+    base = total // buckets
+    remainder = total % buckets
+    return [base + (1 if idx < remainder else 0) for idx in range(buckets)]
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
 
 
 def _inject_feature_processor(cfg: dict[str, Any]) -> None:
