@@ -18,7 +18,7 @@ Given a research direction like `"attention head specialization"`, the pipeline:
 4. Specifies concrete experiments with datasets, hyperparameters, and success criteria
 5. Writes implementation plans, then generates Python classes (always subclassing a declared base class)
 6. Validates the generated code: runs pytest, feeds failures back to the LLM for fixes (up to N retries)
-7. Prepares domain artifacts and executes experiments through the profile plugin
+7. Submits or executes domain experiments through the profile plugin
 8. Evaluates results against configured thresholds and produces an analysis
 9. Persists everything to MLflow, ChromaDB, and MongoDB
 10. Proposes 3 high-value follow-up research directions
@@ -110,6 +110,7 @@ A **profile** is a YAML file in `configs/profiles/` that fully describes a resea
 | `validate` | Whether to auto-run tests, retry limit, test runner command |
 | `datasets` / domain data config | Dataset or data-source definitions for the domain |
 | `experiment_adapter` | Dotted module path to the plugin that prepares and executes domain experiments |
+| `execution` | Optional async job execution settings: runner, parallelism, polling, timeouts |
 | `evaluation` | Primary metric, all tracked metrics, minimum acceptable thresholds |
 | `storage` | MLflow experiment name, MongoDB DB, ChromaDB collection |
 | `prompts` | **Every LLM system prompt** for every step in this domain |
@@ -129,6 +130,8 @@ Full reference: [`configs/profiles/neuralsignal.yaml`](configs/profiles/neuralsi
 | `validate` | Generate pytest tests, auto-run, LLM-fix loop up to N retries |
 | `prepare_experiment` | Prepare domain artifacts via the plugin adapter |
 | `execute_experiment` | Execute the experiment via the plugin adapter |
+| `submit_experiment_jobs` | Submit long-running experiment jobs and return immediately |
+| `check_experiment_jobs` | Poll durable jobs, collect completed outputs, and submit next-stage jobs |
 | `evaluate` | LLM analysis of metrics vs thresholds; per-proposal assessment |
 | `store_results` | Log to MLflow, upsert to ChromaDB, insert to MongoDB |
 | `propose_next_steps` | Suggest 3 follow-up research directions based on results |
@@ -161,6 +164,15 @@ Full reference: [`configs/profiles/neuralsignal.yaml`](configs/profiles/neuralsi
    def execute_experiment(profile, state) -> dict: ...
    def summarize_result(profile, state) -> dict: ...
    ```
+
+   For long-running work, adapters can also implement the async job API:
+   ```python
+   def submit_experiment_jobs(profile, state) -> dict: ...
+   def check_experiment_jobs(profile, state) -> dict: ...
+   ```
+
+   The synchronous `execute_experiment` method can remain as a fallback while the
+   profile uses `submit_experiment_jobs` / `check_experiment_jobs` for async runs.
 
 4. **Done** - no changes to `graph/`, `utils/`, `tools/`, or `llm/` are needed unless the domain needs a new reusable research tool.
 
@@ -214,20 +226,105 @@ Key rules:
 - Generated code always subclasses a class in `profile['base_classes']`
 - Nodes return partial state dicts; never mutate state in place
 - Non-fatal errors go into `state['errors']`; pipeline continues
+- Long-running jobs go into `state['experiment_jobs']` and write durable files under `dev/experiments/<profile>/jobs/`
+
+---
+
+## Async Experiment Jobs
+
+Long-running experiments can run asynchronously so the graph does not block on a
+single synchronous process. Profiles opt in by using these pipeline steps:
+
+```yaml
+pipeline:
+  steps:
+    - ...
+    - submit_experiment_jobs
+    - check_experiment_jobs
+    - evaluate
+```
+
+Execution is configured in the profile:
+
+```yaml
+execution:
+  mode: async
+  runner: local_process
+  max_parallel_jobs: 2
+  auto_submit_next_stage: true
+  poll_interval_seconds: 30
+  job_timeout_seconds: 7200
+```
+
+The only runner currently implemented is `local_process`. It launches detached
+Python workers using the same dotted task callables used by the synchronous path.
+The runner abstraction is intentionally small so future runners can plug in with
+the same `submit` / `check` behavior, for example Ray, Kubernetes, Slurm, or a
+remote worker service.
+
+Each job is durable on disk:
+
+```text
+dev/experiments/<profile>/jobs/<job_id>/
+  job.json
+  payload.json
+  status.json
+  result.json
+  stdout.log
+  stderr.log
+```
+
+The graph state stores lightweight job metadata in `state['experiment_jobs']`.
+`submit_experiment_jobs` submits work up to `execution.max_parallel_jobs`.
+`check_experiment_jobs` polls existing jobs, collects completed `result.json`
+files into `experiment_artifacts`, `experiment_results`, and `models`, and can
+submit the next stage automatically when `auto_submit_next_stage` is true.
+
+For development, `run_node.py` is useful for polling without rerunning earlier
+steps:
+
+```bash
+uv run python run_node.py check_experiment_jobs --profile neuralsignal \
+    --state-file dev/state/after_submit_experiment_jobs.json
+```
+
+If jobs are still running, run the same check step again later with the latest
+saved state snapshot.
 
 ---
 
 ## neuralsignal Plugin
 
-The neuralsignal plugin is currently a fresh `ResearchAdapter` skeleton for experiments that generate `FeatureSetBase` subclasses and run NeuralSignal automation through the subprocess bridge.
+The neuralsignal plugin generates `FeatureSetBase` subclasses and runs NeuralSignal automation through isolated subprocess tasks. It supports both the synchronous adapter methods and the async job-node flow used by the `neuralsignal` profile.
 
 **Data flow:**
 1. `implement` generates a Python class → cached at `dev/experiments/neuralsignal/implementations/<ClassName>.py`
-2. `validate` generates and runs pytest tests; auto-fixes failures
-3. `prepare_experiment` builds dataset manifests and marks them `pending_bridge`
-4. `execute_experiment` currently reports pending task-runner work until dataset/model execution is wired in
+2. `validate` runs deterministic contract tests and can auto-fix failures
+3. `submit_experiment_jobs` submits NeuralSignal dataset-creation jobs
+4. `check_experiment_jobs` collects completed dataset CSVs into `experiment_artifacts`
+5. `check_experiment_jobs` can then submit S1 model-training jobs automatically
+6. later checks collect model metrics, params, and feature importance into `experiment_results` and `models`
 
-**Subprocess tasks**: Heavy NeuralSignal calls live in `plugins/neuralsignal/tasks.py` and are run through the generic `plugins/task_runner.py` subprocess runner. `plugins/neuralsignal/bridge.py` remains as a compatibility wrapper for old `create_dataset` / `create_s1_model` commands.
+**Subprocess tasks**: Heavy NeuralSignal calls live in `plugins/neuralsignal/tasks.py`. Synchronous calls use `plugins/task_runner.py`; async jobs use `plugins/job_runner.py`, which invokes the same task callables and writes durable job files. `plugins/neuralsignal/bridge.py` remains as a compatibility wrapper for old `create_dataset` / `create_s1_model` commands.
+
+The async NeuralSignal task chain is:
+
+```text
+submit_experiment_jobs
+  -> plugins.job_runner.LocalProcessRunner
+    -> plugins.neuralsignal.tasks.create_dataset
+      -> neuralsignal.automation.create_dataset
+
+check_experiment_jobs
+  -> collect dataset result.json
+  -> submit model job
+    -> plugins.neuralsignal.tasks.create_s1_model
+      -> neuralsignal.automation.create_s1_model
+```
+
+The task wrapper merges the agent payload over NeuralSignal's packaged automation
+defaults with `neuralsignal.automation.get_config()`, then injects the generated
+feature set via a real NeuralSignal `FeatureProcessor`.
 
 Configure the neuralsignal paths in `.env`:
 ```ini
@@ -267,7 +364,9 @@ Generated validation tests are written to `dev/experiments/<profile>/tests/` and
 
 ## Dev Artifacts
 
-All generated artifacts are local and gitignored under `dev/`:
+All generated artifacts are local and gitignored under `dev/`. Async experiment
+jobs are stored under `dev/experiments/<profile>/jobs/<job_id>/` with payloads,
+status, results, stdout, and stderr logs:
 
 ```
 dev/
