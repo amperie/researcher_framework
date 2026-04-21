@@ -106,6 +106,25 @@ def test_create_dataset_balanced_target_distributes_remainder(monkeypatch):
     assert limits == [26, 25]
 
 
+def test_create_dataset_moves_output_to_dataset_dir(tmp_path, monkeypatch):
+    source = tmp_path / "features.csv"
+    source.write_text("target,a\n1,2\n", encoding="utf-8")
+    output_dir = tmp_path / "dev" / "experiments" / "neuralsignal" / "datasets"
+
+    automation = ModuleType("neuralsignal.automation")
+    automation.get_config = lambda: {"dataset_row_limit": 1, "query": {}}
+    automation.create_dataset = lambda cfg, create_dataset: [str(source)]
+    monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
+    monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+
+    result = tasks.create_dataset({"dataset_output_dir": str(output_dir)})
+
+    expected = output_dir / "features.csv"
+    assert result["file_paths"] == [str(expected)]
+    assert expected.read_text(encoding="utf-8") == "target,a\n1,2\n"
+    assert not source.exists()
+
+
 def test_create_s1_model_uses_public_automation_api_and_normalizes_best_model(monkeypatch):
     class Model:
         def __init__(self, auc):
@@ -188,8 +207,54 @@ class GeneratedFeatureSet(FeatureSetBase):
     tasks._inject_feature_processor(cfg)
 
     feature_set = cfg["feature_processor"].feature_sets[0]
-    assert isinstance(feature_set, RealFeatureSetBase)
+    assert isinstance(feature_set.feature_set, RealFeatureSetBase)
     assert feature_set.get_feature_set_name() == "generated_feature_set"
     assert feature_set.process_feature_set({}) == (["a"], [1.0])
     assert cfg["feature_set_configs"] is None
     assert sys.modules["neuralsignal.core.modules.feature_sets.feature_set_base"].FeatureSetBase is RealFeatureSetBase
+
+
+def test_scan_shape_wrapper_retries_flat_outputs_as_pass_list():
+    class GeneratedFeatureSet:
+        def __init__(self):
+            self.config = {"output_format": "name_and_value_columns"}
+
+        def get_feature_set_name(self):
+            return "generated"
+
+        def process_feature_set(self, scan):
+            outputs = scan["outputs"]
+            layer_order = scan["layer_order"]
+            layer_id = layer_order[0]
+            # This mimics generated code that assumes outputs[0][layer_id].
+            activation = outputs[0][layer_id]
+            return (["feature"], [float(activation)])
+
+    feature_set = tasks._ScanShapeCompatibleFeatureSet(GeneratedFeatureSet())
+    result = feature_set.process_feature_set({
+        "outputs": {"layer_a": 3.0},
+        "layer_order": ["layer_a"],
+    })
+
+    assert result == (["feature"], [3.0])
+
+
+def test_scan_shape_wrapper_raises_for_target_only_features():
+    class EmptyFeatureSet:
+        def __init__(self):
+            self.config = {"output_format": "name_and_value_columns"}
+
+        def get_feature_set_name(self):
+            return "empty"
+
+        def process_feature_set(self, scan):
+            return ([], [])
+
+    feature_set = tasks._ScanShapeCompatibleFeatureSet(EmptyFeatureSet())
+
+    try:
+        feature_set.process_feature_set({"outputs": {"layer_a": 3.0}})
+    except RuntimeError as exc:
+        assert "returned no feature columns" in str(exc)
+    else:
+        raise AssertionError("Expected empty feature set to fail loudly")

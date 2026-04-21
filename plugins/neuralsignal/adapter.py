@@ -353,6 +353,8 @@ class NeuralSignalPlugin(ResearchAdapter):
         class_name = (implementation or {}).get("class_name", "")
         feature_set_name = proposal_name
         layer_patterns = dataset_meta.get("layer_name_patterns") or {}
+        dataset_output_dir = Path(cfg.experiments_dir) / profile.get("name", "neuralsignal") / "datasets"
+        dataset_output_dir.mkdir(parents=True, exist_ok=True)
 
         return {
             "run_data_collection": False,
@@ -384,7 +386,8 @@ class NeuralSignalPlugin(ResearchAdapter):
                     {"enabled": True, "field": "ground_truth", "values": [0, 1]},
                 ),
             ),
-            "file_out": _slug(f"{feature_set_name}_{detector or 'detector'}"),
+            "file_out": _csv_filename(f"{feature_set_name}_{detector or 'detector'}"),
+            "dataset_output_dir": str(dataset_output_dir.resolve()),
             "feature_set_class_path": str(Path(script_path).resolve()) if script_path else "",
             "feature_set_class_name": class_name,
             "feature_set_configs": None,
@@ -812,6 +815,11 @@ def _slug(value: str) -> str:
     slug = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in value.strip())
     slug = "_".join(part for part in slug.split("_") if part)
     return slug or "neuralsignal_experiment"
+
+
+def _csv_filename(value: str) -> str:
+    slug = _slug(value)
+    return slug if slug.lower().endswith(".csv") else f"{slug}.csv"
 
 
 def _first(items: list[Any]) -> Any:

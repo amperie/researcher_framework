@@ -16,6 +16,7 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from configs.config import get_config
+from graph.nodes.code_safety import extract_python_source, validate_python_source
 from graph.state import ResearchState
 from llm.factory import get_llm
 from utils.logger import get_logger
@@ -147,12 +148,14 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
                         )
                     ),
                 ])
-                fixed_code = _strip_fences(fix_resp.content)
+                fixed_code = extract_python_source(fix_resp.content)
+                validate_python_source(fixed_code, expected_class_name=class_name)
                 Path(script_path).write_text(fixed_code, encoding="utf-8")
                 current_code = fixed_code
                 log.info("validate_node | Fixed code written - %s", script_path)
             except Exception as exc:
-                log.error("validate_node | Fix generation failed: %s", exc)
+                log.error("validate_node | Fix generation failed or was rejected: %s", exc)
+                test_output = f"{test_output}\n\nFix response rejected: {exc}"
                 break
 
             attempts += 1
@@ -213,7 +216,9 @@ def _build_test_code(
             SystemMessage(content=system_prompt),
             HumanMessage(content=f"Scan field context:\n{scan_context}\n\nCode to test:\n```python\n{code}\n```"),
         ])
-        return _strip_fences(resp.content), "llm_generated"
+        test_source = extract_python_source(resp.content)
+        validate_python_source(test_source)
+        return test_source, "llm_generated"
 
     raise ValueError("No validation contract configured and llm_generate_tests=False")
 
@@ -299,11 +304,7 @@ def _summarize_test_failure(output: str, max_chars: int = 700) -> str:
 
 
 def _strip_fences(text: str) -> str:
-    import re
-    text = text.strip()
-    text = re.sub(r"^```(?:python)?\s*\n", "", text)
-    text = re.sub(r"\n```\s*$", "", text)
-    return text.strip()
+    return extract_python_source(text)
 
 
 def _build_contract_test(
@@ -415,22 +416,22 @@ def _config(output_format="name_and_value_columns"):
 def _scan():
     return {{
         "outputs": {{
-            0: torch.randn(8, 16),
-            1: torch.randn(8, 16),
-            2: torch.randn(8, 16),
+            "layer_0": torch.randn(8, 16),
+            "layer_1": torch.randn(8, 16),
+            "layer_2": torch.randn(8, 16),
         }},
         "inputs": {{
-            0: torch.randn(8, 16),
-            1: torch.randn(8, 16),
-            2: torch.randn(8, 16),
+            "layer_0": torch.randn(8, 16),
+            "layer_1": torch.randn(8, 16),
+            "layer_2": torch.randn(8, 16),
         }},
         "layer_id_to_name": {{
-            0: "model.layers.0.mlp.fc",
-            1: "model.layers.0.attn.q_proj",
-            2: "model.layers.0.norm",
+            "layer_0": "model.layers.0.mlp.fc",
+            "layer_1": "model.layers.0.attn.q_proj",
+            "layer_2": "model.layers.0.norm",
         }},
-        "layer_order": [0, 1, 2],
-        "layer_passes": {{0: 1, 1: 1, 2: 1}},
+        "layer_order": ["layer_0", "layer_1", "layer_2"],
+        "layer_passes": {{"layer_0": 1, "layer_1": 1, "layer_2": 1}},
         "zone_size": 512,
         "ground_truth": 1,
     }}

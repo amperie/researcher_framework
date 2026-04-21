@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import shutil
 import sys
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -22,10 +24,12 @@ def create_dataset(payload: dict[str, Any]) -> dict[str, Any]:
 
     balanced_cfg = cfg.get("balanced_target") or {}
     if balanced_cfg.get("enabled"):
-        return _create_balanced_dataset(cfg, ns_create_dataset)
+        result = _create_balanced_dataset(cfg, ns_create_dataset)
+        result["file_paths"] = _move_dataset_files(result.get("file_paths") or [], cfg)
+        return result
 
     file_paths = ns_create_dataset(cfg, create_dataset=True) or []
-    return {"file_paths": [str(path) for path in file_paths]}
+    return {"file_paths": _move_dataset_files(file_paths, cfg)}
 
 
 def create_s1_model(payload: dict[str, Any]) -> dict[str, Any]:
@@ -122,6 +126,28 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
     return result
 
 
+def _move_dataset_files(file_paths: list[Any], cfg: dict[str, Any]) -> list[str]:
+    output_dir = cfg.get("dataset_output_dir")
+    if not output_dir:
+        return [str(path) for path in file_paths]
+
+    dest_dir = Path(output_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    moved: list[str] = []
+    for file_path in file_paths:
+        src = Path(str(file_path))
+        if not src.is_absolute():
+            src = Path.cwd() / src
+        dest = dest_dir / src.name
+        if src.resolve() != dest.resolve() and src.exists():
+            if dest.exists():
+                dest.unlink()
+            shutil.move(str(src), str(dest))
+        moved.append(str(dest))
+    return moved
+
+
 def _inject_feature_processor(cfg: dict[str, Any]) -> None:
     """Load a generated FeatureSetBase subclass and inject FeatureProcessor."""
     if not cfg.get("feature_set_class_path"):
@@ -166,7 +192,9 @@ def _inject_feature_processor(cfg: dict[str, Any]) -> None:
     if cfg.get("attn_layer_patterns"):
         fs_cfg["attn_layer_patterns"] = cfg["attn_layer_patterns"]
 
-    cfg["feature_processor"] = FeatureProcessor(feature_sets=[cls(fs_cfg)])
+    cfg["feature_processor"] = FeatureProcessor(
+        feature_sets=[_ScanShapeCompatibleFeatureSet(cls(fs_cfg))]
+    )
     cfg["feature_set_configs"] = None
     log.info("Injected FeatureProcessor for %s", cls.__name__)
 
@@ -206,4 +234,105 @@ def _looks_like_feature_set_class(cls: type) -> bool:
 def _wrap_feature_set_class(cls: type, feature_set_base: type) -> type:
     """Make structurally valid generated classes nominally inherit the real base."""
     return type(cls.__name__, (cls, feature_set_base), {"__module__": cls.__module__})
+
+
+class _ScanShapeCompatibleFeatureSet:
+    """Retry generated feature sets with common NeuralSignal scan shapes.
+
+    Generated code is validated on synthetic scans, but real NeuralSignal scans
+    currently store activations as a flat dict keyed by string layer ids:
+    ``outputs[layer_id] -> Tensor``. Some generated implementations assume a
+    pass/batch wrapper: ``outputs[0][layer_id]``. This adapter keeps generated
+    code usable while making empty feature outputs fail loudly.
+    """
+
+    def __init__(self, feature_set: Any):
+        self.feature_set = feature_set
+        self.config = feature_set.config
+
+    def get_feature_set_name(self) -> str:
+        return self.feature_set.get_feature_set_name()
+
+    def get_config(self) -> dict[str, Any]:
+        if hasattr(self.feature_set, "get_config"):
+            return self.feature_set.get_config()
+        return self.config
+
+    def make_column_name(self, column_name: str) -> str:
+        if hasattr(self.feature_set, "make_column_name"):
+            return self.feature_set.make_column_name(column_name)
+        return f"{self.get_feature_set_name()}__{column_name}"
+
+    def process_feature_set(self, scan: dict[str, Any]) -> Any:
+        output_format = self.config.get("output_format", "name_and_value_columns")
+        first_result: Any = None
+        errors: list[str] = []
+
+        for candidate in _scan_shape_variants(scan):
+            try:
+                result = self.feature_set.process_feature_set(candidate)
+            except Exception as exc:
+                errors.append(f"{type(exc).__name__}: {exc}")
+                continue
+
+            if first_result is None:
+                first_result = result
+            if output_format == "tensor_dict":
+                return result
+            if _has_feature_columns(result):
+                return result
+
+        if first_result is not None:
+            raise RuntimeError(
+                f"{self.get_feature_set_name()} returned no feature columns for real scan shape"
+            )
+        raise RuntimeError(
+            f"{self.get_feature_set_name()} failed for all supported scan shapes: {'; '.join(errors[-3:])}"
+        )
+
+
+def _scan_shape_variants(scan: dict[str, Any]) -> list[dict[str, Any]]:
+    variants = [scan]
+    outputs = scan.get("outputs")
+    inputs = scan.get("inputs")
+
+    if _is_flat_layer_tensor_dict(outputs):
+        variants.append({**scan, "outputs": [outputs]})
+        variants.append({**scan, "outputs": {0: outputs}})
+    elif _is_nested_single_batch_dict(outputs):
+        flat_outputs = next(iter(outputs.values()))
+        variants.append({**scan, "outputs": flat_outputs})
+        variants.append({**scan, "outputs": [flat_outputs]})
+
+    if _is_flat_layer_tensor_dict(inputs):
+        base_variants = list(variants)
+        for variant in base_variants:
+            variants.append({**variant, "inputs": [inputs]})
+            variants.append({**variant, "inputs": {0: inputs}})
+
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for variant in variants:
+        key = (str(type(variant.get("outputs"))), str(type(variant.get("inputs"))))
+        if key not in seen:
+            unique.append(variant)
+            seen.add(key)
+    return unique
+
+
+def _is_flat_layer_tensor_dict(value: Any) -> bool:
+    return isinstance(value, dict) and bool(value) and not isinstance(next(iter(value.values())), dict)
+
+
+def _is_nested_single_batch_dict(value: Any) -> bool:
+    return isinstance(value, dict) and bool(value) and isinstance(next(iter(value.values())), dict)
+
+
+def _has_feature_columns(result: Any) -> bool:
+    if isinstance(result, tuple) and len(result) == 2:
+        return bool(result[0])
+    if isinstance(result, dict):
+        return bool(result)
+    columns = getattr(result, "columns", None)
+    return columns is not None and len(columns) > 0
 

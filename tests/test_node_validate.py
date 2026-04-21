@@ -243,8 +243,11 @@ class TestValidateNodeFixRetry:
         cfg = SimpleNamespace(validate_timeout_seconds=30)
 
         mock_llm = MagicMock()
-        # First invoke: generate tests; subsequent: fix code
-        mock_llm.invoke.return_value = MagicMock(content="def test_x(): pass")
+        # First invoke: generate tests; subsequent invoke: fix code.
+        mock_llm.invoke.side_effect = [
+            MagicMock(content="def test_x(): pass"),
+            MagicMock(content="class MyClass:\n    pass\n"),
+        ]
 
         test_output_dir = tmp_path / "tests"
         profile = self._profile(max_retries=2)
@@ -273,7 +276,11 @@ class TestValidateNodeFixRetry:
         cfg = SimpleNamespace(validate_timeout_seconds=30)
 
         mock_llm = MagicMock()
-        mock_llm.invoke.return_value = MagicMock(content="def test_x(): pass")
+        mock_llm.invoke.side_effect = [
+            MagicMock(content="def test_x(): pass"),
+            MagicMock(content="class MyClass:\n    pass\n"),
+            MagicMock(content="class MyClass:\n    pass\n"),
+        ]
 
         test_output_dir = tmp_path / "tests"
         profile = self._profile(max_retries=2)
@@ -292,3 +299,32 @@ class TestValidateNodeFixRetry:
         vr = result["validation_results"][0]
         assert vr["passed"] is False
         assert any("failed after" in e for e in result["errors"])
+
+    def test_rejects_prose_fix_without_overwriting_script(self, tmp_path):
+        script = tmp_path / "my_class.py"
+        original_code = "class MyClass:\n    pass\n"
+        script.write_text(original_code, encoding="utf-8")
+        impls = [{"class_name": "MyClass", "script_path": str(script)}]
+        cfg = SimpleNamespace(validate_timeout_seconds=30)
+
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = [
+            MagicMock(content="def test_x(): pass"),
+            MagicMock(content="Looking at the failure, you should change the class."),
+        ]
+
+        test_output_dir = tmp_path / "tests"
+        profile = self._profile(max_retries=1)
+        profile["validate"]["test_output_dir"] = str(test_output_dir)
+
+        with patch("graph.nodes.validate.get_llm", return_value=mock_llm):
+            with patch("graph.nodes.validate.get_config", return_value=cfg):
+                with patch("graph.nodes.validate._run_tests", return_value="1 failed"):
+                    result = validate_node(
+                        {"implementations": impls},
+                        profile,
+                    )
+
+        assert script.read_text(encoding="utf-8") == original_code
+        assert result["validation_results"][0]["passed"] is False
+        assert "Fix response rejected" in result["validation_results"][0]["test_output"]

@@ -92,6 +92,26 @@ base_classes:
 
           def process_feature_set(self, scan: dict):
               # Process exactly one scan and return features in the requested output format.
+              # Runtime scan shape:
+              #   scan is a dict for one MongoDB scan/document.
+              #   scan["outputs"]: dict[str, torch.Tensor]
+              #       The key is a string layer_id. The tensor is the activation
+              #       coming out of that layer.
+              #       Do not assume outputs is a list or access outputs[0] unless
+              #       you first detect a nested/list compatibility shape.
+              #   scan["inputs"]: dict[str, torch.Tensor]
+              #       Same key style as outputs. The tensor is the activation
+              #       going into that layer.
+              #   scan["layer_id_to_name"]: dict[str, str]
+              #       Maps layer_id strings to the string name of each layer.
+              #   scan["layer_order"]: list[str]
+              #       Ordered list of layer_id strings in the order the layers
+              #       are activated.
+              #   scan["layer_passes"]: dict[str, int]
+              #   scan["zone_size"]: int
+              #   scan["ground_truth"]: int, usually 0 or 1
+              # Tensor values are torch.Tensor objects, commonly shaped
+              # [tokens, hidden] or [1, tokens, hidden].
               # Default output_format is "name_and_value_columns": return (cols, vals),
               # where cols is list[str] and vals is list[float].
               # If output_format == "tensor_dict": return None unless explicitly supported.
@@ -299,6 +319,8 @@ prompts:
               "2. For each matching layer, get outputs[layer_id]",
               "3. Compute mean activation across token/hidden dimensions",
               "4. Append self.make_column_name(...) names to cols and float values to vals")
+        Assume outputs is normally dict[str, torch.Tensor] and layer_order is list[str].
+        Do not plan outputs[0] indexing unless explicitly handling a detected nested compatibility shape.
       - output_keys: list of feature column name patterns this class will return
       - imports_needed: list of Python import statements required
 
@@ -318,6 +340,17 @@ prompts:
       - __init__ should call super().__init__(config) and set up anything reused while processing scans
       - get_feature_set_name must return the feature set name, matching the idea/proposal name
       - process_feature_set processes one scan at a time
+      - Real scan structure:
+        - scan is dict for one scan/document
+        - scan["outputs"] is dict[str, torch.Tensor]; the key is a string layer_id and the tensor is the activation coming out of that layer
+        - scan["inputs"] is dict[str, torch.Tensor] with the same layer_id keys; the tensor is the activation going into that layer
+        - scan["layer_order"] is list[str], an ordered list of layer_ids in the order the layers are activated
+        - scan["layer_id_to_name"] is dict[str, str], mapping layer_id strings to the string name of each layer
+        - scan["layer_passes"] is dict[str, int]
+        - scan["zone_size"] is int
+        - scan["ground_truth"] is int, usually 0 or 1; do not use it as a predictive input feature
+        - Tensor values are torch.Tensor objects, commonly shaped [tokens, hidden] or [1, tokens, hidden]
+        - Do NOT assume outputs is a list or write outputs[0] unless you first detect that compatibility shape
       - Only access guaranteed scan fields: outputs, inputs, layer_id_to_name, layer_order,
         layer_passes, zone_size, ground_truth
       - Read layer patterns from self.config, e.g. self.config.get('ffn_layer_patterns', [])
@@ -331,7 +364,8 @@ prompts:
       - Include a standalone if __name__ == '__main__': block with a synthetic test
         (creates a mock scan dict and prints the result)
 
-      Return ONLY the Python source code. No explanation, no markdown fences.
+      Return ONLY parseable Python source code. No explanation, no markdown fences,
+      no prose before or after the code.
 
   validate:
     system: |
@@ -345,11 +379,11 @@ prompts:
          - ffn_layer_patterns: ["mlp", "fc"]
          - attn_layer_patterns: [".q", ".k", ".v"]
       3. Create a synthetic scan dict with guaranteed fields:
-         - outputs: {0: torch.randn(8, 16), 1: torch.randn(8, 16)}
-         - inputs: {0: torch.randn(8, 16), 1: torch.randn(8, 16)}
-         - layer_id_to_name: {0: "model.layers.0.mlp.fc", 1: "model.layers.0.attn.q_proj"}
-         - layer_order: [0, 1]
-         - layer_passes: {0: 1, 1: 1}
+         - outputs: {"layer_0": torch.randn(8, 16), "layer_1": torch.randn(8, 16)}
+         - inputs: {"layer_0": torch.randn(8, 16), "layer_1": torch.randn(8, 16)}
+         - layer_id_to_name: {"layer_0": "model.layers.0.mlp.fc", "layer_1": "model.layers.0.attn.q_proj"}
+         - layer_order: ["layer_0", "layer_1"]
+         - layer_passes: {"layer_0": 1, "layer_1": 1}
          - zone_size: 512
          - ground_truth: 1
       4. Assert get_feature_set_name() returns a non-empty string matching the feature set idea/proposal name
@@ -361,14 +395,17 @@ prompts:
          - At least one feature is returned and at least one value is non-zero
       6. Also test output_format="pandas" returns a one-row pandas DataFrame with matching columns
 
-      Return ONLY the Python test code. No explanation, no markdown fences.
+      Return ONLY parseable Python test code. No explanation, no markdown fences,
+      no prose before or after the code.
 
     fix_system: |
       The following unit tests failed for the FeatureSetBase implementation.
       Fix the IMPLEMENTATION (not the tests) to make the tests pass.
       Common issues: wrong tensor indexing, using self.cfg instead of self.config, missing output_format handling,
       NaN from empty tensors, wrong layer filtering logic, or implementing extract_features instead of process_feature_set.
-      Return ONLY the corrected Python source code. No explanation, no markdown fences.
+      Real scan outputs are usually flat dict[str, torch.Tensor], not outputs[0].
+      Return ONLY parseable corrected Python source code. No explanation, no markdown fences,
+      no prose before or after the code.
 
   evaluate:
     system: |

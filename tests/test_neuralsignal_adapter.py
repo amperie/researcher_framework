@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -85,6 +86,8 @@ def test_build_dataset_config_contains_neuralsignal_payload(tmp_path):
     assert payload["dataset_row_limit"] == 25
     assert payload["query"] == {"split": "train"}
     assert payload["balanced_target"] == {"enabled": True, "field": "ground_truth", "values": [0, 1]}
+    assert payload["file_out"] == "activation_sparsity_hallucination.csv"
+    assert payload["dataset_output_dir"] == str((Path("dev") / "experiments" / "neuralsignal" / "datasets").resolve())
     assert payload["feature_set_class_name"] == "ActivationSparsity"
     assert payload["feature_set_configs"] is None
     assert payload["ffn_layer_patterns"] == ["mlp", "fc"]

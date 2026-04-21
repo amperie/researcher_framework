@@ -18,6 +18,7 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from configs.config import get_config
+from graph.nodes.code_safety import extract_python_source, validate_python_source
 from graph.state import ResearchState
 from llm.factory import get_llm
 from utils.logger import get_logger
@@ -78,15 +79,24 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
         cache_path = cache_dir / f"{class_name}.py"
 
         if cache_path.exists():
-            log.info("implement_node | Cache hit — %s", cache_path)
-            implementations.append({
-                "script_path": str(cache_path),
-                "class_name": class_name,
-                "proposal_name": proposal_name,
-                "plan": plan,
-                "cached": True,
-            })
-            continue
+            try:
+                cached_code = cache_path.read_text(encoding="utf-8")
+                validate_python_source(cached_code, expected_class_name=class_name)
+                log.info("implement_node | Cache hit - %s", cache_path)
+                implementations.append({
+                    "script_path": str(cache_path),
+                    "class_name": class_name,
+                    "proposal_name": proposal_name,
+                    "plan": plan,
+                    "cached": True,
+                })
+                continue
+            except Exception as exc:
+                log.warning(
+                    "implement_node | Ignoring invalid cached implementation %s: %s",
+                    cache_path,
+                    exc,
+                )
 
         user_content = (
             f"Base classes available:\n{base_class_docs}\n\n"
@@ -101,9 +111,8 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_content),
             ])
-            code = _strip_fences(resp.content)
-            if not code:
-                raise ValueError("LLM returned empty code")
+            code = extract_python_source(resp.content)
+            validate_python_source(code, expected_class_name=class_name)
 
             cache_path.write_text(code, encoding="utf-8")
             log.info("implement_node | Saved %d lines → %s", len(code.splitlines()), cache_path)
@@ -129,11 +138,7 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
 
 def _strip_fences(text: str) -> str:
     """Remove markdown code fences (```python ... ```) from LLM output."""
-    import re
-    text = text.strip()
-    text = re.sub(r"^```(?:python)?\s*\n", "", text)
-    text = re.sub(r"\n```\s*$", "", text)
-    return text.strip()
+    return extract_python_source(text)
 
 
 def _load_implementation_examples(profile: dict) -> str:
