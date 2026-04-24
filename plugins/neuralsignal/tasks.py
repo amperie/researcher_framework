@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 def create_dataset(payload: dict[str, Any]) -> dict[str, Any]:
     """Create a NeuralSignal feature dataset and return output file paths."""
     cfg = _automation_config(payload)
+    _enable_mongo_no_cursor_timeout()
     _inject_feature_processor(cfg)
 
     from neuralsignal.automation import create_dataset as ns_create_dataset  # type: ignore
@@ -43,11 +44,11 @@ def create_s1_model(payload: dict[str, Any]) -> dict[str, Any]:
     if not models:
         return {"error": "No models returned"}
 
-    best = max(models, key=lambda model: model.metrics.get("test_auc", 0.0))
+    best = max(models, key=lambda model: _model_section(model, "metrics").get("test_auc", 0.0))
     return {
-        "metrics": dict(best.metrics),
-        "params": dict(best.params) if best.params else {},
-        "feature_importance": best.artifacts.get("feature_importance", {}) if best.artifacts else {},
+        "metrics": dict(_model_section(best, "metrics")),
+        "params": dict(_model_section(best, "params")),
+        "feature_importance": dict(_model_section(best, "artifacts").get("feature_importance", {}) or {}),
     }
 
 
@@ -146,6 +147,45 @@ def _move_dataset_files(file_paths: list[Any], cfg: dict[str, Any]) -> list[str]
             shutil.move(str(src), str(dest))
         moved.append(str(dest))
     return moved
+
+
+def _enable_mongo_no_cursor_timeout() -> None:
+    """Patch the NeuralSignal Mongo backend for long-running dataset scans.
+
+    Dataset creation can spend many seconds per scan deserializing tensors and
+    featurizing activations. The SDK's default Mongo cursor uses the server's
+    normal idle timeout, which can expire during long runs and raise
+    CursorNotFound. Using no_cursor_timeout keeps the cursor alive for the
+    lifetime of the task process.
+    """
+    from neuralsignal.backend.mongo_backend import MongoBackend  # type: ignore
+
+    if getattr(MongoBackend, "_nsr_no_cursor_timeout_enabled", False):
+        return
+
+    def _query_no_cursor_timeout(self: Any, query: dict) -> Any:
+        return self.col.find(query, no_cursor_timeout=True)
+
+    MongoBackend.query = _query_no_cursor_timeout
+    MongoBackend._nsr_no_cursor_timeout_enabled = True
+
+
+def _model_section(model: Any, name: str) -> dict[str, Any]:
+    value = getattr(model, name, None)
+    if isinstance(value, dict):
+        return value
+
+    config = getattr(model, "config", None)
+    if isinstance(config, dict):
+        section = config.get(name)
+        if isinstance(section, dict):
+            return section
+
+    try:
+        section = model[name]
+    except Exception:
+        section = None
+    return section if isinstance(section, dict) else {}
 
 
 def _inject_feature_processor(cfg: dict[str, Any]) -> None:

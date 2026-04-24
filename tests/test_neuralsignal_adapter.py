@@ -166,8 +166,9 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
     call_task.assert_called_once()
     assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_s1_model"
     payload = call_task.call_args.args[1]
-    assert call_task.call_args.kwargs["cwd"] == str(tmp_path / "neuralsignal_src")
+    assert call_task.call_args.kwargs["cwd"] == str(tmp_path)
     assert payload["dataset_path"] == str(tmp_path / "features.csv")
+    assert payload["file_out"] == "features.csv"
     assert payload["optimization_metric"] == "test_auc"
     assert payload["feature_set_class_name"] == "ActivationSparsity"
     assert payload["feature_set_configs"] is None
@@ -277,6 +278,7 @@ def test_check_experiment_jobs_collects_dataset_and_submits_model_job(tmp_path):
     assert delta["experiment_artifacts"][0]["rows"] == 1
     runner.submit.assert_called_once()
     assert runner.submit.call_args.args[0]["stage"] == "model"
+    assert runner.submit.call_args.args[0]["cwd"] == str(tmp_path)
     assert delta["submitted_jobs"][0]["job_id"] == "model_job"
 
 
@@ -306,6 +308,29 @@ def test_call_task_sets_neuralsignal_src_on_pythonpath(tmp_path, monkeypatch):
     assert "existing_path" in pythonpath
     assert popen.call_args.args[0][-3:] == ["-m", "plugins.task_runner", "some.module.task"]
     assert popen.call_args.kwargs["cwd"] == str(tmp_path)
+
+
+def test_call_task_uses_full_timeout_for_process_wait(tmp_path):
+    cfg = _cfg(tmp_path)
+    seen = {}
+
+    class FakeProc:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO('{"ok": true}\n')
+            self.stderr = io.StringIO("")
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            seen["timeout"] = timeout
+            return self.returncode
+
+    with patch("plugins.neuralsignal.adapter.get_config", return_value=cfg):
+        with patch("plugins.neuralsignal.adapter.subprocess.Popen", return_value=FakeProc()):
+            result = NeuralSignalPlugin()._call_task("some.module.task", {"x": 1}, timeout=123)
+
+    assert result == {"ok": True}
+    assert seen["timeout"] == 123
 
 
 def test_call_task_supports_package_dir_as_neuralsignal_src_path(tmp_path, monkeypatch):

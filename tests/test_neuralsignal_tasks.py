@@ -32,6 +32,7 @@ def test_create_dataset_uses_public_automation_api_and_defaults(monkeypatch):
     automation.create_dataset = create_dataset
     monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
     monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+    monkeypatch.setattr(tasks, "_enable_mongo_no_cursor_timeout", lambda: None)
 
     result = tasks.create_dataset({"dataset_row_limit": 5})
 
@@ -58,6 +59,7 @@ def test_create_dataset_balances_target_values(monkeypatch):
     automation.create_dataset = create_dataset
     monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
     monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+    monkeypatch.setattr(tasks, "_enable_mongo_no_cursor_timeout", lambda: None)
 
     result = tasks.create_dataset({
         "dataset_row_limit": 50,
@@ -97,6 +99,7 @@ def test_create_dataset_balanced_target_distributes_remainder(monkeypatch):
     automation.create_dataset = create_dataset
     monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
     monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+    monkeypatch.setattr(tasks, "_enable_mongo_no_cursor_timeout", lambda: None)
 
     tasks.create_dataset({
         "dataset_row_limit": 51,
@@ -116,6 +119,7 @@ def test_create_dataset_moves_output_to_dataset_dir(tmp_path, monkeypatch):
     automation.create_dataset = lambda cfg, create_dataset: [str(source)]
     monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
     monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+    monkeypatch.setattr(tasks, "_enable_mongo_no_cursor_timeout", lambda: None)
 
     result = tasks.create_dataset({"dataset_output_dir": str(output_dir)})
 
@@ -131,6 +135,54 @@ def test_create_s1_model_uses_public_automation_api_and_normalizes_best_model(mo
             self.metrics = {"test_auc": auc}
             self.params = {"auc": auc}
             self.artifacts = {"feature_importance": {"f": auc}}
+
+    automation = ModuleType("neuralsignal.automation")
+    automation.get_config = lambda: {"modeling_row_limits": [0]}
+    automation.create_s1_model = lambda cfg: [Model(0.61), Model(0.77)]
+    monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
+    monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+
+    result = tasks.create_s1_model({})
+
+    assert result["metrics"] == {"test_auc": 0.77}
+    assert result["params"] == {"auc": 0.77}
+    assert result["feature_importance"] == {"f": 0.77}
+
+
+def test_enable_mongo_no_cursor_timeout_patches_query(monkeypatch):
+    backend_module = ModuleType("neuralsignal.backend.mongo_backend")
+
+    class Collection:
+        def __init__(self):
+            self.calls = []
+
+        def find(self, query, **kwargs):
+            self.calls.append((query, kwargs))
+            return ["ok"]
+
+    class MongoBackend:
+        def __init__(self):
+            self.col = Collection()
+
+    backend_module.MongoBackend = MongoBackend
+    monkeypatch.setitem(sys.modules, "neuralsignal.backend.mongo_backend", backend_module)
+
+    tasks._enable_mongo_no_cursor_timeout()
+    backend = MongoBackend()
+    result = backend.query({"x": 1})
+
+    assert result == ["ok"]
+    assert backend.col.calls == [({"x": 1}, {"no_cursor_timeout": True})]
+
+
+def test_create_s1_model_supports_s1model_config_shape(monkeypatch):
+    class Model:
+        def __init__(self, auc):
+            self.config = {
+                "metrics": {"test_auc": auc},
+                "params": {"auc": auc},
+                "artifacts": {"feature_importance": {"f": auc}},
+            }
 
     automation = ModuleType("neuralsignal.automation")
     automation.get_config = lambda: {"modeling_row_limits": [0]}

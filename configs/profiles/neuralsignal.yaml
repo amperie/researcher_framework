@@ -164,7 +164,7 @@ datasets:
         - probe_weights
         - concept_mean_activations
         - logit_lens_projections
-    row_limit: 20                # max scans pulled when creating dataset (0 = no limit)
+    row_limit: 1000                # max scans pulled when creating dataset (0 = no limit)
     balanced_target:
       enabled: true
       field: ground_truth

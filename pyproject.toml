@@ -25,3 +25,7 @@ dev = [
 # neuralsignal is not installed as a package dep — its multi-package flat layout
 # prevents editable install. The experiment runner injects NEURALSIGNAL_SRC_PATH
 # into PYTHONPATH when launching generated scripts.
+
+[tool.pytest.ini_options]
+cache_dir = ".tmp/pytest/cache"
+addopts = "--basetemp=.tmp/pytest/tmp"

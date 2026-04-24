@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -164,7 +165,11 @@ class NeuralSignalPlugin(ResearchAdapter):
             experiment_id = str(uuid4())
             try:
                 model_cfg = self._build_model_config(profile, artifact, experiment_id)
-                task_result = self._call_task(_CREATE_S1_MODEL_TASK, model_cfg, cwd=cwd)
+                task_result = self._call_task(
+                    _CREATE_S1_MODEL_TASK,
+                    model_cfg,
+                    cwd=str(_model_task_workdir(artifact, cfg)),
+                )
                 metrics = _as_dict(task_result.get("metrics"))
                 feature_importance = _as_dict(task_result.get("feature_importance"))
                 params = _as_dict(task_result.get("params"))
@@ -203,6 +208,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         jobs = list(state.get("experiment_jobs") or [])
         artifacts = list(state.get("experiment_artifacts") or [])
         errors = list(state.get("errors") or [])
+        cfg = get_config()
         runner = get_runner(_execution_cfg(profile).get("runner", "local_process"))
 
         active_count = sum(1 for job in jobs if job.get("status") not in TERMINAL_STATUSES)
@@ -248,6 +254,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                     payload,
                     artifact_id=artifact.get("artifact_id"),
                     experiment_id=experiment_id,
+                    cwd=str(_model_task_workdir(artifact, cfg)),
                 )
                 job = runner.submit(spec)
                 jobs.append(job)
@@ -408,6 +415,8 @@ class NeuralSignalPlugin(ResearchAdapter):
         experiment_id = experiment_id or str(uuid4())
         proposal_name = artifact.get("proposal_name", "unknown")
         optimization_metric = (profile.get("evaluation") or {}).get("primary_metric", "test_auc")
+        dataset_path = artifact.get("dataset_path") or artifact.get("file_path", "")
+        dataset_filename = Path(str(dataset_path)).name if dataset_path else ""
 
         return {
             "application_name": dataset_cfg.get("application_name", ""),
@@ -421,7 +430,11 @@ class NeuralSignalPlugin(ResearchAdapter):
             "dataset": dataset_cfg.get("dataset") or artifact.get("dataset", ""),
             "zone_size": dataset_cfg.get("zone_size", 1024),
             "use_full_zone_names": False,
-            "file_out": _slug(f"{proposal_name}_{artifact.get('detector') or 'detector'}"),
+            # NeuralSignal's current create_s1_model implementation overwrites
+            # cfg["dataset_path"] from cfg["file_out"] after sanitizing it with
+            # get_name_from_template(..., file_safe=True). Pass only the dataset
+            # filename here and run the task from the dataset directory.
+            "file_out": dataset_filename,
             "feature_set_class_path": dataset_cfg.get("feature_set_class_path", ""),
             "feature_set_class_name": dataset_cfg.get("feature_set_class_name", ""),
             "feature_set_configs": None,
@@ -438,7 +451,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             "create_reduced_feature_model": False,
             "save_to_backend": False,
             "backend_config": dataset_cfg.get("backend_config") or _backend_config(cfg),
-            "dataset_path": artifact.get("dataset_path") or artifact.get("file_path", ""),
+            "dataset_path": dataset_path,
             "proposal_name": proposal_name,
         }
 
@@ -451,6 +464,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         payload: dict[str, Any],
         artifact_id: str | None = None,
         experiment_id: str | None = None,
+        cwd: str | None = None,
     ) -> dict[str, Any]:
         cfg = get_config()
         jobs_dir = Path(cfg.experiments_dir) / profile.get("name", "neuralsignal") / "jobs"
@@ -471,7 +485,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             "task_path": task_path,
             "payload": payload,
             "python": cfg.neuralsignal_python,
-            "cwd": str(_neuralsignal_workdir(cfg)),
+            "cwd": cwd or str(_neuralsignal_workdir(cfg)),
             "env": {"PYTHONPATH": os.pathsep.join(pythonpath_entries)},
         }
 
@@ -597,9 +611,21 @@ class NeuralSignalPlugin(ResearchAdapter):
             except BrokenPipeError:
                 pass
 
-        t_out.join(timeout=timeout)
-        t_err.join(timeout=10)
-        proc.wait(timeout=10)
+        start = time.monotonic()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            proc.kill()
+            t_out.join(timeout=2)
+            t_err.join(timeout=2)
+            raise RuntimeError(
+                f"Task {task_path!r} timed out after {timeout} seconds"
+            ) from exc
+
+        elapsed = time.monotonic() - start
+        remaining = max(0.0, timeout - elapsed)
+        t_out.join(timeout=remaining or 2)
+        t_err.join(timeout=2)
 
         stdout_data = "".join(stdout_chunks)
         if proc.returncode != 0:
@@ -820,6 +846,15 @@ def _slug(value: str) -> str:
 def _csv_filename(value: str) -> str:
     slug = _slug(value)
     return slug if slug.lower().endswith(".csv") else f"{slug}.csv"
+
+
+def _model_task_workdir(artifact: dict[str, Any], cfg: Any) -> Path:
+    dataset_path = artifact.get("dataset_path") or artifact.get("file_path")
+    if dataset_path:
+        parent = Path(str(dataset_path)).resolve().parent
+        if parent.exists():
+            return parent
+    return _neuralsignal_workdir(cfg)
 
 
 def _first(items: list[Any]) -> Any:
