@@ -46,6 +46,7 @@ def _profile():
             }
         ],
         "evaluation": {"primary_metric": "test_auc"},
+        "execution": {"job_timeout_seconds": 7200},
     }
 
 
@@ -107,6 +108,7 @@ def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path)
 
     call_task.assert_called_once()
     assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_dataset"
+    assert call_task.call_args.kwargs["timeout"] == 7200
     assert call_task.call_args.kwargs["cwd"] == str(tmp_path / "neuralsignal_src")
     assert delta["errors"] == []
     assert len(delta["experiment_artifacts"]) == 1
@@ -166,6 +168,7 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
     call_task.assert_called_once()
     assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_s1_model"
     payload = call_task.call_args.args[1]
+    assert call_task.call_args.kwargs["timeout"] == 7200
     assert call_task.call_args.kwargs["cwd"] == str(tmp_path)
     assert payload["dataset_path"] == str(tmp_path / "features.csv")
     assert payload["file_out"] == "features.csv"
@@ -193,6 +196,40 @@ def test_execute_experiment_records_not_ready_dataset_error():
     assert delta["experiment_results"] == []
     assert delta["models"] == []
     assert any("dataset artifact is not ready" in error for error in delta["errors"])
+
+
+def test_task_timeout_prefers_stage_override_then_job_timeout(tmp_path):
+    adapter = NeuralSignalPlugin()
+    artifact = {
+        "artifact_id": "activation_sparsity_dataset_0",
+        "artifact_type": "dataset",
+        "status": "ready",
+        "proposal_name": "activation_sparsity",
+        "dataset_path": str(tmp_path / "features.csv"),
+        "dataset": "HaluBench",
+        "detector": "hallucination",
+        "dataset_config": {
+            "dataset": "HaluBench",
+            "application_name": "HaluBench",
+            "sub_application_name": "GranularAttention",
+            "detector_names": ["hallucination"],
+            "zone_size": 512,
+            "feature_set_class_path": str(tmp_path / "ActivationSparsity.py"),
+            "feature_set_class_name": "ActivationSparsity",
+        },
+    }
+    task_result = {"metrics": {"test_auc": 0.72}, "params": {}, "feature_importance": {}}
+    profile = _profile()
+    profile["execution"] = {
+        "job_timeout_seconds": 7200,
+        "model_timeout_seconds": 14400,
+    }
+
+    with patch("plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch.object(adapter, "_call_task", return_value=task_result) as call_task:
+            adapter.execute_experiment(profile, {"experiment_artifacts": [artifact]})
+
+    assert call_task.call_args.kwargs["timeout"] == 14400
 
 
 def test_submit_experiment_jobs_submits_dataset_job(tmp_path):

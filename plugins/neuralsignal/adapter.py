@@ -100,7 +100,12 @@ class NeuralSignalPlugin(ResearchAdapter):
 
             try:
                 dataset_cfg = self._build_dataset_config(profile, proposal, implementation)
-                task_result = self._call_task(_CREATE_DATASET_TASK, dataset_cfg, cwd=cwd)
+                task_result = self._call_task(
+                    _CREATE_DATASET_TASK,
+                    dataset_cfg,
+                    timeout=_task_timeout(profile, "dataset", cfg),
+                    cwd=cwd,
+                )
                 file_paths = _as_list(task_result.get("file_paths") or task_result.get("paths"))
                 if not file_paths:
                     raise RuntimeError("dataset task returned no file_paths")
@@ -168,6 +173,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                 task_result = self._call_task(
                     _CREATE_S1_MODEL_TASK,
                     model_cfg,
+                    timeout=_task_timeout(profile, "model", cfg),
                     cwd=str(_model_task_workdir(artifact, cfg)),
                 )
                 metrics = _as_dict(task_result.get("metrics"))
@@ -688,6 +694,16 @@ def _serializable_artifact_summary(artifact: dict[str, Any]) -> dict[str, Any]:
 
 def _execution_cfg(profile: dict[str, Any]) -> dict[str, Any]:
     return profile.get("execution") or {}
+
+
+def _task_timeout(profile: dict[str, Any], stage: str, cfg: Any) -> int:
+    execution = _execution_cfg(profile)
+    stage_key = f"{stage}_timeout_seconds"
+    if execution.get(stage_key):
+        return int(execution[stage_key])
+    if execution.get("job_timeout_seconds"):
+        return int(execution["job_timeout_seconds"])
+    return int(cfg.experiment_timeout_seconds)
 
 
 def _has_dataset_artifact(artifacts: list[dict[str, Any]], proposal_name: str) -> bool:

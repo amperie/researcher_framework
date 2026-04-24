@@ -259,6 +259,9 @@ execution:
   auto_submit_next_stage: true
   poll_interval_seconds: 30
   job_timeout_seconds: 7200
+  # optional per-stage overrides:
+  # dataset_timeout_seconds: 14400
+  # model_timeout_seconds: 7200
 ```
 
 The runner interface is intentionally small so the same graph can target
@@ -267,6 +270,11 @@ different execution backends. The only runner currently implemented is
 callables used by the synchronous path. Additional runners can plug in with the
 same `submit` / `check` behavior, for example Ray, Kubernetes, Slurm, or a
 remote worker service.
+
+Synchronous adapter calls use the same timeout policy as the async job path:
+per-stage `execution.<stage>_timeout_seconds` if present, otherwise
+`execution.job_timeout_seconds`, then finally `configs/config.yaml`
+`experiment_timeout_seconds`.
 
 Each job is durable on disk:
 
