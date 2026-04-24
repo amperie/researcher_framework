@@ -165,6 +165,7 @@ datasets:
         - concept_mean_activations
         - logit_lens_projections
     row_limit: 1000                # max scans pulled when creating dataset (0 = no limit)
+    overwrite_existing_dataset: false  # if true, regenerate CSV even when it already exists
     balanced_target:
       enabled: true
       field: ground_truth

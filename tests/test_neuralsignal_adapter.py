@@ -89,6 +89,7 @@ def test_build_dataset_config_contains_neuralsignal_payload(tmp_path):
     assert payload["balanced_target"] == {"enabled": True, "field": "ground_truth", "values": [0, 1]}
     assert payload["file_out"] == "activation_sparsity_hallucination.csv"
     assert payload["dataset_output_dir"] == str((Path("dev") / "experiments" / "neuralsignal" / "datasets").resolve())
+    assert payload["overwrite_existing_dataset"] is False
     assert payload["feature_set_class_name"] == "ActivationSparsity"
     assert payload["feature_set_configs"] is None
     assert payload["ffn_layer_patterns"] == ["mlp", "fc"]
@@ -115,6 +116,7 @@ def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path)
     assert len(delta["experiment_artifacts"]) == 1
     artifact = delta["experiment_artifacts"][0]
     assert artifact["artifact_type"] == "dataset"
+    assert artifact["dataset_source"] == "generated"
     assert artifact["status"] == "ready"
     assert artifact["rows"] == 2
     assert artifact["columns"] == 2
@@ -136,6 +138,59 @@ def test_prepare_experiment_normalizes_dataset_task_failure(tmp_path):
     assert delta["experiment_artifacts"] == []
     assert any("activation_sparsity failed: boom" in error for error in delta["errors"])
     write_snapshot.assert_called_once()
+
+
+def test_prepare_experiment_reuses_existing_dataset_when_overwrite_disabled(tmp_path):
+    csv_path = tmp_path / "existing.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    adapter = NeuralSignalPlugin()
+    state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
+    dataset_cfg = {
+        "dataset": "HaluBench",
+        "detector_names": ["hallucination"],
+        "dataset_output_dir": str(tmp_path),
+        "file_out": "existing.csv",
+        "overwrite_existing_dataset": False,
+    }
+
+    with patch("plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("plugins.neuralsignal.adapter._write_incremental_state_snapshot"):
+            with patch.object(adapter, "_build_dataset_config", return_value=dataset_cfg):
+                with patch.object(adapter, "_call_task") as call_task:
+                    delta = adapter.prepare_experiment(_profile(), state)
+
+    call_task.assert_not_called()
+    artifact = delta["experiment_artifacts"][0]
+    assert artifact["dataset_source"] == "existing"
+    assert artifact["status"] == "ready"
+    assert artifact["dataset_path"] == str(csv_path)
+    assert artifact["rows"] == 1
+    assert artifact["task_result"]["skipped_existing_dataset"] is True
+    assert delta["errors"] == []
+
+
+def test_prepare_experiment_overwrites_existing_dataset_when_enabled(tmp_path):
+    csv_path = tmp_path / "existing.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    adapter = NeuralSignalPlugin()
+    state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
+    dataset_cfg = {
+        "dataset": "HaluBench",
+        "detector_names": ["hallucination"],
+        "dataset_output_dir": str(tmp_path),
+        "file_out": "existing.csv",
+        "overwrite_existing_dataset": True,
+    }
+
+    with patch("plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("plugins.neuralsignal.adapter._write_incremental_state_snapshot"):
+            with patch.object(adapter, "_build_dataset_config", return_value=dataset_cfg):
+                with patch.object(adapter, "_call_task", return_value={"file_paths": [str(csv_path)]}) as call_task:
+                    delta = adapter.prepare_experiment(_profile(), state)
+
+    call_task.assert_called_once()
+    assert delta["experiment_artifacts"][0]["dataset_source"] == "generated"
+    assert delta["experiment_artifacts"][0]["dataset_path"] == str(csv_path)
 
 
 def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):

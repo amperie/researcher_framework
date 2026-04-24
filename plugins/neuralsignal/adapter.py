@@ -100,41 +100,45 @@ class NeuralSignalPlugin(ResearchAdapter):
 
             try:
                 dataset_cfg = self._build_dataset_config(profile, proposal, implementation)
-                task_result = self._call_task(
-                    _CREATE_DATASET_TASK,
-                    dataset_cfg,
-                    timeout=_task_timeout(profile, "dataset", cfg),
-                    cwd=cwd,
-                )
-                file_paths = _as_list(task_result.get("file_paths") or task_result.get("paths"))
-                if not file_paths:
-                    raise RuntimeError("dataset task returned no file_paths")
+                expected_dataset_path = _expected_dataset_path(dataset_cfg)
+                if expected_dataset_path.exists() and not _should_overwrite_existing_dataset(dataset_cfg):
+                    log.info(
+                        "NeuralSignalPlugin.prepare_experiment | %s reusing existing dataset %s",
+                        proposal_name,
+                        expected_dataset_path,
+                    )
+                    task_result = {
+                        "skipped_existing_dataset": True,
+                        "file_paths": [str(expected_dataset_path)],
+                    }
+                    file_paths = [str(expected_dataset_path)]
+                else:
+                    task_result = self._call_task(
+                        _CREATE_DATASET_TASK,
+                        dataset_cfg,
+                        timeout=_task_timeout(profile, "dataset", cfg),
+                        cwd=cwd,
+                    )
+                    file_paths = _as_list(task_result.get("file_paths") or task_result.get("paths"))
+                    if not file_paths:
+                        raise RuntimeError("dataset task returned no file_paths")
 
                 for idx, file_path in enumerate(file_paths):
-                    resolved_path = _resolve_task_path(file_path, cwd)
-                    metadata = _csv_metadata(resolved_path)
-                    artifact = {
-                        "artifact_id": f"{proposal_name}_dataset_{idx}",
-                        "artifact_type": "dataset",
-                        "dataset_id": f"{proposal_name}_{idx}",
-                        "proposal_name": proposal_name,
-                        "status": "ready" if metadata.get("exists") else "missing_file",
-                        "file_path": str(resolved_path),
-                        "dataset_path": str(resolved_path),
-                        "task_file_path": str(file_path),
-                        "dataset": dataset_cfg.get("dataset", ""),
-                        "detector": dataset_cfg.get("detector_names", [None])[0],
-                        "rows": metadata.get("rows"),
-                        "columns": metadata.get("columns"),
-                        "column_names": metadata.get("column_names", []),
-                        "dataset_config": dataset_cfg,
-                        "task_result": _json_safe(task_result),
-                        "implementation": _implementation_summary(implementation),
-                    }
+                    artifact = _dataset_artifact(
+                        proposal_name=proposal_name,
+                        file_path=file_path,
+                        cwd=cwd,
+                        dataset_cfg=dataset_cfg,
+                        task_result=task_result,
+                        idx=idx,
+                        implementation=implementation,
+                    )
                     artifacts.append(artifact)
                     datasets.append(artifact)
-                    if not metadata.get("exists"):
-                        errors.append(f"prepare_experiment: {proposal_name} returned missing dataset file {resolved_path}")
+                    if artifact.get("status") != "ready":
+                        errors.append(
+                            f"prepare_experiment: {proposal_name} returned missing dataset file {artifact.get('dataset_path')}"
+                        )
             except Exception as exc:
                 log.error("NeuralSignalPlugin.prepare_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
                 errors.append(f"prepare_experiment: {proposal_name} failed: {exc}")
@@ -445,6 +449,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             "ffn_layer_patterns": layer_patterns.get("ffn", []),
             "attn_layer_patterns": layer_patterns.get("attn", []),
             "proposal_name": proposal_name,
+            "overwrite_existing_dataset": bool(dataset_meta.get("overwrite_existing_dataset", False)),
         }
 
     def _build_model_config(
@@ -544,26 +549,16 @@ class NeuralSignalPlugin(ResearchAdapter):
         payload = spec.get("payload") or _read_payload(job)
         artifacts: list[dict[str, Any]] = []
         for idx, file_path in enumerate(file_paths):
-            resolved_path = _resolve_task_path(file_path, cwd)
-            metadata = _csv_metadata(resolved_path)
-            artifact = {
-                "artifact_id": f"{job.get('proposal_name', 'unknown')}_dataset_{idx}",
-                "artifact_type": "dataset",
-                "dataset_id": f"{job.get('proposal_name', 'unknown')}_{idx}",
-                "proposal_name": job.get("proposal_name", "unknown"),
-                "status": "ready" if metadata.get("exists") else "missing_file",
-                "file_path": str(resolved_path),
-                "dataset_path": str(resolved_path),
-                "task_file_path": str(file_path),
-                "dataset": payload.get("dataset", ""),
-                "detector": (payload.get("detector_names") or [None])[0],
-                "rows": metadata.get("rows"),
-                "columns": metadata.get("columns"),
-                "column_names": metadata.get("column_names", []),
-                "dataset_config": payload,
-                "task_result": _json_safe(result),
-            }
-            artifacts.append(artifact)
+            artifacts.append(
+                _dataset_artifact(
+                    proposal_name=job.get("proposal_name", "unknown"),
+                    file_path=file_path,
+                    cwd=cwd,
+                    dataset_cfg=payload,
+                    task_result=result,
+                    idx=idx,
+                )
+            )
         return artifacts
 
     def _model_result_from_job(
@@ -728,6 +723,54 @@ def _serializable_artifact_summary(artifact: dict[str, Any]) -> dict[str, Any]:
         for key, value in artifact.items()
         if not key.startswith("_")
     }
+
+
+def _dataset_artifact(
+    *,
+    proposal_name: str,
+    file_path: Any,
+    cwd: str | os.PathLike[str] | None,
+    dataset_cfg: dict[str, Any],
+    task_result: dict[str, Any],
+    idx: int,
+    implementation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resolved_path = _resolve_task_path(file_path, cwd)
+    metadata = _csv_metadata(resolved_path)
+    dataset_source = "existing" if task_result.get("skipped_existing_dataset") else "generated"
+    artifact = {
+        "artifact_id": f"{proposal_name}_dataset_{idx}",
+        "artifact_type": "dataset",
+        "dataset_id": f"{proposal_name}_{idx}",
+        "proposal_name": proposal_name,
+        "dataset_source": dataset_source,
+        "status": "ready" if metadata.get("exists") else "missing_file",
+        "file_path": str(resolved_path),
+        "dataset_path": str(resolved_path),
+        "task_file_path": str(file_path),
+        "dataset": dataset_cfg.get("dataset", ""),
+        "detector": (dataset_cfg.get("detector_names") or [None])[0],
+        "rows": metadata.get("rows"),
+        "columns": metadata.get("columns"),
+        "column_names": metadata.get("column_names", []),
+        "dataset_config": dataset_cfg,
+        "task_result": _json_safe(task_result),
+    }
+    if implementation is not None:
+        artifact["implementation"] = _implementation_summary(implementation)
+    return artifact
+
+
+def _expected_dataset_path(dataset_cfg: dict[str, Any]) -> Path:
+    output_dir = Path(str(dataset_cfg.get("dataset_output_dir") or ""))
+    file_out = dataset_cfg.get("file_out")
+    if not file_out:
+        return output_dir
+    return output_dir / str(file_out)
+
+
+def _should_overwrite_existing_dataset(dataset_cfg: dict[str, Any]) -> bool:
+    return bool(dataset_cfg.get("overwrite_existing_dataset", False))
 
 
 def _execution_cfg(profile: dict[str, Any]) -> dict[str, Any]:
