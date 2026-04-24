@@ -103,8 +103,9 @@ def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path)
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
 
     with patch("plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch.object(adapter, "_call_task", return_value={"file_paths": [str(csv_path)]}) as call_task:
-            delta = adapter.prepare_experiment(_profile(), state)
+        with patch("plugins.neuralsignal.adapter._write_incremental_state_snapshot") as write_snapshot:
+            with patch.object(adapter, "_call_task", return_value={"file_paths": [str(csv_path)]}) as call_task:
+                delta = adapter.prepare_experiment(_profile(), state)
 
     call_task.assert_called_once()
     assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_dataset"
@@ -119,6 +120,8 @@ def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path)
     assert artifact["columns"] == 2
     assert artifact["column_names"] == ["a", "b"]
     assert delta["datasets"] == [artifact]
+    write_snapshot.assert_called_once()
+    assert write_snapshot.call_args.args[0] == "prepare_experiment"
 
 
 def test_prepare_experiment_normalizes_dataset_task_failure(tmp_path):
@@ -126,11 +129,13 @@ def test_prepare_experiment_normalizes_dataset_task_failure(tmp_path):
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
 
     with patch("plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch.object(adapter, "_call_task", side_effect=RuntimeError("boom")):
-            delta = adapter.prepare_experiment(_profile(), state)
+        with patch("plugins.neuralsignal.adapter._write_incremental_state_snapshot") as write_snapshot:
+            with patch.object(adapter, "_call_task", side_effect=RuntimeError("boom")):
+                delta = adapter.prepare_experiment(_profile(), state)
 
     assert delta["experiment_artifacts"] == []
     assert any("activation_sparsity failed: boom" in error for error in delta["errors"])
+    write_snapshot.assert_called_once()
 
 
 def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
@@ -162,8 +167,9 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
     }
 
     with patch("plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch.object(adapter, "_call_task", return_value=task_result) as call_task:
-            delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
+        with patch("plugins.neuralsignal.adapter._write_incremental_state_snapshot") as write_snapshot:
+            with patch.object(adapter, "_call_task", return_value=task_result) as call_task:
+                delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
 
     call_task.assert_called_once()
     assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_s1_model"
@@ -181,6 +187,8 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
     assert delta["experiment_results"][0]["feature_importance"] == {"a": 0.8}
     assert delta["models"][0]["params"] == {"max_depth": 3}
     assert delta["models"][0]["experiment_id"] == delta["experiment_results"][0]["experiment_id"]
+    write_snapshot.assert_called_once()
+    assert write_snapshot.call_args.args[0] == "execute_experiment"
 
 
 def test_execute_experiment_records_not_ready_dataset_error():
@@ -191,11 +199,13 @@ def test_execute_experiment_records_not_ready_dataset_error():
         "proposal_name": "activation_sparsity",
     }
 
-    delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
+    with patch("plugins.neuralsignal.adapter._write_incremental_state_snapshot") as write_snapshot:
+        delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
 
     assert delta["experiment_results"] == []
     assert delta["models"] == []
     assert any("dataset artifact is not ready" in error for error in delta["errors"])
+    write_snapshot.assert_called_once()
 
 
 def test_task_timeout_prefers_stage_override_then_job_timeout(tmp_path):

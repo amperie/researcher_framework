@@ -138,6 +138,16 @@ class NeuralSignalPlugin(ResearchAdapter):
             except Exception as exc:
                 log.error("NeuralSignalPlugin.prepare_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
                 errors.append(f"prepare_experiment: {proposal_name} failed: {exc}")
+            finally:
+                _write_incremental_state_snapshot(
+                    "prepare_experiment",
+                    state,
+                    {
+                        "experiment_artifacts": artifacts,
+                        "datasets": datasets,
+                        "errors": errors,
+                    },
+                )
 
         return {
             "experiment_artifacts": artifacts,
@@ -162,9 +172,27 @@ class NeuralSignalPlugin(ResearchAdapter):
         for artifact in artifacts:
             proposal_name = artifact.get("proposal_name", "unknown")
             if artifact.get("artifact_type") != "dataset":
+                _write_incremental_state_snapshot(
+                    "execute_experiment",
+                    state,
+                    {
+                        "experiment_results": results,
+                        "models": models,
+                        "errors": errors,
+                    },
+                )
                 continue
             if artifact.get("status") != "ready":
                 errors.append(f"execute_experiment: {proposal_name} dataset artifact is not ready")
+                _write_incremental_state_snapshot(
+                    "execute_experiment",
+                    state,
+                    {
+                        "experiment_results": results,
+                        "models": models,
+                        "errors": errors,
+                    },
+                )
                 continue
 
             experiment_id = str(uuid4())
@@ -202,6 +230,16 @@ class NeuralSignalPlugin(ResearchAdapter):
             except Exception as exc:
                 log.error("NeuralSignalPlugin.execute_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
                 errors.append(f"execute_experiment: {proposal_name} failed: {exc}")
+            finally:
+                _write_incremental_state_snapshot(
+                    "execute_experiment",
+                    state,
+                    {
+                        "experiment_results": results,
+                        "models": models,
+                        "errors": errors,
+                    },
+                )
 
         return {
             "experiment_results": results,
@@ -704,6 +742,22 @@ def _task_timeout(profile: dict[str, Any], stage: str, cfg: Any) -> int:
     if execution.get("job_timeout_seconds"):
         return int(execution["job_timeout_seconds"])
     return int(cfg.experiment_timeout_seconds)
+
+
+def _write_incremental_state_snapshot(step_name: str, state: dict[str, Any], delta: dict[str, Any]) -> None:
+    merged = {**state, **delta}
+    serializable: dict[str, Any] = {}
+    for key, value in merged.items():
+        try:
+            json.dumps(value, default=str)
+        except Exception:
+            log.debug("Skipping non-serializable snapshot key %r", key)
+            continue
+        serializable[key] = value
+
+    out_path = Path("dev/state") / f"after_{step_name}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(serializable, indent=2, default=str), encoding="utf-8")
 
 
 def _has_dataset_artifact(artifacts: list[dict[str, Any]], proposal_name: str) -> bool:
