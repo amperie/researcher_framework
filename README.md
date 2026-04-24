@@ -4,6 +4,8 @@ A configuration-driven, plug-and-play agentic research pipeline built on LangGra
 
 Experiment execution is modular: the same adapter/job architecture can run experiments locally today and can be routed to a cluster runner such as Ray later without changing the graph or profile shape.
 
+![Architecture overview with async runner model](docs/architecture_async_runner.png)
+
 Current profiles:
 - `neuralsignal` - LLM internals probing and hallucination detection
 - `trading` - algorithmic trading strategy research and backtest automation scaffold
