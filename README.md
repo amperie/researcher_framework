@@ -2,6 +2,8 @@
 
 A configuration-driven, plug-and-play agentic research pipeline built on LangGraph. The system automates the full research loop — from literature review through implementation, validation, experimentation, and result storage — for any research domain described by a **profile YAML file**.
 
+Experiment execution is modular: the same adapter/job architecture can run experiments locally today and can be routed to a cluster runner such as Ray later without changing the graph or profile shape.
+
 Current profiles:
 - `neuralsignal` - LLM internals probing and hallucination detection
 - `trading` - algorithmic trading strategy research and backtest automation scaffold
@@ -17,7 +19,7 @@ Given a research direction like `"attention head specialization"`, the pipeline:
 3. Refines ideas for feasibility against available data and base class APIs
 4. Specifies concrete experiments with datasets, hyperparameters, and success criteria
 5. Writes implementation plans, then generates Python classes (always subclassing a declared base class)
-6. Validates the generated code: runs pytest, feeds failures back to the LLM for fixes (up to N retries)
+6. Validates the generated code with deterministic contracts and pytest, then optionally feeds failures back to the LLM for fixes (up to N retries)
 7. Submits or executes domain experiments through the profile plugin
 8. Evaluates results against configured thresholds and produces an analysis
 9. Persists everything to MLflow, ChromaDB, and MongoDB
@@ -107,7 +109,7 @@ A **profile** is a YAML file in `configs/profiles/` that fully describes a resea
 | `research.tools` | Dotted research tool functions, limits, and scoring thresholds |
 | `research.domain_context` | Injected into research collection/scoring prompts |
 | `base_classes` | Base class name, import path, and interface — injected into the code-gen prompt |
-| `validate` | Whether to auto-run tests, retry limit, test runner command |
+| `validate` | Whether to auto-run deterministic contract tests / pytest, retry limit, test runner command |
 | `datasets` / domain data config | Dataset or data-source definitions for the domain |
 | `experiment_adapter` | Dotted module path to the plugin that prepares and executes domain experiments |
 | `execution` | Optional async job execution settings: runner, parallelism, polling, timeouts |
@@ -127,7 +129,7 @@ Full reference: [`configs/profiles/neuralsignal.yaml`](configs/profiles/neuralsi
 | `propose_experiments` | Specify dataset, detector, hyperparameters, success criteria per idea |
 | `plan_implementation` | Write structured JSON plan per proposal (no code yet) |
 | `implement` | Generate Python class subclassing the declared base class |
-| `validate` | Generate pytest tests, auto-run, LLM-fix loop up to N retries |
+| `validate` | Run deterministic contract tests or generated pytest tests, auto-run, LLM-fix loop up to N retries |
 | `prepare_experiment` | Prepare domain artifacts via the plugin adapter |
 | `execute_experiment` | Execute the experiment via the plugin adapter |
 | `submit_experiment_jobs` | Submit long-running experiment jobs and return immediately |
@@ -224,6 +226,7 @@ Key rules:
 - Nodes never hardcode data source names — all via `profile['datasets']`
 - Nodes never instantiate LLM clients directly — always use `get_llm(step_name, profile)`
 - Generated code always subclasses a class in `profile['base_classes']`
+- LLM-generated Python is syntax-checked before it is written, and cached implementations are revalidated before reuse
 - Nodes return partial state dicts; never mutate state in place
 - Non-fatal errors go into `state['errors']`; pipeline continues
 - Long-running jobs go into `state['experiment_jobs']` and write durable files under `dev/experiments/<profile>/jobs/`
@@ -256,10 +259,11 @@ execution:
   job_timeout_seconds: 7200
 ```
 
-The only runner currently implemented is `local_process`. It launches detached
-Python workers using the same dotted task callables used by the synchronous path.
-The runner abstraction is intentionally small so future runners can plug in with
-the same `submit` / `check` behavior, for example Ray, Kubernetes, Slurm, or a
+The runner interface is intentionally small so the same graph can target
+different execution backends. The only runner currently implemented is
+`local_process`. It launches detached Python workers using the same dotted task
+callables used by the synchronous path. Additional runners can plug in with the
+same `submit` / `check` behavior, for example Ray, Kubernetes, Slurm, or a
 remote worker service.
 
 Each job is durable on disk:
@@ -299,13 +303,13 @@ The neuralsignal plugin generates `FeatureSetBase` subclasses and runs NeuralSig
 
 **Data flow:**
 1. `implement` generates a Python class → cached at `dev/experiments/neuralsignal/implementations/<ClassName>.py`
-2. `validate` runs deterministic contract tests and can auto-fix failures
+2. `validate` runs deterministic `FeatureSetBase` contract tests, rejects non-Python / prose responses, and can auto-fix failures
 3. `submit_experiment_jobs` submits NeuralSignal dataset-creation jobs
-4. `check_experiment_jobs` collects completed dataset CSVs into `experiment_artifacts`
+4. `check_experiment_jobs` collects completed dataset CSVs from `dev/experiments/neuralsignal/datasets/` into `experiment_artifacts`
 5. `check_experiment_jobs` can then submit S1 model-training jobs automatically
 6. later checks collect model metrics, params, and feature importance into `experiment_results` and `models`
 
-**Subprocess tasks**: Heavy NeuralSignal calls live in `plugins/neuralsignal/tasks.py`. Synchronous calls use `plugins/task_runner.py`; async jobs use `plugins/job_runner.py`, which invokes the same task callables and writes durable job files. `plugins/neuralsignal/bridge.py` remains as a compatibility wrapper for old `create_dataset` / `create_s1_model` commands.
+**Subprocess tasks**: Heavy NeuralSignal calls live in `plugins/neuralsignal/tasks.py`. Synchronous calls use `plugins/task_runner.py`; async jobs use `plugins/job_runner.py`, which invokes the same task callables and writes durable job files. `plugins/neuralsignal/bridge.py` remains as a generic compatibility wrapper around subprocess task execution.
 
 The async NeuralSignal task chain is:
 
@@ -326,11 +330,25 @@ The task wrapper merges the agent payload over NeuralSignal's packaged automatio
 defaults with `neuralsignal.automation.get_config()`, then injects the generated
 feature set via a real NeuralSignal `FeatureProcessor`.
 
+The current NeuralSignal integration also adds a few compatibility and safety layers:
+- generated feature sets are wrapped so common real scan-shape variants still work when code assumes `outputs[0][layer_id]`
+- empty feature outputs fail loudly instead of silently producing target-only CSVs
+- balanced dataset pulls are supported through profile config (`balanced_target`)
+- long-running Mongo scan iteration uses `no_cursor_timeout=True` to avoid `CursorNotFound` during slow dataset builds
+- model tasks run from the dataset directory so NeuralSignal's current `file_out` handling resolves the real CSV correctly
+
 Configure the neuralsignal paths in `.env`:
 ```ini
 NEURALSIGNAL_PYTHON=uv run python          # or: /path/to/neuralsignal/venv/python
 NEURALSIGNAL_SRC_PATH=../neuralsignal/neuralsignal
 ```
+
+The `neuralsignal` profile prompt and base-class docs also describe the real scan
+shape used by current datasets:
+- `outputs: dict[str, Tensor]` — activations coming out of each layer
+- `inputs: dict[str, Tensor]` — activations going into each layer
+- `layer_order: list[str]` — ordered layer ids
+- `layer_id_to_name: dict[str, str]` — layer id to layer name mapping
 
 ---
 
@@ -360,6 +378,9 @@ uv run pytest
 
 Generated validation tests are written to `dev/experiments/<profile>/tests/` and are run automatically during the pipeline.
 
+Pytest is configured to keep its cache and temp files under `.tmp/pytest/` instead
+of scattering `.pytest_*` directories across the project root.
+
 ---
 
 ## Dev Artifacts
@@ -374,7 +395,7 @@ dev/
 ├── experiments/
 │   └── <profile>/
 │       ├── implementations/  # cached LLM-generated subclass scripts
-│       ├── datasets/         # created feature CSVs
+│       ├── datasets/         # created feature CSVs (.csv)
 │       └── tests/            # generated pytest files
 └── papers/                 # arxiv digest cache
 ```
