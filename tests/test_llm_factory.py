@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from llm.factory import get_llm
+from core.llm.factory import get_llm
 
 
 # ---------------------------------------------------------------------------

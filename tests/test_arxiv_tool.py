@@ -1,15 +1,10 @@
 """Tests for tools/arxiv_tool.py."""
 from __future__ import annotations
 
-import json
 import urllib.error
-from io import BytesIO
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from tools.arxiv_tool import (
+from core.tools.arxiv_tool import (
     _html_to_text,
     _safe_id,
     download_paper_text,

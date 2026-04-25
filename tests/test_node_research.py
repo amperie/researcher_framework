@@ -3,9 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from graph.nodes.research import research_node
+from core.graph.nodes.research import research_node
 
 
 # ---------------------------------------------------------------------------

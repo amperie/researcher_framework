@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from plugins.neuralsignal.adapter import NeuralSignalPlugin
+from core.plugins.neuralsignal import NeuralSignalPlugin
 
 
 def _cfg(tmp_path):

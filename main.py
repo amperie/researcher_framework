@@ -9,10 +9,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 
-from utils.logger import setup_logging, get_logger
+from core.utils import setup_logging, get_logger
 
 setup_logging()
 log = get_logger(__name__)
@@ -52,7 +51,7 @@ def main() -> None:
     args = parse_args()
 
     if args.list_profiles:
-        from utils.profile_loader import list_profiles
+        from core.utils.profile_loader import list_profiles
         profiles = list_profiles()
         if profiles:
             print("Available profiles:")
@@ -65,7 +64,7 @@ def main() -> None:
     # Resolve profile
     profile_name = args.profile
     if not profile_name:
-        from utils.profile_loader import list_profiles
+        from core.utils.profile_loader import list_profiles
         available = list_profiles()
         if not available:
             print("Error: no profiles found in configs/profiles/", file=sys.stderr)
@@ -77,7 +76,7 @@ def main() -> None:
             print(f"Available profiles: {available}")
             profile_name = input("Profile: ").strip()
 
-    from utils.profile_loader import load_profile
+    from core.utils.profile_loader import load_profile
     try:
         profile = load_profile(profile_name)
     except (FileNotFoundError, ValueError) as exc:
@@ -96,7 +95,7 @@ def main() -> None:
 
     log.info("Starting pipeline — profile=%r, direction=%r", profile_name, direction)
 
-    from graph.builder import build_graph
+    from core.graph.builder import build_graph
     graph = build_graph(profile)
 
     initial_state = {

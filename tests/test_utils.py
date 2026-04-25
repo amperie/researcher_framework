@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from utils.utils import (
+from core.utils import (
     extract_json_array,
     extract_json_object,
     fmt_value,

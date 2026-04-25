@@ -1,13 +1,12 @@
 """Tests for plugins/base.py (ResearchAdapter Protocol) and plugins/loader.py."""
 from __future__ import annotations
 
-from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from plugins.base import ResearchAdapter
-from plugins.loader import adapter_has, load_adapter
+from core.plugins import ResearchAdapter
+from core.plugins.loader import adapter_has, load_adapter
 
 
 # ---------------------------------------------------------------------------

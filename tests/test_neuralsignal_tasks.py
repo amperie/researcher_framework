@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from types import ModuleType
 
-from plugins.neuralsignal import tasks
+from core.plugins.neuralsignal import tasks
 
 
 def test_automation_config_merges_payload_over_neuralsignal_defaults(monkeypatch):

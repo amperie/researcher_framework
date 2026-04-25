@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
-import pytest
-
-from tools.chroma_tool import ChromaStore
+from core.tools import ChromaStore
 
 
 # ---------------------------------------------------------------------------

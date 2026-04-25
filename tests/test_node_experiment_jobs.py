@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from graph.nodes.check_experiment_jobs import check_experiment_jobs_node
-from graph.nodes.submit_experiment_jobs import submit_experiment_jobs_node
+from core.graph.nodes.check_experiment_jobs import check_experiment_jobs_node
+from core.graph.nodes.submit_experiment_jobs import submit_experiment_jobs_node
 
 
 PROFILE = {"name": "test", "experiment_adapter": "plugins.test_adapter"}

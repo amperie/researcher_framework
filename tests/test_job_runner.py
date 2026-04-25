@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from plugins.job_runner import LocalProcessRunner, run_job
+from core.plugins import LocalProcessRunner, run_job
 
 
 def echo_task(payload):

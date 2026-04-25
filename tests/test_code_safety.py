@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from graph.nodes.code_safety import (
+from core.graph.nodes.code_safety import (
     CodeSafetyError,
     extract_python_source,
     validate_python_source,

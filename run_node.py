@@ -13,13 +13,13 @@ import json
 import sys
 from pathlib import Path
 
-from utils.logger import setup_logging, get_logger
-from utils import fmt_value
+from core.utils import setup_logging, get_logger
+from core.utils import fmt_value
 
 setup_logging()
 log = get_logger(__name__)
 
-from graph.nodes import STEP_REGISTRY  # noqa: E402
+from core.graph.nodes import STEP_REGISTRY  # noqa: E402
 
 _SEP = "-" * 60
 
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
 
 def _load_profile(profile_name: str | None, state: dict) -> dict:
     """Load the profile by name, falling back to state['profile_name'], then first available."""
-    from utils.profile_loader import load_profile, list_profiles
+    from core.utils.profile_loader import load_profile, list_profiles
     name = profile_name or state.get("profile_name")
     if not name:
         available = list_profiles()

@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import patch
 
 import pytest
 import yaml
 
-from utils.profile_loader import (
+from core.utils.profile_loader import (
     get_primary_dataset,
     get_prompt,
     get_step_datasets,

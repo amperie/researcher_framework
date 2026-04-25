@@ -1,12 +1,10 @@
 """Tests for graph/builder.py — build_graph."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
-from graph.builder import build_graph, _wrap_node
-from graph.nodes import STEP_REGISTRY
+from core.graph.builder import build_graph, _wrap_node
+from core.graph.nodes import STEP_REGISTRY
 
 
 # ---------------------------------------------------------------------------
