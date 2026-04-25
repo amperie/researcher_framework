@@ -131,6 +131,23 @@ class TestStoreResultsMLflow:
         assert "name" not in logged_metrics
         assert "flag" not in logged_metrics
 
+    def test_reuses_existing_mlflow_run_id(self):
+        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+            with patch("mlflow.set_tracking_uri") as set_tracking_uri:
+                with patch("mlflow.set_experiment") as set_experiment:
+                    with patch("mlflow.start_run") as start_run:
+                        with patch("graph.nodes.store_results.ChromaStore"):
+                            with patch("pymongo.MongoClient"):
+                                result = store_results_node(
+                                    {"experiment_results": [{**RESULT, "mlflow_run_id": "run-existing"}]},
+                                    PROFILE,
+                                )
+
+        assert "exp-001" in result["stored_result_ids"]
+        set_tracking_uri.assert_not_called()
+        set_experiment.assert_not_called()
+        start_run.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # ChromaDB storage

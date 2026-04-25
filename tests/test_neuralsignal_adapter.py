@@ -220,11 +220,22 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
         "params": {"max_depth": 3},
         "feature_importance": {"a": 0.8},
     }
+    mock_run = MagicMock()
+    mock_run.__enter__ = lambda s: s
+    mock_run.__exit__ = MagicMock(return_value=False)
+    mock_run.info.run_id = "mlflow-run-123"
 
     with patch("plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
         with patch("plugins.neuralsignal.adapter._write_incremental_state_snapshot") as write_snapshot:
-            with patch.object(adapter, "_call_task", return_value=task_result) as call_task:
-                delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
+            with patch("mlflow.set_tracking_uri"):
+                with patch("mlflow.set_experiment"):
+                    with patch("mlflow.start_run", return_value=mock_run):
+                        with patch("mlflow.log_params"):
+                            with patch("mlflow.log_metrics"):
+                                with patch("mlflow.set_tags"):
+                                    with patch("mlflow.log_dict"):
+                                        with patch.object(adapter, "_call_task", return_value=task_result) as call_task:
+                                            delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
 
     call_task.assert_called_once()
     assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_s1_model"
@@ -240,10 +251,49 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
     assert delta["errors"] == []
     assert delta["experiment_results"][0]["metrics"]["test_auc"] == 0.72
     assert delta["experiment_results"][0]["feature_importance"] == {"a": 0.8}
+    assert delta["experiment_results"][0]["mlflow_run_id"] == "mlflow-run-123"
     assert delta["models"][0]["params"] == {"max_depth": 3}
+    assert delta["models"][0]["mlflow_run_id"] == "mlflow-run-123"
     assert delta["models"][0]["experiment_id"] == delta["experiment_results"][0]["experiment_id"]
     write_snapshot.assert_called_once()
     assert write_snapshot.call_args.args[0] == "execute_experiment"
+
+
+def test_execute_experiment_continues_when_mlflow_logging_fails(tmp_path):
+    adapter = NeuralSignalPlugin()
+    artifact = {
+        "artifact_id": "activation_sparsity_dataset_0",
+        "artifact_type": "dataset",
+        "status": "ready",
+        "proposal_name": "activation_sparsity",
+        "dataset_path": str(tmp_path / "features.csv"),
+        "dataset": "HaluBench",
+        "detector": "hallucination",
+        "dataset_config": {
+            "dataset": "HaluBench",
+            "application_name": "HaluBench",
+            "sub_application_name": "GranularAttention",
+            "detector_names": ["hallucination"],
+            "zone_size": 512,
+            "feature_set_class_path": str(tmp_path / "ActivationSparsity.py"),
+            "feature_set_class_name": "ActivationSparsity",
+        },
+    }
+    task_result = {
+        "metrics": {"test_auc": 0.72},
+        "params": {"max_depth": 3},
+        "feature_importance": {"a": 0.8},
+    }
+
+    with patch("plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("plugins.neuralsignal.adapter._write_incremental_state_snapshot"):
+            with patch("mlflow.set_tracking_uri", side_effect=Exception("mlflow down")):
+                with patch.object(adapter, "_call_task", return_value=task_result):
+                    delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
+
+    assert delta["errors"] == []
+    assert delta["experiment_results"][0]["metrics"]["test_auc"] == 0.72
+    assert "mlflow_run_id" not in delta["experiment_results"][0]
 
 
 def test_execute_experiment_records_not_ready_dataset_error():

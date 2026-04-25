@@ -1,4 +1,4 @@
-"""Store results step — persist experiment records to MLflow, ChromaDB, and MongoDB.
+"""Store results step - persist experiment records to MLflow, ChromaDB, and MongoDB.
 
 Reads:
     state['experiment_results']
@@ -54,31 +54,36 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
         inserted_at = datetime.now(timezone.utc).isoformat()
 
         # --- MLflow ---
-        mlflow_run_id = ""
-        try:
-            mlflow.set_tracking_uri(cfg.mlflow_uri)
-            mlflow.set_experiment(mlflow_experiment)
-            with mlflow.start_run(run_name=f"{proposal_name}_{experiment_id[:8]}") as run:
-                mlflow.log_params({
-                    "proposal_name": proposal_name,
-                    "research_direction": direction[:250],
-                })
-                numeric = {k: v for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
-                if numeric:
-                    mlflow.log_metrics(numeric)
-                model = model_by_exp.get(experiment_id)
-                if model and model.get("metrics"):
-                    mlflow.log_metrics({f"model_{k}": v for k, v in model["metrics"].items() if isinstance(v, (int, float))})
-                mlflow.set_tags({
-                    "experiment_id": experiment_id,
-                    "profile": profile.get("name", ""),
-                    "source": "researcher_pipeline",
-                })
-                mlflow_run_id = run.info.run_id
-            log.info("store_results_node | MLflow run logged — %s", mlflow_run_id)
-        except Exception as exc:
-            log.warning("store_results_node | MLflow failed: %s", exc)
-            errors.append(f"store_results: MLflow failed for {proposal_name}: {exc}")
+        mlflow_run_id = result.get("mlflow_run_id") or ""
+        if mlflow_run_id:
+            log.info("store_results_node | Reusing existing MLflow run - %s", mlflow_run_id)
+        else:
+            try:
+                mlflow.set_tracking_uri(cfg.mlflow_uri)
+                mlflow.set_experiment(mlflow_experiment)
+                with mlflow.start_run(run_name=f"{proposal_name}_{experiment_id[:8]}") as run:
+                    mlflow.log_params({
+                        "proposal_name": proposal_name,
+                        "research_direction": direction[:250],
+                    })
+                    numeric = {k: v for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+                    if numeric:
+                        mlflow.log_metrics(numeric)
+                    model = model_by_exp.get(experiment_id)
+                    if model and model.get("metrics"):
+                        mlflow.log_metrics(
+                            {f"model_{k}": v for k, v in model["metrics"].items() if isinstance(v, (int, float))}
+                        )
+                    mlflow.set_tags({
+                        "experiment_id": experiment_id,
+                        "profile": profile.get("name", ""),
+                        "source": "researcher_pipeline",
+                    })
+                    mlflow_run_id = run.info.run_id
+                log.info("store_results_node | MLflow run logged - %s", mlflow_run_id)
+            except Exception as exc:
+                log.warning("store_results_node | MLflow failed: %s", exc)
+                errors.append(f"store_results: MLflow failed for {proposal_name}: {exc}")
 
         # --- ChromaDB ---
         chroma_id = experiment_id
@@ -100,7 +105,7 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
                 **{k: float(v) for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
             }
             store.upsert(chroma_id, document, metadata)
-            log.info("store_results_node | ChromaDB upsert — %s", chroma_id)
+            log.info("store_results_node | ChromaDB upsert - %s", chroma_id)
         except Exception as exc:
             log.warning("store_results_node | ChromaDB failed: %s", exc)
             errors.append(f"store_results: ChromaDB failed for {proposal_name}: {exc}")
@@ -121,7 +126,7 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
             }
             client[mongo_db]["experiments"].insert_one(doc)
             client.close()
-            log.info("store_results_node | MongoDB insert — %s", experiment_id)
+            log.info("store_results_node | MongoDB insert - %s", experiment_id)
         except Exception as exc:
             log.warning("store_results_node | MongoDB failed: %s", exc)
             errors.append(f"store_results: MongoDB failed for {proposal_name}: {exc}")

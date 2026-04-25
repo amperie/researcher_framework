@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import mlflow
+
 from configs.config import get_config
 from plugins.base import ResearchAdapter
 from plugins.job_runner import TERMINAL_STATUSES, get_runner
@@ -221,8 +223,21 @@ class NeuralSignalPlugin(ResearchAdapter):
                     "feature_importance": feature_importance,
                     "task_result": _json_safe(task_result),
                 }
+                mlflow_run_id = _log_result_to_mlflow(
+                    profile=profile,
+                    state=state,
+                    artifact=artifact,
+                    experiment_id=experiment_id,
+                    proposal_name=proposal_name,
+                    metrics=metrics,
+                    params=params,
+                    feature_importance=feature_importance,
+                    model=model,
+                )
+                if mlflow_run_id:
+                    model["mlflow_run_id"] = mlflow_run_id
                 models.append(model)
-                results.append({
+                result = {
                     "experiment_id": experiment_id,
                     "proposal_name": proposal_name,
                     "metrics": metrics,
@@ -230,7 +245,10 @@ class NeuralSignalPlugin(ResearchAdapter):
                     "params": params,
                     "artifact": _serializable_artifact_summary(artifact),
                     "model": model,
-                })
+                }
+                if mlflow_run_id:
+                    result["mlflow_run_id"] = mlflow_run_id
+                results.append(result)
             except Exception as exc:
                 log.error("NeuralSignalPlugin.execute_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
                 errors.append(f"execute_experiment: {proposal_name} failed: {exc}")
@@ -341,6 +359,20 @@ class NeuralSignalPlugin(ResearchAdapter):
                         datasets.extend(new_artifacts)
                     elif checked.get("stage") == "model":
                         experiment_result, model = self._model_result_from_job(checked, result, artifacts)
+                        mlflow_run_id = _log_result_to_mlflow(
+                            profile=profile,
+                            state=state,
+                            artifact=experiment_result.get("artifact") or {},
+                            experiment_id=experiment_result.get("experiment_id", ""),
+                            proposal_name=experiment_result.get("proposal_name", "unknown"),
+                            metrics=experiment_result.get("metrics") or {},
+                            params=experiment_result.get("params") or {},
+                            feature_importance=experiment_result.get("feature_importance") or {},
+                            model=model,
+                        )
+                        if mlflow_run_id:
+                            model["mlflow_run_id"] = mlflow_run_id
+                            experiment_result["mlflow_run_id"] = mlflow_run_id
                         results.append(experiment_result)
                         models.append(model)
                     checked["collected"] = True
@@ -759,6 +791,71 @@ def _dataset_artifact(
     if implementation is not None:
         artifact["implementation"] = _implementation_summary(implementation)
     return artifact
+
+
+def _log_result_to_mlflow(
+    *,
+    profile: dict[str, Any],
+    state: dict[str, Any],
+    artifact: dict[str, Any],
+    experiment_id: str,
+    proposal_name: str,
+    metrics: dict[str, Any],
+    params: dict[str, Any],
+    feature_importance: dict[str, Any],
+    model: dict[str, Any],
+) -> str:
+    cfg = get_config()
+    storage_cfg = profile.get("storage") or {}
+    experiment_name = storage_cfg.get("mlflow_experiment", "researcher_experiments")
+    direction = str(state.get("research_direction", ""))
+    proposal = next(
+        (item for item in (state.get("proposals") or []) if item.get("name") == proposal_name),
+        {},
+    )
+
+    try:
+        mlflow.set_tracking_uri(cfg.mlflow_uri)
+        mlflow.set_experiment(experiment_name)
+        with mlflow.start_run(run_name=f"{proposal_name}_{experiment_id[:8]}") as run:
+            mlflow.log_params({
+                "proposal_name": proposal_name,
+                "profile": profile.get("name", ""),
+                "research_direction": direction[:250],
+                "dataset": artifact.get("dataset", ""),
+                "detector": artifact.get("detector", ""),
+                **{k: v for k, v in params.items() if isinstance(v, (str, int, float)) and not isinstance(v, bool)},
+            })
+            numeric_metrics = {
+                k: float(v)
+                for k, v in metrics.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }
+            if numeric_metrics:
+                mlflow.log_metrics(numeric_metrics)
+            model_metrics = {
+                f"model_{k}": float(v)
+                for k, v in (model.get("metrics") or {}).items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }
+            if model_metrics:
+                mlflow.log_metrics(model_metrics)
+            mlflow.set_tags({
+                "experiment_id": experiment_id,
+                "profile": profile.get("name", ""),
+                "source": "neuralsignal_execute_experiment",
+                "proposal_name": proposal_name,
+            })
+            if feature_importance:
+                mlflow.log_dict(_json_safe(feature_importance), "feature_importance.json")
+            if params:
+                mlflow.log_dict(_json_safe(params), "model_params.json")
+            if proposal:
+                mlflow.log_dict(_json_safe(proposal), "proposal.json")
+            return run.info.run_id
+    except Exception as exc:
+        log.warning("NeuralSignalPlugin | MLflow logging failed for %s: %s", proposal_name, exc)
+        return ""
 
 
 def _expected_dataset_path(dataset_cfg: dict[str, Any]) -> Path:
