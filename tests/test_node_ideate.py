@@ -31,7 +31,7 @@ def _make_llm(content: str) -> MagicMock:
 class TestIdeateNodeHappy:
     def test_returns_ideas_list(self):
         llm = _make_llm(IDEAS_JSON)
-        with patch("graph.nodes.ideate.get_llm", return_value=llm):
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
             result = ideate_node(
                 {"research_direction": "test", "research_summary": "Summary."},
                 PROFILE,
@@ -41,7 +41,7 @@ class TestIdeateNodeHappy:
 
     def test_ideas_have_expected_keys(self):
         llm = _make_llm(IDEAS_JSON)
-        with patch("graph.nodes.ideate.get_llm", return_value=llm):
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
             result = ideate_node(
                 {"research_direction": "test", "research_summary": "Summary."},
                 PROFILE,
@@ -55,7 +55,7 @@ class TestIdeateNodeHappy:
             "research_summary": "Summary.",
             "paper_digests": [{"title": "Paper A", "digest": "Detailed digest content."}],
         }
-        with patch("graph.nodes.ideate.get_llm", return_value=llm):
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
             result = ideate_node(state, PROFILE)
 
         # Verify digest content was included in the LLM call
@@ -72,7 +72,7 @@ class TestIdeateNodeHappy:
                 {"title": "Paper B", "abstract": "Abstract text.", "relevance_score": 8}
             ],
         }
-        with patch("graph.nodes.ideate.get_llm", return_value=llm):
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
             result = ideate_node(state, PROFILE)
 
         human_message = llm.invoke.call_args[0][0][1]
@@ -88,7 +88,7 @@ class TestIdeateNodeHappy:
                  "summary": "Art summary.", "relevance_score": 7, "usefulness": "high", "risks": "low"}
             ],
         }
-        with patch("graph.nodes.ideate.get_llm", return_value=llm):
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
             result = ideate_node(state, PROFILE)
 
         human_message = llm.invoke.call_args[0][0][1]
@@ -96,7 +96,7 @@ class TestIdeateNodeHappy:
 
     def test_empty_state_still_calls_llm(self):
         llm = _make_llm(IDEAS_JSON)
-        with patch("graph.nodes.ideate.get_llm", return_value=llm):
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
             result = ideate_node({}, PROFILE)
 
         llm.invoke.assert_called_once()
@@ -111,7 +111,7 @@ class TestIdeateNodeErrors:
     def test_llm_failure_returns_empty_ideas(self):
         llm = MagicMock()
         llm.invoke.side_effect = Exception("LLM timeout")
-        with patch("graph.nodes.ideate.get_llm", return_value=llm):
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
             result = ideate_node(
                 {"research_direction": "test"},
                 PROFILE,
@@ -121,7 +121,7 @@ class TestIdeateNodeErrors:
 
     def test_bad_json_response_returns_empty_ideas(self):
         llm = _make_llm("This is not JSON at all.")
-        with patch("graph.nodes.ideate.get_llm", return_value=llm):
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
             result = ideate_node(
                 {"research_direction": "test"},
                 PROFILE,
@@ -132,9 +132,10 @@ class TestIdeateNodeErrors:
     def test_existing_errors_preserved(self):
         llm = MagicMock()
         llm.invoke.side_effect = Exception("fail")
-        with patch("graph.nodes.ideate.get_llm", return_value=llm):
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
             result = ideate_node(
                 {"research_direction": "test", "errors": ["previous error"]},
                 PROFILE,
             )
         assert "previous error" in result["errors"]
+

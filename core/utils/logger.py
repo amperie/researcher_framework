@@ -4,13 +4,13 @@ Usage
 -----
 In main.py (once, at startup)::
 
-    from utils.logger import setup_logging
+    from core.utils.logger import setup_logging
     setup_logging()                           # reads configs/config.yaml
     setup_logging("path/to/config.yaml")      # explicit path
 
 In every other module::
 
-    from utils.logger import get_logger
+    from core.utils.logger import get_logger
     log = get_logger(__name__)
 """
 from __future__ import annotations

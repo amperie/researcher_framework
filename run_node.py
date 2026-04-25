@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from core.utils import setup_logging, get_logger
+from core.utils.logger import setup_logging, get_logger
 from core.utils import fmt_value
 
 setup_logging()
@@ -110,6 +110,9 @@ def _run_once(step_name: str, args: argparse.Namespace) -> None:
         print(f"  {key:<30} -> {fmt_value(val)}")
         if isinstance(val, str) and len(val) < 300:
             for line in val.splitlines()[:5]:
+                print(f"    {line}")
+        elif isinstance(val, list) and val and isinstance(val[0], str):
+            for line in val[:10]:
                 print(f"    {line}")
         elif isinstance(val, list) and val and isinstance(val[0], dict):
             for item in val[:2]:

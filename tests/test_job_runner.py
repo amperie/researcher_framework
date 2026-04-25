@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from core.plugins import LocalProcessRunner, run_job
+from core.plugins.job_runner import LocalProcessRunner, run_job
 
 
 def echo_task(payload):
@@ -49,7 +49,7 @@ def test_local_process_submit_writes_job_files_and_launches_module(tmp_path):
         "proposal_name": "p1",
     }
 
-    with patch("plugins.job_runner.subprocess.Popen") as popen:
+    with patch("core.plugins.job_runner.subprocess.Popen") as popen:
         job = runner.submit(spec)
 
     job_dir = Path(spec["job_dir"])
@@ -61,3 +61,4 @@ def test_local_process_submit_writes_job_files_and_launches_module(tmp_path):
     assert cmd[-1] == str(job_dir.resolve())
     assert popen.call_args.kwargs["cwd"] == str(tmp_path)
     assert popen.call_args.kwargs["env"]["PYTHONPATH"] == "x"
+

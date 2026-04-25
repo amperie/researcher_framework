@@ -89,8 +89,8 @@ class TestValidateNodeMissingScript:
         impls = [{"class_name": "TestClass", "script_path": ""}]
         cfg = SimpleNamespace(validate_timeout_seconds=30)
 
-        with patch("graph.nodes.validate.get_llm"):
-            with patch("graph.nodes.validate.get_config", return_value=cfg):
+        with patch("core.graph.nodes.validate.get_llm"):
+            with patch("core.graph.nodes.validate.get_config", return_value=cfg):
                 with patch("pathlib.Path.mkdir"):
                     result = validate_node(
                         {"implementations": impls},
@@ -104,8 +104,8 @@ class TestValidateNodeMissingScript:
         impls = [{"class_name": "TestClass", "script_path": "/nonexistent/path.py"}]
         cfg = SimpleNamespace(validate_timeout_seconds=30)
 
-        with patch("graph.nodes.validate.get_llm"):
-            with patch("graph.nodes.validate.get_config", return_value=cfg):
+        with patch("core.graph.nodes.validate.get_llm"):
+            with patch("core.graph.nodes.validate.get_config", return_value=cfg):
                 with patch("pathlib.Path.mkdir"):
                     result = validate_node(
                         {"implementations": impls},
@@ -150,8 +150,8 @@ class TestValidateNodePass:
         profile = self._profile(auto_run=False)
         profile["validate"]["test_output_dir"] = str(test_output_dir)
 
-        with patch("graph.nodes.validate.get_llm", return_value=mock_llm):
-            with patch("graph.nodes.validate.get_config", return_value=cfg):
+        with patch("core.graph.nodes.validate.get_llm", return_value=mock_llm):
+            with patch("core.graph.nodes.validate.get_config", return_value=cfg):
                 result = validate_node(
                     {"implementations": impls},
                     profile,
@@ -175,9 +175,9 @@ class TestValidateNodePass:
         profile = self._profile()
         profile["validate"]["test_output_dir"] = str(test_output_dir)
 
-        with patch("graph.nodes.validate.get_llm", return_value=mock_llm):
-            with patch("graph.nodes.validate.get_config", return_value=cfg):
-                with patch("graph.nodes.validate._run_tests",
+        with patch("core.graph.nodes.validate.get_llm", return_value=mock_llm):
+            with patch("core.graph.nodes.validate.get_config", return_value=cfg):
+                with patch("core.graph.nodes.validate._run_tests",
                            return_value="1 passed"):
                     result = validate_node(
                         {"implementations": impls},
@@ -201,8 +201,8 @@ class TestValidateNodePass:
         profile = self._profile()
         profile["validate"]["test_output_dir"] = str(test_output_dir)
 
-        with patch("graph.nodes.validate.get_llm", return_value=mock_llm):
-            with patch("graph.nodes.validate.get_config", return_value=cfg):
+        with patch("core.graph.nodes.validate.get_llm", return_value=mock_llm):
+            with patch("core.graph.nodes.validate.get_config", return_value=cfg):
                 result = validate_node(
                     {"implementations": impls},
                     profile,
@@ -253,9 +253,9 @@ class TestValidateNodeFixRetry:
         # First run fails, second run passes
         test_outputs = iter(["1 failed", "1 passed"])
 
-        with patch("graph.nodes.validate.get_llm", return_value=mock_llm):
-            with patch("graph.nodes.validate.get_config", return_value=cfg):
-                with patch("graph.nodes.validate._run_tests",
+        with patch("core.graph.nodes.validate.get_llm", return_value=mock_llm):
+            with patch("core.graph.nodes.validate.get_config", return_value=cfg):
+                with patch("core.graph.nodes.validate._run_tests",
                            side_effect=lambda *a, **kw: next(test_outputs)):
                     result = validate_node(
                         {"implementations": impls},
@@ -284,9 +284,9 @@ class TestValidateNodeFixRetry:
         profile["validate"]["test_output_dir"] = str(test_output_dir)
 
         # Always fails
-        with patch("graph.nodes.validate.get_llm", return_value=mock_llm):
-            with patch("graph.nodes.validate.get_config", return_value=cfg):
-                with patch("graph.nodes.validate._run_tests",
+        with patch("core.graph.nodes.validate.get_llm", return_value=mock_llm):
+            with patch("core.graph.nodes.validate.get_config", return_value=cfg):
+                with patch("core.graph.nodes.validate._run_tests",
                            return_value="1 failed"):
                     result = validate_node(
                         {"implementations": impls},
@@ -314,9 +314,9 @@ class TestValidateNodeFixRetry:
         profile = self._profile(max_retries=1)
         profile["validate"]["test_output_dir"] = str(test_output_dir)
 
-        with patch("graph.nodes.validate.get_llm", return_value=mock_llm):
-            with patch("graph.nodes.validate.get_config", return_value=cfg):
-                with patch("graph.nodes.validate._run_tests", return_value="1 failed"):
+        with patch("core.graph.nodes.validate.get_llm", return_value=mock_llm):
+            with patch("core.graph.nodes.validate.get_config", return_value=cfg):
+                with patch("core.graph.nodes.validate._run_tests", return_value="1 failed"):
                     result = validate_node(
                         {"implementations": impls},
                         profile,
@@ -325,3 +325,4 @@ class TestValidateNodeFixRetry:
         assert script.read_text(encoding="utf-8") == original_code
         assert result["validation_results"][0]["passed"] is False
         assert "Fix response rejected" in result["validation_results"][0]["test_output"]
+

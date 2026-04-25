@@ -147,6 +147,7 @@ def test_create_s1_model_uses_public_automation_api_and_normalizes_best_model(mo
     assert result["metrics"] == {"test_auc": 0.77}
     assert result["params"] == {"auc": 0.77}
     assert result["feature_importance"] == {"f": 0.77}
+    assert result["artifacts"] == {"feature_importance": {"f": 0.77}}
 
 
 def test_enable_mongo_no_cursor_timeout_patches_query(monkeypatch):
@@ -195,6 +196,7 @@ def test_create_s1_model_supports_s1model_config_shape(monkeypatch):
     assert result["metrics"] == {"test_auc": 0.77}
     assert result["params"] == {"auc": 0.77}
     assert result["feature_importance"] == {"f": 0.77}
+    assert result["artifacts"] == {"feature_importance": {"f": 0.77}}
 
 
 def test_inject_feature_processor_wraps_structural_class_and_restores_real_base(tmp_path, monkeypatch):

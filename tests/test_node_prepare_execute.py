@@ -17,7 +17,7 @@ from core.graph.nodes.execute_experiment import execute_experiment_node
 
 PROFILE = {
     "name": "test",
-    "experiment_adapter": "plugins.test_adapter",
+    "experiment_adapter": "core.plugins.test_adapter",
 }
 
 PROPOSAL = {"name": "prop1", "description": "Test proposal"}
@@ -74,7 +74,7 @@ class TestPrepareExperimentAdapterLoad:
         assert any("adapter load failed" in e for e in result["errors"])
 
     def test_import_error_returns_error(self):
-        with patch("graph.nodes.prepare_experiment.load_adapter",
+        with patch("core.graph.nodes.prepare_experiment.load_adapter",
                    side_effect=ImportError("no module")):
             result = prepare_experiment_node(
                 {"proposals": [PROPOSAL]},
@@ -94,7 +94,7 @@ class TestPrepareExperimentNewApi:
         adapter = MagicMock()
         adapter.prepare_experiment.return_value = delta
 
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node(
                 {"proposals": [PROPOSAL]},
                 PROFILE,
@@ -107,7 +107,7 @@ class TestPrepareExperimentNewApi:
         adapter = MagicMock()
         adapter.prepare_experiment.return_value = None
 
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert result["experiment_artifacts"] == []
@@ -116,7 +116,7 @@ class TestPrepareExperimentNewApi:
         adapter = MagicMock()
         adapter.prepare_experiment.side_effect = Exception("adapter crashed")
 
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert result["experiment_artifacts"] == []
@@ -129,7 +129,7 @@ class TestPrepareExperimentNewApi:
         adapter = MagicMock()
         adapter.prepare_experiment.return_value = delta
 
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert "datasets" in result
@@ -142,7 +142,7 @@ class TestPrepareExperimentNewApi:
 class TestPrepareExperimentLegacy:
     def test_no_proposals_returns_empty(self):
         adapter = _spec_adapter("create_dataset")
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node({}, PROFILE)
         assert result["experiment_artifacts"] == []
 
@@ -151,7 +151,7 @@ class TestPrepareExperimentLegacy:
         adapter = _spec_adapter("create_dataset")
         adapter.create_dataset.return_value = artifact
 
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node(
                 {"proposals": [PROPOSAL], "implementations": [IMPL]},
                 PROFILE,
@@ -164,7 +164,7 @@ class TestPrepareExperimentLegacy:
         adapter = _spec_adapter("create_dataset")
         adapter.create_dataset.return_value = None
 
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert result["experiment_artifacts"] == []
@@ -174,7 +174,7 @@ class TestPrepareExperimentLegacy:
         adapter = _spec_adapter("create_dataset")
         adapter.create_dataset.side_effect = Exception("create_dataset crashed")
 
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert result["experiment_artifacts"] == []
@@ -191,7 +191,7 @@ class TestPrepareExperimentLegacy:
             {"artifact_id": "a2", "proposal_name": "p2"},
         ]
 
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node({"proposals": proposals}, PROFILE)
 
         assert len(result["experiment_artifacts"]) == 2
@@ -200,7 +200,7 @@ class TestPrepareExperimentLegacy:
         """Adapter with no prepare_experiment or create_dataset creates a 'none' artifact."""
         adapter = _spec_adapter()  # no methods
 
-        with patch("graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
             result = prepare_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert len(result["experiment_artifacts"]) == 1
@@ -221,7 +221,7 @@ class TestExecuteExperimentAdapterLoad:
         assert any("adapter load failed" in e for e in result["errors"])
 
     def test_import_error_returns_error(self):
-        with patch("graph.nodes.execute_experiment.load_adapter",
+        with patch("core.graph.nodes.execute_experiment.load_adapter",
                    side_effect=ImportError("no module")):
             result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
         assert result["experiment_results"] == []
@@ -241,7 +241,7 @@ class TestExecuteExperimentNewApi:
 
         state = {"proposals": [PROPOSAL], "implementations": [IMPL]}
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node(state, PROFILE)
 
         adapter.execute_experiment.assert_called_once_with(PROFILE, state)
@@ -251,7 +251,7 @@ class TestExecuteExperimentNewApi:
         adapter = MagicMock()
         adapter.execute_experiment.return_value = None
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert result["experiment_results"] == []
@@ -260,7 +260,7 @@ class TestExecuteExperimentNewApi:
         adapter = MagicMock()
         adapter.execute_experiment.side_effect = Exception("execution failed")
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert result["experiment_results"] == []
@@ -274,7 +274,7 @@ class TestExecuteExperimentNewApi:
 class TestExecuteExperimentLegacy:
     def test_no_proposals_returns_empty(self):
         adapter = _spec_adapter("run_experiment")
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node({}, PROFILE)
         assert result["experiment_results"] == []
 
@@ -283,7 +283,7 @@ class TestExecuteExperimentLegacy:
         adapter = _spec_adapter("run_experiment")
         adapter.run_experiment.return_value = run_result
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node(
                 {"proposals": [PROPOSAL], "implementations": [IMPL]},
                 PROFILE,
@@ -299,7 +299,7 @@ class TestExecuteExperimentLegacy:
         adapter.run_experiment.return_value = run_result
         adapter.train_model.return_value = model_result
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         adapter.train_model.assert_called_once()
@@ -310,7 +310,7 @@ class TestExecuteExperimentLegacy:
         adapter = _spec_adapter("run_experiment")
         adapter.run_experiment.return_value = None
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert result["experiment_results"] == []
@@ -320,7 +320,7 @@ class TestExecuteExperimentLegacy:
         adapter = _spec_adapter("run_experiment")
         adapter.run_experiment.side_effect = Exception("run crashed")
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert result["experiment_results"] == []
@@ -329,7 +329,7 @@ class TestExecuteExperimentLegacy:
     def test_adapter_with_no_run_method_records_error(self):
         adapter = _spec_adapter()  # no run_experiment
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert any("cannot execute" in e for e in result["errors"])
@@ -339,7 +339,7 @@ class TestExecuteExperimentLegacy:
         adapter = _spec_adapter("run_experiment")
         adapter.run_experiment.return_value = run_result
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
 
         assert result["experiment_results"][0]["experiment_id"] != ""
@@ -349,10 +349,11 @@ class TestExecuteExperimentLegacy:
         adapter = _spec_adapter("run_experiment")
         adapter.run_experiment.side_effect = Exception("crash")
 
-        with patch("graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
             result = execute_experiment_node(
                 {"proposals": [PROPOSAL], "errors": ["prior error"]},
                 PROFILE,
             )
 
         assert "prior error" in result["errors"]
+

@@ -152,6 +152,17 @@ def mock_cfg() -> SimpleNamespace:
         validate_timeout_seconds=60,
         max_arxiv_papers=20,
         experiments_dir="dev/experiments",
+        artifacts_db_name="researcher_artifacts",
+        artifacts_collection="artifacts",
+        artifact_store_backend="filesystem",
+        artifact_store_root="dev/artifacts",
+        s3_endpoint_url=None,
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+        s3_bucket=None,
+        s3_region_name="us-east-1",
+        s3_prefix=None,
+        s3_secure=True,
     )
 
 

@@ -14,6 +14,8 @@ openai_api_key: ${OPENAI_API_KEY:}
 # ── MongoDB ───────────────────────────────────────────────────────────────────
 mongo_url: ${MONGO_URL:mongodb://hp.lan:27017}
 datasets_db_name: researcher_datasets
+artifacts_db_name: ${ARTIFACTS_DB_NAME:researcher_artifacts}
+artifacts_collection: ${ARTIFACTS_COLLECTION:artifacts}
 
 # ── ChromaDB ──────────────────────────────────────────────────────────────────
 chroma_host: ${CHROMA_HOST:hp.lan}
@@ -25,8 +27,19 @@ chroma_collection: experiments
 # ── MLflow ────────────────────────────────────────────────────────────────────
 mlflow_uri: ${MLFLOW_URI:http://localhost:5000}
 
+# ── Artifact storage ──────────────────────────────────────────────────────────
+artifact_store_backend: ${ARTIFACT_STORE_BACKEND:filesystem}
+artifact_store_root: ${ARTIFACT_STORE_ROOT:dev/artifacts}
+s3_endpoint_url: ${S3_ENDPOINT_URL:}
+s3_access_key_id: ${S3_ACCESS_KEY_ID:}
+s3_secret_access_key: ${S3_SECRET_ACCESS_KEY:}
+s3_bucket: ${S3_BUCKET:}
+s3_region_name: ${S3_REGION_NAME:us-east-1}
+s3_prefix: ${S3_PREFIX:}
+s3_secure: ${S3_SECURE:true}
+
 # ── Experiment execution ──────────────────────────────────────────────────────
-experiment_timeout_seconds: 1800
+experiment_timeout_seconds: 18000
 validate_timeout_seconds: 120
 experiments_dir: dev/experiments
 

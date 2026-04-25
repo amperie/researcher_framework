@@ -4,7 +4,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from core.tools import ChromaStore
+from core.tools.chroma_tool import ChromaStore
 
 
 # ---------------------------------------------------------------------------
@@ -31,8 +31,8 @@ def _make_store(collection_name="test_col", cfg_kwargs=None) -> tuple[ChromaStor
     mock_client = MagicMock()
     mock_client.get_or_create_collection.return_value = mock_collection
 
-    with patch("tools.chroma_tool.get_config", return_value=cfg):
-        with patch("tools.chroma_tool._build_client", return_value=mock_client):
+    with patch("core.tools.chroma_tool.get_config", return_value=cfg):
+        with patch("core.tools.chroma_tool._build_client", return_value=mock_client):
             store = ChromaStore(collection_name=collection_name)
             # Force lazy init
             store._get_collection()
@@ -47,19 +47,19 @@ def _make_store(collection_name="test_col", cfg_kwargs=None) -> tuple[ChromaStor
 class TestChromaStoreInit:
     def test_uses_explicit_collection_name(self):
         cfg = _mock_cfg()
-        with patch("tools.chroma_tool.get_config", return_value=cfg):
+        with patch("core.tools.chroma_tool.get_config", return_value=cfg):
             store = ChromaStore(collection_name="my_col")
         assert store._collection_name == "my_col"
 
     def test_defaults_to_config_collection(self):
         cfg = _mock_cfg(chroma_collection="cfg_col")
-        with patch("tools.chroma_tool.get_config", return_value=cfg):
+        with patch("core.tools.chroma_tool.get_config", return_value=cfg):
             store = ChromaStore()
         assert store._collection_name == "cfg_col"
 
     def test_client_is_none_before_first_use(self):
         cfg = _mock_cfg()
-        with patch("tools.chroma_tool.get_config", return_value=cfg):
+        with patch("core.tools.chroma_tool.get_config", return_value=cfg):
             store = ChromaStore()
         assert store._client is None
         assert store._collection is None
@@ -183,8 +183,8 @@ class TestPing:
         cfg = _mock_cfg()
         mock_client = MagicMock()
 
-        with patch("tools.chroma_tool.get_config", return_value=cfg):
-            with patch("tools.chroma_tool._build_client", return_value=mock_client):
+        with patch("core.tools.chroma_tool.get_config", return_value=cfg):
+            with patch("core.tools.chroma_tool._build_client", return_value=mock_client):
                 store = ChromaStore()
                 result = store.ping()
 
@@ -196,9 +196,10 @@ class TestPing:
         mock_client = MagicMock()
         mock_client.heartbeat.side_effect = Exception("connection refused")
 
-        with patch("tools.chroma_tool.get_config", return_value=cfg):
-            with patch("tools.chroma_tool._build_client", return_value=mock_client):
+        with patch("core.tools.chroma_tool.get_config", return_value=cfg):
+            with patch("core.tools.chroma_tool._build_client", return_value=mock_client):
                 store = ChromaStore()
                 result = store.ping()
 
         assert result is False
+

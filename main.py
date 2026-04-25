@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from core.utils import setup_logging, get_logger
+from core.utils.logger import setup_logging, get_logger
 
 setup_logging()
 log = get_logger(__name__)

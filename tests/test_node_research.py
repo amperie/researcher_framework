@@ -13,7 +13,7 @@ from core.graph.nodes.research import research_node
 _DEFAULT_TOOLS = [
     {
         "name": "arxiv",
-        "tool": "tools.research_tools.collect_arxiv",
+        "tool": "core.tools.research_tools.collect_arxiv",
         "max_results": 5,
         "relevance_score_threshold": 6,
         "max_papers_to_digest": 0,
@@ -118,8 +118,8 @@ class TestResearchNodeCollection:
         ])
         llm = _mock_llm_for_scoring(score=8)
 
-        with patch("graph.nodes.research.load_research_tool", return_value=mock_collector):
-            with patch("graph.nodes.research.get_llm", return_value=llm):
+        with patch("core.graph.nodes.research.load_research_tool", return_value=mock_collector):
+            with patch("core.graph.nodes.research.get_llm", return_value=llm):
                 result = research_node(
                     {"research_direction": "attention mechanisms"},
                     _make_profile(),
@@ -134,8 +134,8 @@ class TestResearchNodeCollection:
         ])
         llm = _mock_llm_for_scoring(score=3)  # below threshold of 6
 
-        with patch("graph.nodes.research.load_research_tool", return_value=mock_collector):
-            with patch("graph.nodes.research.get_llm", return_value=llm):
+        with patch("core.graph.nodes.research.load_research_tool", return_value=mock_collector):
+            with patch("core.graph.nodes.research.get_llm", return_value=llm):
                 result = research_node(
                     {"research_direction": "test"},
                     _make_profile(),
@@ -150,8 +150,8 @@ class TestResearchNodeCollection:
         llm = MagicMock()
         llm.invoke.side_effect = Exception("LLM failure")
 
-        with patch("graph.nodes.research.load_research_tool", return_value=mock_collector):
-            with patch("graph.nodes.research.get_llm", return_value=llm):
+        with patch("core.graph.nodes.research.load_research_tool", return_value=mock_collector):
+            with patch("core.graph.nodes.research.get_llm", return_value=llm):
                 result = research_node(
                     {"research_direction": "test"},
                     _make_profile(),
@@ -166,8 +166,8 @@ class TestResearchNodeCollection:
         llm = MagicMock()
         llm.invoke.return_value = MagicMock(content='{"score": 8}')
 
-        with patch("graph.nodes.research.load_research_tool", return_value=mock_collector):
-            with patch("graph.nodes.research.get_llm", return_value=llm):
+        with patch("core.graph.nodes.research.load_research_tool", return_value=mock_collector):
+            with patch("core.graph.nodes.research.get_llm", return_value=llm):
                 result = research_node(
                     {"research_direction": "test"},
                     _make_profile(),
@@ -181,8 +181,8 @@ class TestResearchNodeCollection:
         mock_collector = MagicMock(return_value=[artifact, artifact])
         llm = _mock_llm_for_scoring(score=7)
 
-        with patch("graph.nodes.research.load_research_tool", return_value=mock_collector):
-            with patch("graph.nodes.research.get_llm", return_value=llm):
+        with patch("core.graph.nodes.research.load_research_tool", return_value=mock_collector):
+            with patch("core.graph.nodes.research.get_llm", return_value=llm):
                 result = research_node(
                     {"research_direction": "test"},
                     _make_profile(),
@@ -201,8 +201,8 @@ class TestResearchNodeCollection:
             MagicMock(content="This is the research summary."),
         ]
 
-        with patch("graph.nodes.research.load_research_tool", return_value=mock_collector):
-            with patch("graph.nodes.research.get_llm", return_value=llm):
+        with patch("core.graph.nodes.research.load_research_tool", return_value=mock_collector):
+            with patch("core.graph.nodes.research.get_llm", return_value=llm):
                 result = research_node(
                     {"research_direction": "test"},
                     _make_profile(),
@@ -230,15 +230,15 @@ class TestResearchNodeDigests:
 
         profile = _make_profile(tools=[{
             "name": "arxiv",
-            "tool": "tools.research_tools.collect_arxiv",
+            "tool": "core.tools.research_tools.collect_arxiv",
             "max_results": 5,
             "relevance_score_threshold": 6,
             "max_papers_to_digest": 2,
         }])
 
-        with patch("graph.nodes.research.load_research_tool", return_value=mock_collector):
-            with patch("graph.nodes.research.get_llm", return_value=llm):
-                with patch("graph.nodes.research.load_cached_digest", return_value=cached):
+        with patch("core.graph.nodes.research.load_research_tool", return_value=mock_collector):
+            with patch("core.graph.nodes.research.get_llm", return_value=llm):
+                with patch("core.graph.nodes.research.load_cached_digest", return_value=cached):
                     result = research_node(
                         {"research_direction": "test"},
                         profile,
@@ -260,19 +260,20 @@ class TestResearchNodeDigests:
 
         profile = _make_profile(tools=[{
             "name": "arxiv",
-            "tool": "tools.research_tools.collect_arxiv",
+            "tool": "core.tools.research_tools.collect_arxiv",
             "max_results": 5,
             "relevance_score_threshold": 6,
             "max_papers_to_digest": 2,
         }])
 
-        with patch("graph.nodes.research.load_research_tool", return_value=mock_collector):
-            with patch("graph.nodes.research.get_llm", return_value=llm):
-                with patch("graph.nodes.research.load_cached_digest", return_value=None):
-                    with patch("graph.nodes.research.download_paper_text", return_value=None):
+        with patch("core.graph.nodes.research.load_research_tool", return_value=mock_collector):
+            with patch("core.graph.nodes.research.get_llm", return_value=llm):
+                with patch("core.graph.nodes.research.load_cached_digest", return_value=None):
+                    with patch("core.graph.nodes.research.download_paper_text", return_value=None):
                         result = research_node(
                             {"research_direction": "test"},
                             profile,
                         )
 
         assert result["paper_digests"] == []
+

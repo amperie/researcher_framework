@@ -63,14 +63,14 @@ class TestStoreResultsMLflow:
         mock_run.__exit__ = MagicMock(return_value=False)
         mock_run.info.run_id = "mlflow-run-123"
 
-        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri"):
                 with patch("mlflow.set_experiment"):
                     with patch("mlflow.start_run", return_value=mock_run):
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics"):
                                 with patch("mlflow.set_tags"):
-                                    with patch("graph.nodes.store_results.ChromaStore"):
+                                    with patch("core.graph.nodes.store_results.ChromaStore"):
                                         with patch("pymongo.MongoClient"):
                                             result = store_results_node(
                                                 {"experiment_results": [RESULT],
@@ -81,9 +81,9 @@ class TestStoreResultsMLflow:
         assert "exp-001" in result["stored_result_ids"]
 
     def test_mlflow_failure_is_non_fatal(self):
-        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri", side_effect=Exception("MLflow down")):
-                with patch("graph.nodes.store_results.ChromaStore"):
+                with patch("core.graph.nodes.store_results.ChromaStore"):
                     with patch("pymongo.MongoClient"):
                         result = store_results_node(
                             {"experiment_results": [RESULT]},
@@ -109,14 +109,14 @@ class TestStoreResultsMLflow:
         mock_run.__exit__ = MagicMock(return_value=False)
         mock_run.info.run_id = "run-1"
 
-        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri"):
                 with patch("mlflow.set_experiment"):
                     with patch("mlflow.start_run", return_value=mock_run):
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics", side_effect=capture_metrics):
                                 with patch("mlflow.set_tags"):
-                                    with patch("graph.nodes.store_results.ChromaStore"):
+                                    with patch("core.graph.nodes.store_results.ChromaStore"):
                                         with patch("pymongo.MongoClient"):
                                             store_results_node(
                                                 {"experiment_results": [result_with_mixed]},
@@ -130,11 +130,11 @@ class TestStoreResultsMLflow:
         assert "flag" not in logged_metrics
 
     def test_reuses_existing_mlflow_run_id(self):
-        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri") as set_tracking_uri:
                 with patch("mlflow.set_experiment") as set_experiment:
                     with patch("mlflow.start_run") as start_run:
-                        with patch("graph.nodes.store_results.ChromaStore"):
+                        with patch("core.graph.nodes.store_results.ChromaStore"):
                             with patch("pymongo.MongoClient"):
                                 result = store_results_node(
                                     {"experiment_results": [{**RESULT, "mlflow_run_id": "run-existing"}]},
@@ -159,14 +159,14 @@ class TestStoreResultsChroma:
         mock_run.__exit__ = MagicMock(return_value=False)
         mock_run.info.run_id = "run-1"
 
-        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri"):
                 with patch("mlflow.set_experiment"):
                     with patch("mlflow.start_run", return_value=mock_run):
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics"):
                                 with patch("mlflow.set_tags"):
-                                    with patch("graph.nodes.store_results.ChromaStore",
+                                    with patch("core.graph.nodes.store_results.ChromaStore",
                                                return_value=mock_store):
                                         with patch("pymongo.MongoClient"):
                                             store_results_node(
@@ -183,9 +183,9 @@ class TestStoreResultsChroma:
         mock_store = MagicMock()
         mock_store.upsert.side_effect = Exception("ChromaDB down")
 
-        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri", side_effect=Exception("mlflow off")):
-                with patch("graph.nodes.store_results.ChromaStore", return_value=mock_store):
+                with patch("core.graph.nodes.store_results.ChromaStore", return_value=mock_store):
                     with patch("pymongo.MongoClient"):
                         result = store_results_node(
                             {"experiment_results": [RESULT]},
@@ -207,14 +207,14 @@ class TestStoreResultsMongo:
         mock_run.__exit__ = MagicMock(return_value=False)
         mock_run.info.run_id = "run-1"
 
-        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri"):
                 with patch("mlflow.set_experiment"):
                     with patch("mlflow.start_run", return_value=mock_run):
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics"):
                                 with patch("mlflow.set_tags"):
-                                    with patch("graph.nodes.store_results.ChromaStore"):
+                                    with patch("core.graph.nodes.store_results.ChromaStore"):
                                         with patch("pymongo.MongoClient",
                                                    return_value=mock_client):
                                             store_results_node(
@@ -226,9 +226,9 @@ class TestStoreResultsMongo:
         mock_client.close.assert_called_once()
 
     def test_mongodb_failure_is_non_fatal(self):
-        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri", side_effect=Exception("off")):
-                with patch("graph.nodes.store_results.ChromaStore"):
+                with patch("core.graph.nodes.store_results.ChromaStore"):
                     with patch("pymongo.MongoClient",
                                side_effect=Exception("MongoDB down")):
                         result = store_results_node(
@@ -254,14 +254,14 @@ class TestStoreResultsMongo:
         mock_run.__exit__ = MagicMock(return_value=False)
         mock_run.info.run_id = "run-1"
 
-        with patch("graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri"):
                 with patch("mlflow.set_experiment"):
                     with patch("mlflow.start_run", return_value=mock_run):
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics", side_effect=capture_metrics):
                                 with patch("mlflow.set_tags"):
-                                    with patch("graph.nodes.store_results.ChromaStore"):
+                                    with patch("core.graph.nodes.store_results.ChromaStore"):
                                         with patch("pymongo.MongoClient"):
                                             store_results_node(
                                                 {
@@ -274,3 +274,4 @@ class TestStoreResultsMongo:
         # Second call should have model_ prefix
         if len(logged_metrics) > 1:
             assert any(k.startswith("model_") for k in logged_metrics)
+

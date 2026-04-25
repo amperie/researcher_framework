@@ -77,14 +77,14 @@ class TestHtmlToText:
 
 class TestDigestCache:
     def test_load_returns_none_when_missing(self, tmp_path):
-        with patch("tools.arxiv_tool._PAPERS_CACHE_DIR", tmp_path):
+        with patch("core.tools.arxiv_tool._PAPERS_CACHE_DIR", tmp_path):
             result = load_cached_digest("2301.99999")
         assert result is None
 
     def test_save_and_load_roundtrip(self, tmp_path):
         record = {"arxiv_id": "2301.12345", "title": "Test", "digest": "content"}
 
-        with patch("tools.arxiv_tool._PAPERS_CACHE_DIR", tmp_path):
+        with patch("core.tools.arxiv_tool._PAPERS_CACHE_DIR", tmp_path):
             save_digest("2301.12345", record)
             loaded = load_cached_digest("2301.12345")
 
@@ -94,7 +94,7 @@ class TestDigestCache:
         nested = tmp_path / "subdir"
         record = {"data": "value"}
 
-        with patch("tools.arxiv_tool._PAPERS_CACHE_DIR", nested):
+        with patch("core.tools.arxiv_tool._PAPERS_CACHE_DIR", nested):
             save_digest("test_id", record)
             assert (nested / "test_id.digest").exists()
 
@@ -102,7 +102,7 @@ class TestDigestCache:
         bad_file = tmp_path / "corrupt.digest"
         bad_file.write_text("not json at all {{", encoding="utf-8")
 
-        with patch("tools.arxiv_tool._PAPERS_CACHE_DIR", tmp_path):
+        with patch("core.tools.arxiv_tool._PAPERS_CACHE_DIR", tmp_path):
             result = load_cached_digest("corrupt")
 
         assert result is None
@@ -111,7 +111,7 @@ class TestDigestCache:
         record = {"title": "test"}
         arxiv_id = "2301.12345"
 
-        with patch("tools.arxiv_tool._PAPERS_CACHE_DIR", tmp_path):
+        with patch("core.tools.arxiv_tool._PAPERS_CACHE_DIR", tmp_path):
             save_digest(arxiv_id, record)
             assert (tmp_path / "2301_12345.digest").exists()
 
@@ -204,3 +204,4 @@ class TestDownloadPaperText:
             result = download_paper_text("2301.00001")
 
         assert result is None
+

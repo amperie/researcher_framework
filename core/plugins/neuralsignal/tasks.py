@@ -45,10 +45,12 @@ def create_s1_model(payload: dict[str, Any]) -> dict[str, Any]:
         return {"error": "No models returned"}
 
     best = max(models, key=lambda model: _model_section(model, "metrics").get("test_auc", 0.0))
+    artifacts = dict(_model_section(best, "artifacts"))
     return {
         "metrics": dict(_model_section(best, "metrics")),
         "params": dict(_model_section(best, "params")),
-        "feature_importance": dict(_model_section(best, "artifacts").get("feature_importance", {}) or {}),
+        "feature_importance": dict(artifacts.get("feature_importance", {}) or {}),
+        "artifacts": artifacts,
     }
 
 

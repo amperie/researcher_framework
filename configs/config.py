@@ -104,9 +104,21 @@ def get_config() -> SimpleNamespace:
 
     if "chroma_ssl" in data and isinstance(data["chroma_ssl"], str):
         data["chroma_ssl"] = data["chroma_ssl"].lower() in ("true", "1", "yes")
+    if "s3_secure" in data and isinstance(data["s3_secure"], str):
+        data["s3_secure"] = data["s3_secure"].lower() in ("true", "1", "yes")
 
     # Normalise empty strings to None for optional fields.
-    for opt_key in ("llm_model", "anthropic_api_key", "openai_api_key", "chroma_auth_token"):
+    for opt_key in (
+        "llm_model",
+        "anthropic_api_key",
+        "openai_api_key",
+        "chroma_auth_token",
+        "s3_endpoint_url",
+        "s3_access_key_id",
+        "s3_secret_access_key",
+        "s3_bucket",
+        "s3_prefix",
+    ):
         if not data.get(opt_key):
             data[opt_key] = None
 

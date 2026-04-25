@@ -26,6 +26,7 @@ from uuid import uuid4
 import mlflow
 
 from configs.config import get_config
+from core.artifacts import get_artifact_store
 from core.plugins.base import ResearchAdapter
 from core.plugins.job_runner import TERMINAL_STATUSES, get_runner
 from core.utils.logger import get_logger
@@ -135,6 +136,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                         idx=idx,
                         implementation=implementation,
                     )
+                    _register_dataset_artifact(profile, artifact, errors)
                     artifacts.append(artifact)
                     datasets.append(artifact)
                     if artifact.get("status") != "ready":
@@ -213,6 +215,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                 metrics = _as_dict(task_result.get("metrics"))
                 feature_importance = _as_dict(task_result.get("feature_importance"))
                 params = _as_dict(task_result.get("params"))
+                artifacts_payload = _as_dict(task_result.get("artifacts"))
 
                 model = {
                     "model_id": model_cfg.get("model_name", experiment_id),
@@ -221,6 +224,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                     "metrics": metrics,
                     "params": params,
                     "feature_importance": feature_importance,
+                    "artifacts": artifacts_payload,
                     "task_result": _json_safe(task_result),
                 }
                 mlflow_run_id = _log_result_to_mlflow(
@@ -232,19 +236,24 @@ class NeuralSignalPlugin(ResearchAdapter):
                     metrics=metrics,
                     params=params,
                     feature_importance=feature_importance,
+                    artifacts_payload=artifacts_payload,
                     model=model,
                 )
                 if mlflow_run_id:
                     model["mlflow_run_id"] = mlflow_run_id
-                models.append(model)
-                result = {
+                _register_model_artifact(profile, result_payload := {
                     "experiment_id": experiment_id,
                     "proposal_name": proposal_name,
                     "metrics": metrics,
                     "feature_importance": feature_importance,
                     "params": params,
+                }, model, errors)
+                models.append(model)
+                result = {
+                    **result_payload,
                     "artifact": _serializable_artifact_summary(artifact),
                     "model": model,
+                    "artifacts": artifacts_payload,
                 }
                 if mlflow_run_id:
                     result["mlflow_run_id"] = mlflow_run_id
@@ -355,6 +364,8 @@ class NeuralSignalPlugin(ResearchAdapter):
                     result = _read_result(checked)
                     if checked.get("stage") == "dataset":
                         new_artifacts = self._dataset_artifacts_from_job(checked, result)
+                        for artifact in new_artifacts:
+                            _register_dataset_artifact(profile, artifact, errors)
                         artifacts.extend(new_artifacts)
                         datasets.extend(new_artifacts)
                     elif checked.get("stage") == "model":
@@ -368,11 +379,13 @@ class NeuralSignalPlugin(ResearchAdapter):
                             metrics=experiment_result.get("metrics") or {},
                             params=experiment_result.get("params") or {},
                             feature_importance=experiment_result.get("feature_importance") or {},
+                            artifacts_payload=experiment_result.get("artifacts") or {},
                             model=model,
                         )
                         if mlflow_run_id:
                             model["mlflow_run_id"] = mlflow_run_id
                             experiment_result["mlflow_run_id"] = mlflow_run_id
+                        _register_model_artifact(profile, experiment_result, model, errors)
                         results.append(experiment_result)
                         models.append(model)
                     checked["collected"] = True
@@ -793,6 +806,66 @@ def _dataset_artifact(
     return artifact
 
 
+def _register_dataset_artifact(profile: dict[str, Any], artifact: dict[str, Any], errors: list[str]) -> None:
+    dataset_path = artifact.get("dataset_path") or artifact.get("file_path")
+    if not dataset_path:
+        return
+    try:
+        record = get_artifact_store().store_file(
+            dataset_path,
+            artifact_type="dataset",
+            profile_name=profile.get("name", ""),
+            proposal_name=artifact.get("proposal_name", ""),
+            experiment_id=artifact.get("experiment_id", ""),
+            metadata={
+                "dataset": artifact.get("dataset", ""),
+                "detector": artifact.get("detector", ""),
+                "rows": artifact.get("rows"),
+                "columns": artifact.get("columns"),
+                "column_names": artifact.get("column_names", []),
+                "dataset_source": artifact.get("dataset_source", ""),
+            },
+            tags=["dataset", profile.get("name", "")],
+        )
+        artifact["stored_artifact_id"] = record["artifact_id"]
+        artifact["stored_artifact_uri"] = record["uri"]
+    except Exception as exc:
+        log.warning("NeuralSignalPlugin | dataset artifact storage failed for %s: %s", artifact.get("proposal_name"), exc)
+        errors.append(f"artifact_store: dataset {artifact.get('proposal_name', 'unknown')} failed: {exc}")
+
+
+def _register_model_artifact(
+    profile: dict[str, Any],
+    result: dict[str, Any],
+    model: dict[str, Any],
+    errors: list[str],
+) -> None:
+    try:
+        record = get_artifact_store().store_json(
+            {
+                "experiment_result": result,
+                "model": model,
+            },
+            artifact_type="model",
+            profile_name=profile.get("name", ""),
+            proposal_name=result.get("proposal_name", ""),
+            experiment_id=result.get("experiment_id", ""),
+            artifact_name=f"{_slug(result.get('proposal_name', 'model'))}_{result.get('experiment_id', '')[:8]}.json",
+            metadata={
+                "metrics": result.get("metrics", {}),
+                "feature_importance_keys": sorted((result.get("feature_importance") or {}).keys()),
+            },
+            tags=["model", profile.get("name", "")],
+        )
+        model["stored_artifact_id"] = record["artifact_id"]
+        model["stored_artifact_uri"] = record["uri"]
+        result["stored_artifact_id"] = record["artifact_id"]
+        result["stored_artifact_uri"] = record["uri"]
+    except Exception as exc:
+        log.warning("NeuralSignalPlugin | model artifact storage failed for %s: %s", result.get("proposal_name"), exc)
+        errors.append(f"artifact_store: model {result.get('proposal_name', 'unknown')} failed: {exc}")
+
+
 def _log_result_to_mlflow(
     *,
     profile: dict[str, Any],
@@ -803,6 +876,7 @@ def _log_result_to_mlflow(
     metrics: dict[str, Any],
     params: dict[str, Any],
     feature_importance: dict[str, Any],
+    artifacts_payload: dict[str, Any],
     model: dict[str, Any],
 ) -> str:
     cfg = get_config()
@@ -850,8 +924,14 @@ def _log_result_to_mlflow(
                 mlflow.log_dict(_json_safe(feature_importance), "feature_importance.json")
             if params:
                 mlflow.log_dict(_json_safe(params), "model_params.json")
+            if artifacts_payload:
+                mlflow.log_dict(_json_safe(artifacts_payload), "model_artifacts.json")
             if proposal:
                 mlflow.log_dict(_json_safe(proposal), "proposal.json")
+            agent_state = _agent_state_payload(state, proposal_name)
+            if agent_state:
+                mlflow.log_dict(_json_safe(agent_state), "agent_state.json")
+            _log_mlflow_figures(metrics, artifacts_payload)
             return run.info.run_id
     except Exception as exc:
         log.warning("NeuralSignalPlugin | MLflow logging failed for %s: %s", proposal_name, exc)
@@ -868,6 +948,173 @@ def _expected_dataset_path(dataset_cfg: dict[str, Any]) -> Path:
 
 def _should_overwrite_existing_dataset(dataset_cfg: dict[str, Any]) -> bool:
     return bool(dataset_cfg.get("overwrite_existing_dataset", False))
+
+
+def _agent_state_payload(state: dict[str, Any], proposal_name: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if state.get("research_direction"):
+        payload["research_direction"] = state.get("research_direction")
+    if state.get("research_summary"):
+        payload["research_summary"] = state.get("research_summary")
+    proposal = next((item for item in (state.get("proposals") or []) if item.get("name") == proposal_name), None)
+    if proposal:
+        payload["proposal"] = proposal
+    plan = next((item for item in (state.get("implementation_plans") or []) if item.get("proposal_name") == proposal_name), None)
+    if plan:
+        payload["implementation_plan"] = plan
+    implementation = next((item for item in (state.get("implementations") or []) if item.get("proposal_name") == proposal_name), None)
+    if implementation:
+        payload["implementation"] = _implementation_summary(implementation)
+    validation = next((item for item in (state.get("validation_results") or []) if item.get("proposal_name") == proposal_name), None)
+    if validation:
+        payload["validation_result"] = validation
+    artifacts = state.get("research_artifacts") or []
+    if artifacts:
+        payload["research_artifact_ids"] = [item.get("artifact_id") for item in artifacts[:20] if item.get("artifact_id")]
+    return payload
+
+
+def _log_mlflow_figures(metrics: dict[str, Any], artifacts_payload: dict[str, Any]) -> None:
+    roc_figure = _roc_figure(metrics, artifacts_payload)
+    if roc_figure is not None:
+        mlflow.log_figure(roc_figure, "auc_curve.png")
+        roc_figure.clf()
+
+    confusion_figure = _confusion_figure(metrics, artifacts_payload)
+    if confusion_figure is not None:
+        mlflow.log_figure(confusion_figure, "confusion_matrix.png")
+        confusion_figure.clf()
+
+
+def _roc_figure(metrics: dict[str, Any], artifacts_payload: dict[str, Any]) -> Any | None:
+    fpr = _float_list(
+        artifacts_payload.get("roc_curve_fpr")
+        or artifacts_payload.get("fpr")
+        or ((artifacts_payload.get("roc_curve") or {}).get("fpr"))
+    )
+    tpr = _float_list(
+        artifacts_payload.get("roc_curve_tpr")
+        or artifacts_payload.get("tpr")
+        or ((artifacts_payload.get("roc_curve") or {}).get("tpr"))
+    )
+    auc_value = _maybe_float(metrics.get("test_auc"))
+    if not fpr or not tpr or len(fpr) != len(tpr):
+        if auc_value is None:
+            return None
+        return _auc_summary_figure(auc_value, _maybe_float(metrics.get("train_auc")))
+
+    plt = _plt()
+    if plt is None:
+        return None
+    fig, ax = plt.subplots(figsize=(5, 4))
+    ax.plot(fpr, tpr, label=f"ROC (AUC={auc_value:.3f})" if auc_value is not None else "ROC")
+    ax.plot([0.0, 1.0], [0.0, 1.0], linestyle="--", color="grey", linewidth=1)
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title("AUC / ROC Curve")
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    return fig
+
+
+def _auc_summary_figure(test_auc: float, train_auc: float | None) -> Any | None:
+    plt = _plt()
+    if plt is None:
+        return None
+    labels = ["test_auc"]
+    values = [test_auc]
+    if train_auc is not None:
+        labels.append("train_auc")
+        values.append(train_auc)
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.bar(labels, values, color=["#2563eb", "#64748b"][: len(values)])
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("AUC")
+    ax.set_title("AUC Summary")
+    for idx, value in enumerate(values):
+        ax.text(idx, value + 0.02, f"{value:.3f}", ha="center", va="bottom")
+    fig.tight_layout()
+    return fig
+
+
+def _confusion_figure(metrics: dict[str, Any], artifacts_payload: dict[str, Any]) -> Any | None:
+    matrix = _confusion_matrix_values(metrics, artifacts_payload)
+    if matrix is None:
+        return None
+    plt = _plt()
+    if plt is None:
+        return None
+    fig, ax = plt.subplots(figsize=(4.5, 4))
+    image = ax.imshow(matrix, cmap="Blues")
+    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    ax.set_xticks([0, 1], labels=["Pred 0", "Pred 1"])
+    ax.set_yticks([0, 1], labels=["True 0", "True 1"])
+    ax.set_title("Confusion Matrix")
+    for row in range(2):
+        for col in range(2):
+            ax.text(col, row, str(matrix[row][col]), ha="center", va="center", color="black")
+    fig.tight_layout()
+    return fig
+
+
+def _confusion_matrix_values(metrics: dict[str, Any], artifacts_payload: dict[str, Any]) -> list[list[int]] | None:
+    matrix = artifacts_payload.get("confusion_matrix")
+    if isinstance(matrix, list) and len(matrix) == 2 and all(isinstance(row, list) and len(row) == 2 for row in matrix):
+        try:
+            return [[int(matrix[0][0]), int(matrix[0][1])], [int(matrix[1][0]), int(matrix[1][1])]]
+        except Exception:
+            return None
+
+    tn = _maybe_int(artifacts_payload.get("tn", metrics.get("test_tn")))
+    fp = _maybe_int(artifacts_payload.get("fp", metrics.get("test_fp")))
+    fn = _maybe_int(artifacts_payload.get("fn", metrics.get("test_fn")))
+    tp = _maybe_int(artifacts_payload.get("tp", metrics.get("test_tp")))
+    if None not in (tn, fp, fn, tp):
+        return [[tn, fp], [fn, tp]]
+    return None
+
+
+def _plt() -> Any | None:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        return plt
+    except Exception as exc:
+        log.debug("NeuralSignalPlugin | matplotlib unavailable for MLflow figures: %s", exc)
+        return None
+
+
+def _float_list(value: Any) -> list[float]:
+    if not isinstance(value, list):
+        return []
+    output: list[float] = []
+    for item in value:
+        try:
+            output.append(float(item))
+        except Exception:
+            return []
+    return output
+
+
+def _maybe_float(value: Any) -> float | None:
+    try:
+        if isinstance(value, bool) or value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _maybe_int(value: Any) -> int | None:
+    try:
+        if isinstance(value, bool) or value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
 
 
 def _execution_cfg(profile: dict[str, Any]) -> dict[str, Any]:
