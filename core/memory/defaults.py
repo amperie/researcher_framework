@@ -14,11 +14,17 @@ log = get_logger(__name__)
 def build_core_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
     """Build generic canonical memory records from the current graph state."""
     records: list[MemoryRecord] = []
+    records.extend(build_research_memory_records(profile, state))
+    records.extend(build_idea_memory_records(profile, state))
     records.extend(build_refined_idea_memory_records(profile, state))
+    records.extend(build_proposal_memory_records(profile, state))
+    records.extend(build_implementation_plan_memory_records(profile, state))
     records.extend(build_implementation_memory_records(profile, state))
     records.extend(build_validation_memory_records(profile, state))
     records.extend(build_experiment_artifact_memory_records(profile, state))
     records.extend(build_experiment_memory_records(profile, state))
+    records.extend(build_evaluation_memory_records(profile, state))
+    records.extend(build_next_step_memory_records(profile, state))
     deduped = dedupe_memory_records(records)
     log.debug(
         "memory.defaults | Built %d generic record(s), %d after dedupe profile=%r",
@@ -252,6 +258,129 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
     return records
 
 
+def build_research_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
+    """Build generic memory records for research summaries and retrieved artifacts."""
+    domain = str(profile.get("name") or "")
+    direction = str(state.get("research_direction") or "")
+    summary = str(state.get("research_summary") or "")
+    artifacts = state.get("research_artifacts") or []
+    papers = state.get("research_papers") or []
+    digests = state.get("paper_digests") or []
+    records: list[MemoryRecord] = []
+
+    if summary or artifacts or papers or digests:
+        summary_fingerprint = fingerprint_json({
+            "domain": domain,
+            "direction": direction,
+            "summary": summary,
+            "artifact_ids": [item.get("artifact_id") for item in artifacts if isinstance(item, dict)],
+            "paper_ids": [item.get("arxiv_id") or item.get("title") for item in papers if isinstance(item, dict)],
+            "digest_titles": [item.get("title") for item in digests if isinstance(item, dict)],
+        })
+        records.append({
+            "record_id": f"research_summary:{summary_fingerprint}",
+            "domain": domain,
+            "kind": "research_summary",
+            "object_type": "research_summary",
+            "object_key": summary_fingerprint,
+            "object_role": "context",
+            "schema_version": "1",
+            "title": direction or "research_summary",
+            "summary": summary or f"Research context for: {direction}",
+            "content": {
+                "research_direction": direction,
+                "research_summary": summary,
+                "research_artifacts": artifacts,
+                "research_papers": papers,
+                "paper_digests": digests,
+            },
+            "metadata": {
+                "profile": domain,
+                "research_direction": direction,
+                "n_artifacts": len(artifacts),
+                "n_papers": len(papers),
+                "n_digests": len(digests),
+            },
+            "tags": [domain, "research_summary"],
+            "created_at": _now_iso(),
+            "entities": _research_summary_entities(domain, direction, artifacts, papers, digests),
+            "relations": _research_summary_relations(domain, direction, artifacts, papers, digests),
+        })
+
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_id = str(artifact.get("artifact_id") or fingerprint_json(artifact))
+        records.append({
+            "record_id": f"research_artifact:{artifact_id}",
+            "domain": domain,
+            "kind": "research_artifact",
+            "object_type": "research_artifact",
+            "object_key": artifact_id,
+            "object_role": "context",
+            "schema_version": "1",
+            "title": str(artifact.get("title") or artifact_id),
+            "summary": str(artifact.get("summary") or ""),
+            "content": dict(artifact),
+            "metadata": {
+                "profile": domain,
+                "research_direction": direction,
+                "source": artifact.get("source", ""),
+                "source_type": artifact.get("source_type", ""),
+                "relevance_score": artifact.get("relevance_score"),
+                "url": artifact.get("url", ""),
+            },
+            "tags": [domain, "research_artifact", str(artifact.get("source_type") or "unknown")],
+            "created_at": _now_iso(),
+            "entities": _research_artifact_entities(domain, direction, artifact_id, artifact),
+            "relations": _research_artifact_relations(domain, direction, artifact_id, artifact),
+        })
+    return records
+
+
+def build_idea_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
+    """Build generic memory records for brainstormed ideas."""
+    ideas = state.get("ideas") or []
+    direction = state.get("research_direction", "")
+    domain = str(profile.get("name") or "")
+    records: list[MemoryRecord] = []
+
+    for idea in ideas:
+        idea_name = str(idea.get("name") or idea.get("title") or "idea")
+        idea_fingerprint = fingerprint_json({
+            "domain": domain,
+            "direction": direction,
+            "idea": idea,
+        })
+        records.append({
+            "record_id": f"idea:{idea_fingerprint}",
+            "domain": domain,
+            "kind": "idea",
+            "object_type": "idea",
+            "object_key": idea_name,
+            "object_role": "plan",
+            "schema_version": "1",
+            "title": idea_name,
+            "summary": (
+                f"Direction: {direction}\n"
+                f"Description: {idea.get('description', '')}\n"
+                f"Hypothesis: {idea.get('hypothesis', '')}\n"
+                f"Rationale: {idea.get('rationale', '')}"
+            ).strip(),
+            "content": dict(idea),
+            "metadata": {
+                "profile": domain,
+                "research_direction": direction,
+                "idea_name": idea_name,
+            },
+            "tags": [domain, "idea"],
+            "created_at": _now_iso(),
+            "entities": _idea_entities(domain, direction, idea_name),
+            "relations": _idea_relations(domain, direction, idea_name),
+        })
+    return records
+
+
 def build_refined_idea_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
     """Build generic memory records for refined ideas."""
     ideas = state.get("refined_ideas") or []
@@ -289,6 +418,96 @@ def build_refined_idea_memory_records(profile: dict[str, Any], state: dict[str, 
             },
             "tags": [domain, "refined_idea"],
             "created_at": _now_iso(),
+            "entities": _refined_idea_entities(domain, direction, idea_name),
+            "relations": _refined_idea_relations(domain, direction, idea_name),
+        })
+    return records
+
+
+def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
+    """Build generic memory records for experiment proposals."""
+    proposals = state.get("proposals") or []
+    direction = state.get("research_direction", "")
+    domain = str(profile.get("name") or "")
+    records: list[MemoryRecord] = []
+
+    for proposal in proposals:
+        proposal_name = str(proposal.get("name") or "proposal")
+        proposal_fingerprint = fingerprint_json({
+            "domain": domain,
+            "direction": direction,
+            "proposal": proposal,
+        })
+        records.append({
+            "record_id": f"proposal:{proposal_fingerprint}",
+            "domain": domain,
+            "kind": "proposal",
+            "object_type": "proposal",
+            "object_key": proposal_name,
+            "object_role": "plan",
+            "schema_version": "1",
+            "title": proposal_name,
+            "summary": (
+                f"Direction: {direction}\n"
+                f"Dataset: {proposal.get('dataset', '')}\n"
+                f"Detector: {proposal.get('detector', '')}\n"
+                f"Description: {proposal.get('description', '')}"
+            ).strip(),
+            "content": dict(proposal),
+            "metadata": {
+                "profile": domain,
+                "research_direction": direction,
+                "proposal_name": proposal_name,
+                "dataset": proposal.get("dataset", ""),
+                "detector": proposal.get("detector", ""),
+            },
+            "tags": [domain, "proposal"],
+            "created_at": _now_iso(),
+            "entities": _proposal_entities(domain, direction, proposal_name, proposal),
+            "relations": _proposal_relations(domain, direction, proposal_name, proposal),
+        })
+    return records
+
+
+def build_implementation_plan_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
+    """Build generic memory records for implementation plans."""
+    plans = state.get("implementation_plans") or []
+    domain = str(profile.get("name") or "")
+    records: list[MemoryRecord] = []
+
+    for plan in plans:
+        proposal_name = str(plan.get("proposal_name") or plan.get("class_name") or "plan")
+        class_name = str(plan.get("class_name") or proposal_name)
+        plan_fingerprint = fingerprint_json({
+            "domain": domain,
+            "plan": plan,
+        })
+        records.append({
+            "record_id": f"implementation_plan:{plan_fingerprint}",
+            "domain": domain,
+            "kind": "implementation_plan",
+            "object_type": "implementation_plan",
+            "object_key": proposal_name,
+            "object_role": "plan",
+            "schema_version": "1",
+            "title": class_name,
+            "summary": (
+                f"Proposal: {proposal_name}\n"
+                f"Class: {class_name}\n"
+                f"Base class: {plan.get('base_class', '')}\n"
+                f"Main method: {plan.get('main_method', '')}"
+            ).strip(),
+            "content": dict(plan),
+            "metadata": {
+                "profile": domain,
+                "proposal_name": proposal_name,
+                "class_name": class_name,
+                "base_class": plan.get("base_class", ""),
+            },
+            "tags": [domain, "implementation_plan"],
+            "created_at": _now_iso(),
+            "entities": _implementation_plan_entities(domain, proposal_name, class_name, plan),
+            "relations": _implementation_plan_relations(domain, proposal_name, class_name, plan),
         })
     return records
 
@@ -344,6 +563,8 @@ def build_validation_memory_records(profile: dict[str, Any], state: dict[str, An
                     ("implementation", "implementation_artifact_uri", "implementation_artifact_id", "text/x-python"),
                 ),
             ),
+            "entities": _validation_entities(domain, proposal_name, class_name),
+            "relations": _validation_relations(domain, proposal_name, class_name, validation),
         })
     return records
 
@@ -394,6 +615,8 @@ def build_implementation_memory_records(profile: dict[str, Any], state: dict[str
                     ("implementation", "stored_artifact_uri", "stored_artifact_id", "text/x-python"),
                 ),
             ),
+            "entities": _implementation_entities(domain, proposal_name, class_name),
+            "relations": _implementation_relations(domain, proposal_name, class_name),
         })
     return records
 
@@ -440,6 +663,94 @@ def build_experiment_artifact_memory_records(profile: dict[str, Any], state: dic
                     (artifact_type, "stored_artifact_uri", "stored_artifact_id", None),
                 ),
             ),
+            "entities": _artifact_entities(domain, proposal_name, artifact_id, artifact_type, artifact),
+            "relations": _artifact_relations(domain, proposal_name, artifact_id, artifact_type, artifact),
+        })
+    return records
+
+
+def build_evaluation_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
+    """Build generic memory records for evaluation summaries."""
+    evaluation = state.get("evaluation_summary") or {}
+    if not evaluation:
+        return []
+    domain = str(profile.get("name") or "")
+    direction = str(state.get("research_direction") or "")
+    evaluation_fingerprint = fingerprint_json({
+        "domain": domain,
+        "direction": direction,
+        "evaluation": evaluation,
+    })
+    return [{
+        "record_id": f"evaluation:{evaluation_fingerprint}",
+        "domain": domain,
+        "kind": "evaluation_summary",
+        "object_type": "evaluation_summary",
+        "object_key": evaluation_fingerprint,
+        "object_role": "summary",
+        "schema_version": "1",
+        "title": evaluation.get("best_proposal") or "evaluation_summary",
+        "summary": (
+            f"Direction: {direction}\n"
+            f"Best proposal: {evaluation.get('best_proposal')}\n"
+            f"Best metric: {evaluation.get('best_metric_name')}={evaluation.get('best_metric_value')}\n"
+            f"Experiments: {evaluation.get('n_experiments')}"
+        ).strip(),
+        "content": dict(evaluation),
+        "metadata": {
+            "profile": domain,
+            "research_direction": direction,
+            "best_proposal": evaluation.get("best_proposal"),
+            "best_metric_name": evaluation.get("best_metric_name"),
+            "best_metric_value": evaluation.get("best_metric_value"),
+            "n_experiments": evaluation.get("n_experiments"),
+        },
+        "tags": [domain, "evaluation_summary"],
+        "created_at": _now_iso(),
+        "entities": _evaluation_entities(domain, direction, evaluation),
+        "relations": _evaluation_relations(domain, direction, evaluation),
+    }]
+
+
+def build_next_step_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
+    """Build generic memory records for proposed next steps."""
+    next_steps = state.get("next_steps") or []
+    direction = state.get("research_direction", "")
+    domain = str(profile.get("name") or "")
+    records: list[MemoryRecord] = []
+
+    for step in next_steps:
+        title = str(step.get("title") or step.get("suggested_direction") or "next_step")
+        step_fingerprint = fingerprint_json({
+            "domain": domain,
+            "direction": direction,
+            "next_step": step,
+        })
+        records.append({
+            "record_id": f"next_step:{step_fingerprint}",
+            "domain": domain,
+            "kind": "next_step",
+            "object_type": "next_step",
+            "object_key": title,
+            "object_role": "recommendation",
+            "schema_version": "1",
+            "title": title,
+            "summary": (
+                f"Direction: {direction}\n"
+                f"Suggested direction: {step.get('suggested_direction', '')}\n"
+                f"Rationale: {step.get('rationale', '')}\n"
+                f"Priority: {step.get('priority', '')}"
+            ).strip(),
+            "content": dict(step),
+            "metadata": {
+                "profile": domain,
+                "research_direction": direction,
+                "priority": step.get("priority"),
+            },
+            "tags": [domain, "next_step"],
+            "created_at": _now_iso(),
+            "entities": _next_step_entities(domain, direction, title, step),
+            "relations": _next_step_relations(domain, direction, title, step),
         })
     return records
 
@@ -699,6 +1010,600 @@ def _experiment_relations(profile: dict[str, Any], proposal_name: str, proposal:
             "target_type": "detector",
             "target_key": str(detector),
             "metadata": {"domain": profile.get("name", "")},
+        })
+    return relations
+
+
+def _research_summary_entities(
+    domain: str,
+    direction: str,
+    artifacts: list[dict[str, Any]],
+    papers: list[dict[str, Any]],
+    digests: list[dict[str, Any]],
+) -> list[MemoryEntity]:
+    entities: list[MemoryEntity] = []
+    if direction:
+        entities.append({
+            "entity_type": "research_direction",
+            "key": direction,
+            "name": direction,
+            "metadata": {"domain": domain},
+        })
+    for paper in papers[:10]:
+        title = str(paper.get("title") or "")
+        if title:
+            entities.append({
+                "entity_type": "paper",
+                "key": str(paper.get("arxiv_id") or title),
+                "name": title,
+                "metadata": {"domain": domain},
+            })
+    for digest in digests[:10]:
+        title = str(digest.get("title") or "")
+        if title:
+            entities.append({
+                "entity_type": "paper_digest",
+                "key": str(digest.get("arxiv_id") or title),
+                "name": title,
+                "metadata": {"domain": domain},
+            })
+    for artifact in artifacts[:10]:
+        artifact_id = str(artifact.get("artifact_id") or "")
+        title = str(artifact.get("title") or artifact_id)
+        if artifact_id:
+            entities.append({
+                "entity_type": "research_artifact",
+                "key": artifact_id,
+                "name": title,
+                "metadata": {"domain": domain},
+            })
+    return entities
+
+
+def _research_summary_relations(
+    domain: str,
+    direction: str,
+    artifacts: list[dict[str, Any]],
+    papers: list[dict[str, Any]],
+    digests: list[dict[str, Any]],
+) -> list[MemoryRelation]:
+    relations: list[MemoryRelation] = []
+    if not direction:
+        return relations
+    for paper in papers[:10]:
+        paper_key = str(paper.get("arxiv_id") or paper.get("title") or "")
+        if paper_key:
+            relations.append({
+                "relation_type": "summarizes_paper",
+                "source_type": "research_direction",
+                "source_key": direction,
+                "target_type": "paper",
+                "target_key": paper_key,
+                "metadata": {"domain": domain},
+            })
+    for digest in digests[:10]:
+        digest_key = str(digest.get("arxiv_id") or digest.get("title") or "")
+        if digest_key:
+            relations.append({
+                "relation_type": "has_digest",
+                "source_type": "research_direction",
+                "source_key": direction,
+                "target_type": "paper_digest",
+                "target_key": digest_key,
+                "metadata": {"domain": domain},
+            })
+    for artifact in artifacts[:10]:
+        artifact_id = str(artifact.get("artifact_id") or "")
+        if artifact_id:
+            relations.append({
+                "relation_type": "uses_context",
+                "source_type": "research_direction",
+                "source_key": direction,
+                "target_type": "research_artifact",
+                "target_key": artifact_id,
+                "metadata": {"domain": domain},
+            })
+    return relations
+
+
+def _research_artifact_entities(
+    domain: str,
+    direction: str,
+    artifact_id: str,
+    artifact: dict[str, Any],
+) -> list[MemoryEntity]:
+    entities: list[MemoryEntity] = [{
+        "entity_type": "research_artifact",
+        "key": artifact_id,
+        "name": str(artifact.get("title") or artifact_id),
+        "metadata": {"domain": domain},
+    }]
+    if direction:
+        entities.append({
+            "entity_type": "research_direction",
+            "key": direction,
+            "name": direction,
+            "metadata": {"domain": domain},
+        })
+    source = str(artifact.get("source") or "")
+    if source:
+        entities.append({
+            "entity_type": "source",
+            "key": source,
+            "name": source,
+            "metadata": {"domain": domain},
+        })
+    source_type = str(artifact.get("source_type") or "")
+    if source_type:
+        entities.append({
+            "entity_type": "source_type",
+            "key": source_type,
+            "name": source_type,
+            "metadata": {"domain": domain},
+        })
+    return entities
+
+
+def _research_artifact_relations(
+    domain: str,
+    direction: str,
+    artifact_id: str,
+    artifact: dict[str, Any],
+) -> list[MemoryRelation]:
+    relations: list[MemoryRelation] = []
+    if direction:
+        relations.append({
+            "relation_type": "informs",
+            "source_type": "research_artifact",
+            "source_key": artifact_id,
+            "target_type": "research_direction",
+            "target_key": direction,
+            "metadata": {"domain": domain},
+        })
+    source = str(artifact.get("source") or "")
+    if source:
+        relations.append({
+            "relation_type": "originated_from",
+            "source_type": "research_artifact",
+            "source_key": artifact_id,
+            "target_type": "source",
+            "target_key": source,
+            "metadata": {"domain": domain},
+        })
+    source_type = str(artifact.get("source_type") or "")
+    if source_type:
+        relations.append({
+            "relation_type": "categorized_as",
+            "source_type": "research_artifact",
+            "source_key": artifact_id,
+            "target_type": "source_type",
+            "target_key": source_type,
+            "metadata": {"domain": domain},
+        })
+    return relations
+
+
+def _idea_entities(domain: str, direction: str, idea_name: str) -> list[MemoryEntity]:
+    entities: list[MemoryEntity] = [{
+        "entity_type": "idea",
+        "key": idea_name,
+        "name": idea_name,
+        "metadata": {"domain": domain},
+    }]
+    if direction:
+        entities.append({
+            "entity_type": "research_direction",
+            "key": direction,
+            "name": direction,
+            "metadata": {"domain": domain},
+        })
+    return entities
+
+
+def _refined_idea_entities(domain: str, direction: str, idea_name: str) -> list[MemoryEntity]:
+    entities: list[MemoryEntity] = [{
+        "entity_type": "refined_idea",
+        "key": idea_name,
+        "name": idea_name,
+        "metadata": {"domain": domain},
+    }]
+    if direction:
+        entities.append({
+            "entity_type": "research_direction",
+            "key": direction,
+            "name": direction,
+            "metadata": {"domain": domain},
+        })
+    return entities
+
+
+def _idea_relations(domain: str, direction: str, idea_name: str) -> list[MemoryRelation]:
+    if not direction:
+        return []
+    return [{
+        "relation_type": "generated_for",
+        "source_type": "idea",
+        "source_key": idea_name,
+        "target_type": "research_direction",
+        "target_key": direction,
+        "metadata": {"domain": domain},
+    }]
+
+
+def _refined_idea_relations(domain: str, direction: str, idea_name: str) -> list[MemoryRelation]:
+    relations = _idea_relations(domain, direction, idea_name)
+    if direction:
+        relations.append({
+            "relation_type": "refines",
+            "source_type": "refined_idea",
+            "source_key": idea_name,
+            "target_type": "research_direction",
+            "target_key": direction,
+            "metadata": {"domain": domain},
+        })
+    return relations
+
+
+def _proposal_entities(domain: str, direction: str, proposal_name: str, proposal: dict[str, Any]) -> list[MemoryEntity]:
+    entities: list[MemoryEntity] = [{
+        "entity_type": "proposal",
+        "key": proposal_name,
+        "name": proposal_name,
+        "metadata": {"domain": domain},
+    }]
+    if direction:
+        entities.append({
+            "entity_type": "research_direction",
+            "key": direction,
+            "name": direction,
+            "metadata": {"domain": domain},
+        })
+    dataset = str(proposal.get("dataset") or "")
+    if dataset:
+        entities.append({
+            "entity_type": "dataset",
+            "key": dataset,
+            "name": dataset,
+            "metadata": {"domain": domain},
+        })
+    detector = str(proposal.get("detector") or "")
+    if detector:
+        entities.append({
+            "entity_type": "detector",
+            "key": detector,
+            "name": detector,
+            "metadata": {"domain": domain},
+        })
+    return entities
+
+
+def _proposal_relations(domain: str, direction: str, proposal_name: str, proposal: dict[str, Any]) -> list[MemoryRelation]:
+    relations: list[MemoryRelation] = []
+    if direction:
+        relations.append({
+            "relation_type": "proposed_for",
+            "source_type": "proposal",
+            "source_key": proposal_name,
+            "target_type": "research_direction",
+            "target_key": direction,
+            "metadata": {"domain": domain},
+        })
+    dataset = str(proposal.get("dataset") or "")
+    if dataset:
+        relations.append({
+            "relation_type": "targets_dataset",
+            "source_type": "proposal",
+            "source_key": proposal_name,
+            "target_type": "dataset",
+            "target_key": dataset,
+            "metadata": {"domain": domain},
+        })
+    detector = str(proposal.get("detector") or "")
+    if detector:
+        relations.append({
+            "relation_type": "uses_detector",
+            "source_type": "proposal",
+            "source_key": proposal_name,
+            "target_type": "detector",
+            "target_key": detector,
+            "metadata": {"domain": domain},
+        })
+    return relations
+
+
+def _implementation_plan_entities(domain: str, proposal_name: str, class_name: str, plan: dict[str, Any]) -> list[MemoryEntity]:
+    entities: list[MemoryEntity] = [
+        {
+            "entity_type": "proposal",
+            "key": proposal_name,
+            "name": proposal_name,
+            "metadata": {"domain": domain},
+        },
+        {
+            "entity_type": "implementation_plan",
+            "key": class_name,
+            "name": class_name,
+            "metadata": {"domain": domain},
+        },
+    ]
+    base_class = str(plan.get("base_class") or "")
+    if base_class:
+        entities.append({
+            "entity_type": "base_class",
+            "key": base_class,
+            "name": base_class,
+            "metadata": {"domain": domain},
+        })
+    return entities
+
+
+def _implementation_plan_relations(domain: str, proposal_name: str, class_name: str, plan: dict[str, Any]) -> list[MemoryRelation]:
+    relations: list[MemoryRelation] = [{
+        "relation_type": "plans_implementation",
+        "source_type": "proposal",
+        "source_key": proposal_name,
+        "target_type": "implementation_plan",
+        "target_key": class_name,
+        "metadata": {"domain": domain},
+    }]
+    base_class = str(plan.get("base_class") or "")
+    if base_class:
+        relations.append({
+            "relation_type": "extends_base_class",
+            "source_type": "implementation_plan",
+            "source_key": class_name,
+            "target_type": "base_class",
+            "target_key": base_class,
+            "metadata": {"domain": domain},
+        })
+    return relations
+
+
+def _validation_entities(domain: str, proposal_name: str, class_name: str) -> list[MemoryEntity]:
+    return [
+        {
+            "entity_type": "proposal",
+            "key": proposal_name,
+            "name": proposal_name,
+            "metadata": {"domain": domain},
+        },
+        {
+            "entity_type": "implementation",
+            "key": class_name,
+            "name": class_name,
+            "metadata": {"domain": domain},
+        },
+        {
+            "entity_type": "validation",
+            "key": class_name,
+            "name": class_name,
+            "metadata": {"domain": domain},
+        },
+    ]
+
+
+def _validation_relations(domain: str, proposal_name: str, class_name: str, validation: dict[str, Any]) -> list[MemoryRelation]:
+    return [
+        {
+            "relation_type": "validates",
+            "source_type": "validation",
+            "source_key": class_name,
+            "target_type": "implementation",
+            "target_key": class_name,
+            "metadata": {"domain": domain, "passed": validation.get("passed")},
+        },
+        {
+            "relation_type": "belongs_to_proposal",
+            "source_type": "validation",
+            "source_key": class_name,
+            "target_type": "proposal",
+            "target_key": proposal_name,
+            "metadata": {"domain": domain},
+        },
+    ]
+
+
+def _implementation_entities(domain: str, proposal_name: str, class_name: str) -> list[MemoryEntity]:
+    return [
+        {
+            "entity_type": "proposal",
+            "key": proposal_name,
+            "name": proposal_name,
+            "metadata": {"domain": domain},
+        },
+        {
+            "entity_type": "implementation",
+            "key": class_name,
+            "name": class_name,
+            "metadata": {"domain": domain},
+        },
+    ]
+
+
+def _implementation_relations(domain: str, proposal_name: str, class_name: str) -> list[MemoryRelation]:
+    return [{
+        "relation_type": "implements",
+        "source_type": "implementation",
+        "source_key": class_name,
+        "target_type": "proposal",
+        "target_key": proposal_name,
+        "metadata": {"domain": domain},
+    }]
+
+
+def _artifact_entities(
+    domain: str,
+    proposal_name: str,
+    artifact_id: str,
+    artifact_type: str,
+    artifact: dict[str, Any],
+) -> list[MemoryEntity]:
+    entities: list[MemoryEntity] = [
+        {
+            "entity_type": "proposal",
+            "key": proposal_name,
+            "name": proposal_name,
+            "metadata": {"domain": domain},
+        },
+        {
+            "entity_type": artifact_type,
+            "key": artifact_id,
+            "name": proposal_name,
+            "metadata": {"domain": domain},
+        },
+    ]
+    dataset = str(artifact.get("dataset") or "")
+    if dataset:
+        entities.append({
+            "entity_type": "dataset",
+            "key": dataset,
+            "name": dataset,
+            "metadata": {"domain": domain},
+        })
+    detector = str(artifact.get("detector") or "")
+    if detector:
+        entities.append({
+            "entity_type": "detector",
+            "key": detector,
+            "name": detector,
+            "metadata": {"domain": domain},
+        })
+    return entities
+
+
+def _artifact_relations(
+    domain: str,
+    proposal_name: str,
+    artifact_id: str,
+    artifact_type: str,
+    artifact: dict[str, Any],
+) -> list[MemoryRelation]:
+    relations: list[MemoryRelation] = [{
+        "relation_type": "produced_artifact",
+        "source_type": "proposal",
+        "source_key": proposal_name,
+        "target_type": artifact_type,
+        "target_key": artifact_id,
+        "metadata": {"domain": domain, "status": artifact.get("status")},
+    }]
+    dataset = str(artifact.get("dataset") or "")
+    if dataset:
+        relations.append({
+            "relation_type": "materializes_dataset",
+            "source_type": artifact_type,
+            "source_key": artifact_id,
+            "target_type": "dataset",
+            "target_key": dataset,
+            "metadata": {"domain": domain},
+        })
+    detector = str(artifact.get("detector") or "")
+    if detector:
+        relations.append({
+            "relation_type": "for_detector",
+            "source_type": artifact_type,
+            "source_key": artifact_id,
+            "target_type": "detector",
+            "target_key": detector,
+            "metadata": {"domain": domain},
+        })
+    return relations
+
+
+def _evaluation_entities(domain: str, direction: str, evaluation: dict[str, Any]) -> list[MemoryEntity]:
+    entities: list[MemoryEntity] = [{
+        "entity_type": "evaluation_summary",
+        "key": str(evaluation.get("best_proposal") or "evaluation_summary"),
+        "name": str(evaluation.get("best_proposal") or "evaluation_summary"),
+        "metadata": {"domain": domain},
+    }]
+    if direction:
+        entities.append({
+            "entity_type": "research_direction",
+            "key": direction,
+            "name": direction,
+            "metadata": {"domain": domain},
+        })
+    best_proposal = str(evaluation.get("best_proposal") or "")
+    if best_proposal:
+        entities.append({
+            "entity_type": "proposal",
+            "key": best_proposal,
+            "name": best_proposal,
+            "metadata": {"domain": domain},
+        })
+    return entities
+
+
+def _evaluation_relations(domain: str, direction: str, evaluation: dict[str, Any]) -> list[MemoryRelation]:
+    relations: list[MemoryRelation] = []
+    eval_key = str(evaluation.get("best_proposal") or "evaluation_summary")
+    if direction:
+        relations.append({
+            "relation_type": "evaluates_direction",
+            "source_type": "evaluation_summary",
+            "source_key": eval_key,
+            "target_type": "research_direction",
+            "target_key": direction,
+            "metadata": {"domain": domain},
+        })
+    best_proposal = str(evaluation.get("best_proposal") or "")
+    if best_proposal:
+        relations.append({
+            "relation_type": "selects_best_proposal",
+            "source_type": "evaluation_summary",
+            "source_key": eval_key,
+            "target_type": "proposal",
+            "target_key": best_proposal,
+            "metadata": {"domain": domain, "best_metric_value": evaluation.get("best_metric_value")},
+        })
+    return relations
+
+
+def _next_step_entities(domain: str, direction: str, title: str, step: dict[str, Any]) -> list[MemoryEntity]:
+    entities: list[MemoryEntity] = [{
+        "entity_type": "next_step",
+        "key": title,
+        "name": title,
+        "metadata": {"domain": domain},
+    }]
+    if direction:
+        entities.append({
+            "entity_type": "research_direction",
+            "key": direction,
+            "name": direction,
+            "metadata": {"domain": domain},
+        })
+    suggested = str(step.get("suggested_direction") or "")
+    if suggested:
+        entities.append({
+            "entity_type": "suggested_direction",
+            "key": suggested,
+            "name": suggested,
+            "metadata": {"domain": domain},
+        })
+    return entities
+
+
+def _next_step_relations(domain: str, direction: str, title: str, step: dict[str, Any]) -> list[MemoryRelation]:
+    relations: list[MemoryRelation] = []
+    if direction:
+        relations.append({
+            "relation_type": "follows_from",
+            "source_type": "next_step",
+            "source_key": title,
+            "target_type": "research_direction",
+            "target_key": direction,
+            "metadata": {"domain": domain, "priority": step.get("priority")},
+        })
+    suggested = str(step.get("suggested_direction") or "")
+    if suggested:
+        relations.append({
+            "relation_type": "suggests_direction",
+            "source_type": "next_step",
+            "source_key": title,
+            "target_type": "suggested_direction",
+            "target_key": suggested,
+            "metadata": {"domain": domain},
         })
     return relations
 

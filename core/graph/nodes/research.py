@@ -11,6 +11,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from core.graph.nodes.memory import persist_memory_records_for_state
 from core.graph.state import ResearchState
 from core.llm.factory import get_llm
 from core.tools.arxiv_tool import load_cached_digest, save_digest, download_paper_text
@@ -64,13 +65,19 @@ def research_node(state: ResearchState, profile: dict) -> dict:
         if a.get("source_type") == "paper"
     ]
 
-    return {
+    delta = {
         "research_artifacts": selected,
         "research_papers": research_papers,
         "research_summary": summary,
         "paper_digests": paper_digests,
         "errors": (state.get("errors") or []) + collection_errors,
     }
+    try:
+        persist_memory_records_for_state(profile, {**state, **delta})
+    except Exception as exc:
+        log.warning("research_node | Memory persistence failed: %s", exc)
+        delta["errors"] = list(delta.get("errors") or []) + [f"research: memory persistence failed: {exc}"]
+    return delta
 
 
 def _research_tool_configs(research_cfg: dict[str, Any]) -> list[dict[str, Any]]:

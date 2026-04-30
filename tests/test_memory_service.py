@@ -5,7 +5,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 from core.memory import MemoryService, Neo4jMemoryGraphStore, fingerprint_for_spec, memory_object_specs
+from core.memory.backends import get_memory_graph_store
 
 
 @dataclass
@@ -264,6 +268,31 @@ def test_neo4j_graph_store_upserts_projection_and_decodes_query_metadata():
     assert any("MERGE (record:MemoryRecord" in call["query"] for call in driver.write_calls)
     assert any("MEMORY_RELATION" in call["query"] for call in driver.write_calls)
     assert driver.session_databases == ["neo4j", "neo4j"]
+
+
+def test_get_memory_graph_store_uses_profile_storage_database_override():
+    profile = {
+        "name": "demo",
+        "storage": {
+            "memory_graph_backend": "neo4j",
+            "memory_neo4j_database": "profile_memory_db",
+        },
+    }
+    cfg = SimpleNamespace(
+        memory_graph_backend="neo4j",
+        memory_neo4j_uri="neo4j://hp.lan:7687",
+        memory_neo4j_username="neo4j",
+        memory_neo4j_password="password123",
+        memory_neo4j_database="global_memory_db",
+    )
+
+    with patch("core.memory.backends.get_config", return_value=cfg):
+        with patch("core.memory.backends.Neo4jMemoryGraphStore") as graph_store_cls:
+            graph_store_cls.return_value = "graph-store"
+            store = get_memory_graph_store(profile)
+
+    assert store == "graph-store"
+    assert graph_store_cls.call_args.kwargs["database"] == "profile_memory_db"
 
 
 class FakeNeo4jDriver:

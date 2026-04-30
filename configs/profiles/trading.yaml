@@ -140,6 +140,7 @@ storage:
   mlflow_experiment: trading_agent_experiments
   mongodb_results_db: agent_experiments
   chroma_collection: agent_experiments
+  memory_neo4j_database: researcher_framework
 
 prompts:
   research:

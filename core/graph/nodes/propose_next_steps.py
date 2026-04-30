@@ -14,6 +14,7 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from core.graph.nodes.memory import persist_memory_records_for_state
 from core.graph.state import ResearchState
 from core.llm.factory import get_llm
 from core.utils import extract_json_array
@@ -63,4 +64,10 @@ def propose_next_steps_node(state: ResearchState, profile: dict) -> dict:
             "errors": (state.get("errors") or []) + [f"propose_next_steps failed: {exc}"],
         }
 
-    return {"next_steps": next_steps}
+    delta = {"next_steps": next_steps}
+    try:
+        persist_memory_records_for_state(profile, {**state, **delta})
+    except Exception as exc:
+        log.warning("propose_next_steps_node | Memory persistence failed: %s", exc)
+        delta["errors"] = (state.get("errors") or []) + [f"propose_next_steps: memory persistence failed: {exc}"]
+    return delta

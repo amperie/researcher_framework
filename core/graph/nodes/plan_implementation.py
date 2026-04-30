@@ -14,6 +14,7 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from core.graph.nodes.memory import persist_memory_records_for_state
 from core.graph.state import ResearchState
 from core.llm.factory import get_llm
 from core.utils import extract_json_array
@@ -75,4 +76,10 @@ def plan_implementation_node(state: ResearchState, profile: dict) -> dict:
             "errors": (state.get("errors") or []) + [f"plan_implementation failed: {exc}"],
         }
 
-    return {"implementation_plans": plans}
+    delta = {"implementation_plans": plans}
+    try:
+        persist_memory_records_for_state(profile, {**state, **delta})
+    except Exception as exc:
+        log.warning("plan_implementation_node | Memory persistence failed: %s", exc)
+        delta["errors"] = (state.get("errors") or []) + [f"plan_implementation: memory persistence failed: {exc}"]
+    return delta

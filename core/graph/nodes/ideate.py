@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from core.graph.nodes.memory import persist_memory_records_for_state
 from core.graph.state import ResearchState
 from core.llm.factory import get_llm
 from core.utils import extract_json_array
@@ -65,4 +66,10 @@ def ideate_node(state: ResearchState, profile: dict) -> dict:
         log.error("ideate_node | Failed: %s", exc, exc_info=True)
         return {"ideas": [], "errors": (state.get("errors") or []) + [f"ideate failed: {exc}"]}
 
-    return {"ideas": ideas}
+    delta = {"ideas": ideas}
+    try:
+        persist_memory_records_for_state(profile, {**state, **delta})
+    except Exception as exc:
+        log.warning("ideate_node | Memory persistence failed: %s", exc)
+        delta["errors"] = (state.get("errors") or []) + [f"ideate: memory persistence failed: {exc}"]
+    return delta
