@@ -1327,12 +1327,24 @@ def _dataset_artifact_from_memory(
     try:
         service = MemoryService.for_profile(profile)
         fingerprint = _dataset_config_fingerprint(dataset_cfg)
-        record = service.find_one_record({
-            "domain": profile.get("name", "neuralsignal"),
-            "object_type": "dataset",
-            "metadata.dataset_config_fingerprint": fingerprint,
-            "metadata.dataset_status": "ready",
-        })
+        reuse_lookup = getattr(service, "find_reusable", None)
+        reuse = reuse_lookup(
+            domain=str(profile.get("name", "neuralsignal")),
+            object_type="dataset",
+            fingerprint=fingerprint,
+            fingerprint_metadata_key="dataset_config_fingerprint",
+            status_metadata_key="dataset_status",
+            ready_statuses=["ready"],
+        ) if callable(reuse_lookup) else None
+        if isinstance(reuse, dict):
+            record = reuse.get("record") if reuse.get("reusable") else None
+        else:
+            record = service.find_one_record({
+                "domain": profile.get("name", "neuralsignal"),
+                "object_type": "dataset",
+                "metadata.dataset_config_fingerprint": fingerprint,
+                "metadata.dataset_status": "ready",
+            })
     except Exception as exc:
         log.debug("NeuralSignalPlugin | memory dataset lookup failed for %s: %s", proposal_name, exc)
         return None

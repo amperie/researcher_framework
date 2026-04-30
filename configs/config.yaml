@@ -24,6 +24,13 @@ chroma_ssl: false
 chroma_auth_token: ${CHROMA_AUTH_TOKEN:}
 chroma_collection: experiments
 
+# ── Memory graph backend ─────────────────────────────────────────────────────
+memory_graph_backend: ${MEMORY_GRAPH_BACKEND:noop}   # noop | neo4j
+memory_neo4j_uri: ${MEMORY_NEO4J_URI:}
+memory_neo4j_username: ${MEMORY_NEO4J_USERNAME:}
+memory_neo4j_password: ${MEMORY_NEO4J_PASSWORD:}
+memory_neo4j_database: ${MEMORY_NEO4J_DATABASE:}
+
 # ── MLflow ────────────────────────────────────────────────────────────────────
 mlflow_uri: ${MLFLOW_URI:http://localhost:5000}
 

@@ -35,6 +35,27 @@ execution:
   poll_interval_seconds: 30
   job_timeout_seconds: 72000
 
+memory:
+  objects:
+    - object_type: dataset
+      kind: neuralsignal_dataset
+      reusable: true
+      fingerprint_metadata_key: dataset_config_fingerprint
+      status_metadata_key: dataset_status
+      ready_statuses: [ready]
+      required_blob_names: [dataset_artifact]
+    - object_type: featureset
+      kind: neuralsignal_featureset
+      reusable: true
+      fingerprint_metadata_key: feature_set_fingerprint
+    - object_type: model
+      kind: neuralsignal_model
+      reusable: true
+      fingerprint_metadata_key: model_config_fingerprint
+    - object_type: experiment_result
+      kind: neuralsignal_experiment
+      reusable: false
+
 # ── LLM Model Selection ────────────────────────────────────────────────────────
 llm:
   default_model: claude-opus-4-6

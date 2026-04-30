@@ -48,6 +48,34 @@ It contains:
 - `tags`: lightweight retrieval hints
 - `blob_refs`: references to large external artifacts
 - `entities`, `relations`: graph projection inputs
+- `lineage`: node/run/source/dependency information
+- `validity`: reusable/fresh/stale/superseded status information
+
+Records emitted by older builders are normalized by `MemoryService` before
+persistence, so new canonical fields can be added without forcing every adapter
+to update at once.
+
+### Typed object specs
+
+Profiles can declare typed memory objects under `memory.objects`. These specs
+tell core how to interpret reusable domain objects without hardcoding domain
+schemas into the graph:
+
+```yaml
+memory:
+  objects:
+    - object_type: dataset
+      kind: neuralsignal_dataset
+      reusable: true
+      fingerprint_metadata_key: dataset_config_fingerprint
+      status_metadata_key: dataset_status
+      ready_statuses: [ready]
+      required_blob_names: [dataset_artifact]
+```
+
+The core owns the mechanics: fingerprint fields, reusable statuses, required
+blob refs, kind/schema defaults, typed lookup, and projection repair. The domain
+still owns meaning: what a dataset, model, strategy, or backtest contains.
 
 ### Persistence service
 
@@ -64,6 +92,11 @@ It also exposes:
 - `search(query, n_results=...)` for semantic retrieval
 - `find_records(filters, limit=...)` for structured lookups
 - `find_one_record(filters)` for exact-match reuse flows
+- `query(...)` for one semantic/structured typed retrieval API
+- `find_reusable(...)` for exact reuse with status and blob checks
+- `emit(...)` for node-level typed memory emission
+- `resolve_blob_refs(...)` / `hydrate_blobs(...)` for backend-blind blob access
+- `repair_projections(...)` for rebuilding vector/graph indexes from documents
 
 ### Backends
 
@@ -98,6 +131,14 @@ Memory record construction is adapter-owned when available:
 Fallback generic builders live in:
 
 - [`core/memory/defaults.py`](/E:/Programming/NeuralSignalResearcher/core/memory/defaults.py:10)
+
+Nodes can also emit individual typed memory objects through:
+
+- `core.graph.nodes.memory.emit_memory_record(...)`
+
+This is useful when a node creates a reusable object before the full run is
+complete, for example a generated implementation, validation result, prepared
+dataset, or submitted job handle.
 
 ### Reading memory
 
@@ -262,17 +303,9 @@ High-level flow:
 
 1. Build the effective dataset config.
 2. Compute `dataset_config_fingerprint`.
-3. Query memory:
-
-```python
-{
-  "domain": "neuralsignal",
-  "object_type": "dataset",
-  "metadata.dataset_config_fingerprint": <fingerprint>,
-  "metadata.dataset_status": "ready",
-}
-```
-
+3. Call `MemoryService.find_reusable(...)` with `object_type="dataset"`,
+   `fingerprint_metadata_key="dataset_config_fingerprint"`,
+   `status_metadata_key="dataset_status"`, and `ready_statuses=["ready"]`.
 4. If a matching dataset record exists and the referenced dataset file still
    exists, reuse it.
 5. Skip the expensive dataset-generation task.
@@ -295,9 +328,10 @@ When adding memory-backed reuse for a new object type:
 2. Build a deterministic spec containing only identity-defining fields.
 3. Hash it with `fingerprint_json(...)`.
 4. Persist the fingerprint under `metadata`.
-5. Use `MemoryService.find_one_record(...)` with structured filters before
-   starting expensive work.
-6. Validate that the referenced blob/file/artifact still exists before reuse.
+5. Use `MemoryService.find_reusable(...)` before starting expensive work.
+6. Let core validate reusable status and required blob refs.
+7. Do any final domain-specific sanity checks that cannot be expressed as a
+   generic status/blob check.
 
 This same pattern works for:
 
@@ -438,22 +472,31 @@ When adding a new profile:
 
 - Document store is the source of truth.
 - Vector store is a projection.
+- Graph store is a projection.
 - Retrieval artifacts should be concise and readable.
 - Exact-match reuse should always re-check file/blob existence before trusting a
   stale record.
 - Fingerprints should be based on effective configs, not raw profile YAML dumps.
+- `repair_projections(...)` can rebuild vector/graph projections from document
+  records after schema, embedding, or backend changes.
 
 ## Current Gaps / Future Work
 
 The current implementation now supports:
 
 - canonical typed memory records
+- profile-declared memory object specs
+- node-level typed memory emission API
 - semantic retrieval
+- typed structured retrieval through `MemoryService.query(...)`
 - exact dataset reuse for NeuralSignal
+- exact reuse helper with validity and blob checks
+- lineage and validity fields on canonical records
+- projection repair from document-store source of truth
 
 Likely next steps:
 
-- exact model reuse via `model_config_fingerprint`
 - graph backend implementation for `entities` / `relations`
-- memory write paths for non-experiment object types in more profiles
+- domain use of generic exact reuse for models/backtests/portfolios
 - profile-specific retention / deduplication policies
+- knowledge distillation records and jobs

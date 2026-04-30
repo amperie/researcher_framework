@@ -35,6 +35,32 @@ class MemoryRelation(TypedDict, total=False):
     metadata: dict[str, Any]
 
 
+class MemoryLineage(TypedDict, total=False):
+    """How a memory record was produced and what it depends on."""
+
+    node: str
+    run_id: str
+    source_state_keys: list[str]
+    source_record_ids: list[str]
+    input_fingerprints: dict[str, str]
+    code_fingerprints: dict[str, str]
+    config_fingerprint: str
+    parent_record_ids: list[str]
+
+
+class MemoryValidity(TypedDict, total=False):
+    """Reuse and freshness metadata for a memory record."""
+
+    status: str
+    reusable: bool
+    expires_at: str | None
+    checked_at: str | None
+    invalidated_at: str | None
+    invalidated_reason: str
+    superseded_by: str
+    checks: dict[str, Any]
+
+
 class MemoryRecord(TypedDict, total=False):
     """Canonical domain-agnostic memory record."""
 
@@ -53,6 +79,8 @@ class MemoryRecord(TypedDict, total=False):
     created_at: str
     source_run_id: str | None
     source_record_id: str | None
+    lineage: MemoryLineage
+    validity: MemoryValidity
     blob_refs: list[MemoryBlobRef]
     entities: list[MemoryEntity]
     relations: list[MemoryRelation]
@@ -74,3 +102,46 @@ class MemorySearchHit(TypedDict, total=False):
     distance: float | None
     document: str
     vector_metadata: dict[str, Any]
+
+
+class MemoryObjectSpec(TypedDict, total=False):
+    """Profile-declared behavior for a typed memory object."""
+
+    object_type: str
+    kind: str
+    schema_version: str
+    reusable: bool
+    fingerprint_fields: list[str]
+    fingerprint_metadata_key: str
+    status_metadata_key: str
+    ready_statuses: list[str]
+    vector_fields: list[str]
+    required_blob_names: list[str]
+
+
+class MemoryQuery(TypedDict, total=False):
+    """Backend-agnostic memory retrieval request."""
+
+    query: str
+    domain: str
+    kind: str
+    object_type: str
+    object_key: str
+    object_role: str
+    tags: list[str]
+    filters: dict[str, Any]
+    fingerprint: str
+    fingerprint_metadata_key: str
+    include_blobs: bool
+    n_results: int
+    limit: int
+
+
+class MemoryReuseResult(TypedDict, total=False):
+    """Exact or policy-driven reuse lookup result."""
+
+    reusable: bool
+    record: MemoryRecord | None
+    reason: str
+    fingerprint: str
+    resolved_blobs: dict[str, str]

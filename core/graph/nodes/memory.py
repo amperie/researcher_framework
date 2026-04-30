@@ -29,3 +29,43 @@ def persist_memory_records_for_state(profile: dict, state: dict) -> None:
     if not records:
         return
     MemoryService.for_profile(profile).persist_records(records)
+
+
+def emit_memory_record(
+    profile: dict,
+    *,
+    object_type: str,
+    payload: dict,
+    node: str,
+    kind: str = "",
+    object_key: str = "",
+    object_role: str = "artifact",
+    title: str = "",
+    summary: str = "",
+    metadata: dict | None = None,
+    tags: list[str] | None = None,
+    source_state_keys: list[str] | None = None,
+    source_record_ids: list[str] | None = None,
+    blob_refs: list[dict] | None = None,
+    entities: list[dict] | None = None,
+    relations: list[dict] | None = None,
+) -> dict:
+    """Emit and persist a single typed memory object from a graph node."""
+    return MemoryService.for_profile(profile).emit(
+        profile=profile,
+        object_type=object_type,
+        payload=payload,
+        node=node,
+        kind=kind,
+        object_key=object_key,
+        object_role=object_role,
+        title=title,
+        summary=summary,
+        metadata=metadata or {},
+        tags=tags or [],
+        source_state_keys=source_state_keys or [],
+        source_record_ids=source_record_ids or [],
+        blob_refs=blob_refs or [],
+        entities=entities or [],
+        relations=relations or [],
+    )

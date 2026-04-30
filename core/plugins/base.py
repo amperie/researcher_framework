@@ -222,6 +222,19 @@ class ResearchAdapter(Protocol):
         """
         ...
 
+    def memory_object_specs(
+        self,
+        profile: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Return optional typed memory object specs for this domain.
+
+        Profiles can declare these specs in YAML. Adapters may provide them
+        dynamically when object identity, reuse policy, or projection hints
+        depend on runtime platform facts. Core consumes the specs; adapters do
+        not need to know which memory backends are configured.
+        """
+        ...
+
     def memory_record_to_artifact(
         self,
         profile: dict[str, Any],

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.memory.fingerprints import fingerprint_json
-from core.memory.models import MemoryEntity, MemoryRecord, MemoryRelation
+from core.memory.models import MemoryEntity, MemoryObjectSpec, MemoryRecord, MemoryRelation
 
 
 def build_core_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
@@ -17,6 +17,134 @@ def build_core_memory_records(profile: dict[str, Any], state: dict[str, Any]) ->
     records.extend(build_experiment_artifact_memory_records(profile, state))
     records.extend(build_experiment_memory_records(profile, state))
     return dedupe_memory_records(records)
+
+
+def ensure_memory_record_defaults(record: MemoryRecord, *, node: str = "") -> MemoryRecord:
+    """Fill newer canonical fields on older/ad-hoc record builders."""
+    hydrated = dict(record)
+    metadata = dict(hydrated.get("metadata") or {})
+    domain = str(hydrated.get("domain") or metadata.get("profile") or "")
+    object_type = str(hydrated.get("object_type") or hydrated.get("kind") or "memory")
+    hydrated.setdefault("domain", domain)
+    hydrated.setdefault("object_type", object_type)
+    hydrated.setdefault("object_key", str(hydrated.get("record_id") or ""))
+    hydrated.setdefault("object_role", "artifact")
+    hydrated.setdefault("schema_version", "1")
+    hydrated.setdefault("content", {})
+    hydrated.setdefault("metadata", metadata)
+    hydrated.setdefault("tags", [domain, object_type] if domain else [object_type])
+    hydrated.setdefault("created_at", _now_iso())
+    hydrated.setdefault("lineage", {
+        "node": node,
+        "source_state_keys": [],
+        "source_record_ids": [],
+    })
+    hydrated.setdefault("validity", {
+        "status": str(metadata.get("status") or metadata.get(f"{object_type}_status") or "ready"),
+        "checked_at": hydrated.get("created_at"),
+        "checks": {},
+    })
+    hydrated.setdefault("blob_refs", [])
+    hydrated.setdefault("entities", [])
+    hydrated.setdefault("relations", [])
+    return hydrated
+
+
+def memory_object_specs(profile: dict[str, Any]) -> dict[str, MemoryObjectSpec]:
+    """Return profile-declared memory object specs keyed by object_type."""
+    specs: dict[str, MemoryObjectSpec] = {}
+    for raw in ((profile.get("memory") or {}).get("objects") or []):
+        if not isinstance(raw, dict) or not raw.get("object_type"):
+            continue
+        spec: MemoryObjectSpec = dict(raw)
+        spec.setdefault("schema_version", "1")
+        spec.setdefault("fingerprint_metadata_key", "fingerprint")
+        spec.setdefault("status_metadata_key", "status")
+        spec.setdefault("ready_statuses", ["ready"])
+        specs[str(spec["object_type"])] = spec
+    return specs
+
+
+def memory_object_spec(profile: dict[str, Any], object_type: str) -> MemoryObjectSpec | None:
+    """Return one profile-declared memory object spec, if present."""
+    return memory_object_specs(profile).get(object_type)
+
+
+def fingerprint_for_spec(spec: MemoryObjectSpec, payload: dict[str, Any]) -> str:
+    """Compute a deterministic fingerprint from a spec's dotted payload fields."""
+    fields = list(spec.get("fingerprint_fields") or [])
+    if not fields:
+        return fingerprint_json(payload)
+    selected = {field: _get_dotted(payload, field) for field in fields}
+    return fingerprint_json(selected)
+
+
+def build_memory_record(
+    *,
+    profile: dict[str, Any],
+    object_type: str,
+    payload: dict[str, Any],
+    node: str = "",
+    kind: str = "",
+    object_key: str = "",
+    object_role: str = "artifact",
+    title: str = "",
+    summary: str = "",
+    metadata: dict[str, Any] | None = None,
+    tags: list[str] | None = None,
+    spec: MemoryObjectSpec | None = None,
+    source_state_keys: list[str] | None = None,
+    source_record_ids: list[str] | None = None,
+    blob_refs: list[dict[str, Any]] | None = None,
+    entities: list[dict[str, Any]] | None = None,
+    relations: list[dict[str, Any]] | None = None,
+) -> MemoryRecord:
+    """Build a canonical memory record from a typed node emission."""
+    domain = str(profile.get("name") or "")
+    object_spec = spec or memory_object_spec(profile, object_type) or {}
+    record_kind = kind or str(object_spec.get("kind") or object_type)
+    record_metadata = dict(metadata or {})
+    if object_spec.get("fingerprint_fields"):
+        fingerprint_key = str(object_spec.get("fingerprint_metadata_key") or "fingerprint")
+        record_metadata.setdefault(fingerprint_key, fingerprint_for_spec(object_spec, payload))
+    fingerprint = str(record_metadata.get(str(object_spec.get("fingerprint_metadata_key") or "fingerprint")) or "")
+    key = object_key or fingerprint or str(payload.get("id") or payload.get("name") or title or object_type)
+    record_id = str(payload.get("record_id") or f"{object_type}:{key}")
+    created_at = _now_iso()
+
+    return {
+        "record_id": record_id,
+        "domain": domain,
+        "kind": record_kind,
+        "object_type": object_type,
+        "object_key": key,
+        "object_role": object_role,
+        "schema_version": str(object_spec.get("schema_version") or "1"),
+        "title": title or str(payload.get("title") or payload.get("name") or key),
+        "summary": summary or _compact_payload_summary(payload),
+        "content": dict(payload),
+        "metadata": {
+            "profile": domain,
+            "memory_kind": record_kind,
+            **record_metadata,
+        },
+        "tags": list(tags or [domain, object_type]),
+        "created_at": created_at,
+        "lineage": {
+            "node": node,
+            "source_state_keys": list(source_state_keys or []),
+            "source_record_ids": list(source_record_ids or []),
+        },
+        "validity": {
+            "status": str(record_metadata.get(str(object_spec.get("status_metadata_key") or "status")) or "ready"),
+            "reusable": bool(object_spec.get("reusable", False)),
+            "checked_at": created_at,
+            "checks": {},
+        },
+        "blob_refs": list(blob_refs or []),
+        "entities": list(entities or []),
+        "relations": list(relations or []),
+    }
 
 
 def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
@@ -541,6 +669,25 @@ def _experiment_relations(profile: dict[str, Any], proposal_name: str, proposal:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _get_dotted(value: dict[str, Any], path: str) -> Any:
+    current: Any = value
+    for part in path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _compact_payload_summary(payload: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for key, value in payload.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            lines.append(f"{key}: {value}")
+        if len(lines) >= 12:
+            break
+    return "\n".join(lines)
 
 
 def _blob_refs_from_metadata_targets(

@@ -19,6 +19,29 @@ pipeline:
     - store_results
     - propose_next_steps
 
+memory:
+  objects:
+    - object_type: dataset
+      kind: trading_dataset
+      reusable: true
+      fingerprint_metadata_key: dataset_config_fingerprint
+      status_metadata_key: dataset_status
+      ready_statuses: [ready]
+    - object_type: algorithm
+      kind: trading_algorithm
+      reusable: true
+      fingerprint_metadata_key: algorithm_fingerprint
+    - object_type: portfolio
+      kind: trading_portfolio
+      reusable: true
+      fingerprint_metadata_key: portfolio_config_fingerprint
+    - object_type: backtest
+      kind: trading_backtest
+      reusable: true
+      fingerprint_metadata_key: backtest_config_fingerprint
+      status_metadata_key: backtest_status
+      ready_statuses: [ready]
+
 llm:
   default_model: claude-opus-4-6
   step_overrides:
