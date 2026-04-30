@@ -48,17 +48,17 @@ research:
   max_summary_artifacts: 12
   tools:
     - name: arxiv
-      tool: tools.research_tools.collect_arxiv
+      tool: core.tools.research_tools.collect_arxiv
       categories: [cs.LG, cs.AI, cs.CL]
       max_results: 20
       relevance_score_threshold: 6
       max_papers_to_digest: 3
-    - name: prior_experiments
-      tool: tools.research_tools.collect_prior_experiments
+    - name: memory
+      tool: core.tools.research_tools.collect_memory
       n_results: 5
       relevance_score_threshold: 7
     - name: profile_context
-      tool: tools.research_tools.collect_profile_context
+      tool: core.tools.research_tools.collect_profile_context
       relevance_score_threshold: 5
   domain_context: >
     Focus on mechanistic interpretability, probing classifiers, activation analysis,
@@ -405,6 +405,8 @@ prompts:
       Common issues: wrong tensor indexing, using self.cfg instead of self.config, missing output_format handling,
       NaN from empty tensors, wrong layer filtering logic, or implementing extract_features instead of process_feature_set.
       Real scan outputs are usually flat dict[str, torch.Tensor], not outputs[0].
+      Return raw ASCII Python source only.
+      Do not include explanation, markdown fences, bullets, Unicode punctuation, or any text before/after the code.
       Return ONLY parseable corrected Python source code. No explanation, no markdown fences,
       no prose before or after the code.
 

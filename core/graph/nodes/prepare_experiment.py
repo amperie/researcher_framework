@@ -7,6 +7,7 @@ market data bundle.
 from __future__ import annotations
 
 from core.graph.state import ResearchState
+from core.graph.nodes.memory import persist_memory_records_for_state
 from core.plugins.loader import adapter_has, load_adapter
 from core.utils.logger import get_logger
 
@@ -32,7 +33,13 @@ def prepare_experiment_node(state: ResearchState, profile: dict) -> dict:
                 "experiment_artifacts": [],
                 "errors": (state.get("errors") or []) + [f"prepare_experiment: adapter failed: {exc}"],
             }
-        return _normalize_delta(delta, state)
+        normalized = _normalize_delta(delta, state)
+        try:
+            persist_memory_records_for_state(profile, {**state, **normalized})
+        except Exception as exc:
+            log.warning("prepare_experiment_node | Memory persistence failed: %s", exc)
+            normalized["errors"] = list(normalized.get("errors") or []) + [f"prepare_experiment: memory persistence failed: {exc}"]
+        return normalized
 
     # Legacy fallback for modules exposing create_dataset(profile, proposal, implementation).
     proposals = state.get("proposals") or []
@@ -83,6 +90,11 @@ def prepare_experiment_node(state: ResearchState, profile: dict) -> dict:
     if datasets:
         delta["datasets"] = datasets
 
+    try:
+        persist_memory_records_for_state(profile, {**state, **delta})
+    except Exception as exc:
+        log.warning("prepare_experiment_node | Memory persistence failed: %s", exc)
+        delta["errors"] = list(delta.get("errors") or []) + [f"prepare_experiment: memory persistence failed: {exc}"]
     return delta
 
 

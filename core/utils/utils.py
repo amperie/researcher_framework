@@ -7,82 +7,72 @@ from typing import Any
 
 
 def extract_json_array(text: str) -> list:
-    """Extract the first JSON array found in *text*, tolerating markdown fences.
-
-    Uses bracket counting to find the outermost `[...]` so nested arrays
-    are not mistaken for the end of the outer array.
-
-    Raises:
-        ValueError: If no JSON array is found or it cannot be parsed.
-    """
-    start = text.find("[")
-    if start == -1:
+    """Extract the first parseable JSON array found in *text*."""
+    result = _extract_json_block(text, opener="[", closer="]", expected_type=list)
+    if not isinstance(result, list):
         raise ValueError(f"No JSON array found in LLM response: {text!r}")
-
-    depth = 0
-    in_string = False
-    escape_next = False
-    for i, ch in enumerate(text[start:], start):
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == "\\" and in_string:
-            escape_next = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "[":
-            depth += 1
-        elif ch == "]":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start: i + 1])
-                except json.JSONDecodeError as exc:
-                    raise ValueError(
-                        f"Found JSON array bounds but failed to parse: {exc}"
-                    ) from exc
-
-    raise ValueError(f"Unmatched '[' in LLM response: {text!r}")
+    return result
 
 
 def extract_json_object(text: str) -> dict:
-    """Extract the first JSON object found in *text*, tolerating markdown fences."""
-    start = text.find("{")
-    if start == -1:
+    """Extract the first parseable JSON object found in *text*."""
+    result = _extract_json_block(text, opener="{", closer="}", expected_type=dict)
+    if not isinstance(result, dict):
         raise ValueError(f"No JSON object found in LLM response: {text!r}")
+    return result
 
-    depth = 0
-    in_string = False
-    escape_next = False
-    for i, ch in enumerate(text[start:], start):
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == "\\" and in_string:
-            escape_next = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start: i + 1])
-                except json.JSONDecodeError as exc:
-                    raise ValueError(
-                        f"Found JSON object bounds but failed to parse: {exc}"
-                    ) from exc
 
-    raise ValueError(f"Unmatched '{{' in LLM response: {text!r}")
+def _extract_json_block(text: str, *, opener: str, closer: str, expected_type: type) -> Any:
+    starts = [i for i, ch in enumerate(text) if ch == opener]
+    if not starts:
+        name = "array" if expected_type is list else "object"
+        raise ValueError(f"No JSON {name} found in LLM response: {text!r}")
+
+    parse_errors: list[str] = []
+    saw_unmatched = False
+
+    for start in starts:
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i, ch in enumerate(text[start:], start):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start: i + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                    except json.JSONDecodeError as exc:
+                        parse_errors.append(str(exc))
+                        break
+                    if isinstance(parsed, expected_type):
+                        return parsed
+                    parse_errors.append(f"decoded JSON was {type(parsed).__name__}, expected {expected_type.__name__}")
+                    break
+        else:
+            saw_unmatched = True
+
+    if parse_errors:
+        name = "array" if expected_type is list else "object"
+        raise ValueError(f"Found JSON {name} bounds but failed to parse: {parse_errors[0]}")
+    if saw_unmatched:
+        raise ValueError(f"Unmatched {opener!r} in LLM response: {text!r}")
+
+    name = "array" if expected_type is list else "object"
+    raise ValueError(f"No JSON {name} found in LLM response: {text!r}")
 
 
 def load_yaml_section(section: str, config_path: str = "configs/config.yaml") -> dict[str, Any]:

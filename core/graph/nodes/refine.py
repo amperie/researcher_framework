@@ -14,6 +14,7 @@ import json
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from core.graph.state import ResearchState
+from core.graph.nodes.memory import persist_memory_records_for_state
 from core.llm.factory import get_llm
 from core.utils import extract_json_array
 from core.utils.logger import get_logger
@@ -76,4 +77,11 @@ def refine_node(state: ResearchState, profile: dict) -> dict:
             "errors": (state.get("errors") or []) + [f"refine failed: {exc}"],
         }
 
-    return {"refined_ideas": refined}
+    delta = {"refined_ideas": refined}
+    merged = {**state, **delta}
+    try:
+        persist_memory_records_for_state(profile, merged)
+    except Exception as exc:
+        log.warning("refine_node | Memory persistence failed: %s", exc)
+        delta["errors"] = (state.get("errors") or []) + [f"refine: memory persistence failed: {exc}"]
+    return delta

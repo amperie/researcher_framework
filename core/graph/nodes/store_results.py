@@ -1,4 +1,4 @@
-"""Store results step - persist experiment records to MLflow, ChromaDB, and MongoDB.
+"""Store results step - persist experiment records plus canonical memory.
 
 Reads:
     state['experiment_results']
@@ -17,9 +17,10 @@ from datetime import datetime, timezone
 import mlflow
 import pymongo
 
-from core.graph.state import ResearchState
 from configs.config import get_config
-from core.tools.chroma_tool import ChromaStore
+from core.graph.state import ResearchState
+from core.graph.nodes.memory import build_memory_records_for_state
+from core.memory import MemoryService
 from core.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -38,8 +39,6 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
     storage_cfg = profile.get("storage") or {}
     mlflow_experiment = storage_cfg.get("mlflow_experiment", "researcher_experiments")
     mongo_db = storage_cfg.get("mongodb_results_db", "researcher_results")
-    chroma_collection = storage_cfg.get("chroma_collection", "experiments")
-
     cfg = get_config()
     stored_ids: list[str] = []
     errors = list(state.get("errors") or [])
@@ -85,31 +84,6 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
                 log.warning("store_results_node | MLflow failed: %s", exc)
                 errors.append(f"store_results: MLflow failed for {proposal_name}: {exc}")
 
-        # --- ChromaDB ---
-        chroma_id = experiment_id
-        try:
-            store = ChromaStore(collection_name=chroma_collection)
-            document = (
-                f"Profile: {profile.get('name', '')}\n"
-                f"Direction: {direction}\n"
-                f"Proposal: {proposal_name}\n"
-                f"Description: {result.get('proposal', {}).get('description', '')}\n"
-                f"Metrics: {metrics}"
-            )
-            metadata = {
-                "experiment_id": experiment_id,
-                "proposal_name": proposal_name,
-                "profile": profile.get("name", ""),
-                "inserted_at": inserted_at,
-                "mlflow_run_id": mlflow_run_id,
-                **{k: float(v) for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
-            }
-            store.upsert(chroma_id, document, metadata)
-            log.info("store_results_node | ChromaDB upsert - %s", chroma_id)
-        except Exception as exc:
-            log.warning("store_results_node | ChromaDB failed: %s", exc)
-            errors.append(f"store_results: ChromaDB failed for {proposal_name}: {exc}")
-
         # --- MongoDB ---
         try:
             client = pymongo.MongoClient(cfg.mongo_url)
@@ -132,5 +106,13 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
             errors.append(f"store_results: MongoDB failed for {proposal_name}: {exc}")
 
         stored_ids.append(experiment_id)
+
+    try:
+        memory_service = MemoryService.for_profile(profile)
+        records = build_memory_records_for_state(profile, state)
+        memory_service.persist_records(records)
+    except Exception as exc:
+        log.warning("store_results_node | Memory persistence failed: %s", exc)
+        errors.append(f"store_results: memory persistence failed: {exc}")
 
     return {"stored_result_ids": stored_ids, "errors": errors}

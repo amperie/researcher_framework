@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import tempfile
 import shutil
 import sys
 from pathlib import Path
@@ -46,11 +47,19 @@ def create_s1_model(payload: dict[str, Any]) -> dict[str, Any]:
 
     best = max(models, key=lambda model: _model_section(model, "metrics").get("test_auc", 0.0))
     artifacts = dict(_model_section(best, "artifacts"))
+    model_cfg = _model_config(best)
+    figure_paths = _persist_model_figures(model_cfg)
     return {
         "metrics": dict(_model_section(best, "metrics")),
         "params": dict(_model_section(best, "params")),
         "feature_importance": dict(artifacts.get("feature_importance", {}) or {}),
         "artifacts": artifacts,
+        "model_config": {
+            "description": model_cfg.get("description"),
+            "model": model_cfg.get("model"),
+            "tags": model_cfg.get("tags"),
+        },
+        "figure_paths": figure_paths,
     }
 
 
@@ -188,6 +197,54 @@ def _model_section(model: Any, name: str) -> dict[str, Any]:
     except Exception:
         section = None
     return section if isinstance(section, dict) else {}
+
+
+def _model_config(model: Any) -> dict[str, Any]:
+    config = getattr(model, "config", None)
+    if isinstance(config, dict):
+        return config
+    try:
+        return dict(config)
+    except Exception:
+        return {}
+
+
+def _persist_model_figures(model_cfg: dict[str, Any]) -> dict[str, str]:
+    figures = model_cfg.get("figures")
+    if not isinstance(figures, dict):
+        return {}
+
+    persisted: dict[str, str] = {}
+    for name, figure in figures.items():
+        saved = _save_figure(figure, name)
+        if saved:
+            persisted[name] = saved
+    return persisted
+
+
+def _save_figure(figure: Any, name: str) -> str:
+    path_value = _existing_figure_path(figure)
+    if path_value:
+        return path_value
+
+    if not hasattr(figure, "savefig"):
+        return ""
+
+    safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name.strip()) or "figure"
+    out_dir = Path(tempfile.mkdtemp(prefix="nsr_figures_"))
+    out_path = out_dir / f"{safe_name}.png"
+    try:
+        figure.savefig(out_path)
+        return str(out_path.resolve())
+    except Exception:
+        return ""
+
+
+def _existing_figure_path(figure: Any) -> str:
+    if isinstance(figure, (str, Path)):
+        path = Path(str(figure))
+        return str(path.resolve()) if path.exists() else ""
+    return ""
 
 
 def _inject_feature_processor(cfg: dict[str, Any]) -> None:

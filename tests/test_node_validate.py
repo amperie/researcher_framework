@@ -5,7 +5,13 @@ import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from core.graph.nodes.validate import _run_tests, _strip_fences, validate_node
+from core.graph.nodes.validate import (
+    _build_neuralsignal_feature_set_contract_test,
+    _preflight_validation_error,
+    _run_tests,
+    _strip_fences,
+    validate_node,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +62,41 @@ class TestRunTests:
             output = _run_tests("uv run pytest", "test_file.py", 60)
 
         assert "ERROR" in output
+
+
+# ---------------------------------------------------------------------------
+# _preflight_validation_error
+# ---------------------------------------------------------------------------
+
+class TestPreflightValidationError:
+    def test_detects_make_column_name_with_multiple_args(self):
+        code = """
+class MyClass:
+    def f(self):
+        return self.make_column_name("a", "b")
+"""
+        error = _preflight_validation_error(code)
+        assert "make_column_name accepts exactly one positional string argument" in error
+
+    def test_allows_single_argument_make_column_name(self):
+        code = """
+class MyClass:
+    def f(self):
+        return self.make_column_name("a_b")
+"""
+        assert _preflight_validation_error(code) == ""
+
+
+class TestNeuralSignalContractTest:
+    def test_contract_scan_includes_qk_and_output_layers(self):
+        source = _build_neuralsignal_feature_set_contract_test(
+            script_path="dummy.py",
+            class_name="DummyClass",
+            expected_feature_set_name="dummy_feature",
+        )
+        assert 'model.layers.0.attn.q_proj' in source
+        assert 'model.layers.0.attn.k_proj' in source
+        assert 'model.layers.0.attn.o_proj' in source
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +253,85 @@ class TestValidateNodePass:
         assert vr["passed"] is False
         assert any("test generation failed" in e for e in result["errors"])
 
+    def test_persists_memory_after_validation(self):
+        impls = [{"class_name": "MyClass", "script_path": "fake.py", "proposal_name": "idea_a"}]
+        cfg = SimpleNamespace(validate_timeout_seconds=30)
+        profile = self._profile(auto_run=False)
+        profile["validate"]["test_output_dir"] = "dev/experiments/tests"
+
+        with patch("core.graph.nodes.validate.get_config", return_value=cfg):
+            with patch("pathlib.Path.mkdir"):
+                with patch("pathlib.Path.exists", return_value=True):
+                    with patch("pathlib.Path.read_text", return_value="class MyClass:\n    pass\n"):
+                        with patch(
+                            "core.graph.nodes.validate._build_test_code",
+                            return_value=("def test_x(): pass", "contract:test"),
+                        ):
+                            with patch("pathlib.Path.write_text"):
+                                with patch("core.graph.nodes.validate.persist_memory_records_for_state") as persist_memory:
+                                    result = validate_node({"implementations": impls}, profile)
+
+        assert result["validation_results"][0]["passed"] is None
+        persist_memory.assert_called_once()
+
+    def test_validation_registers_artifact_references(self, tmp_path):
+        script = tmp_path / "my_class.py"
+        script.write_text("class MyClass: pass", encoding="utf-8")
+        impls = [{"class_name": "MyClass", "script_path": str(script), "proposal_name": "idea_a"}]
+        cfg = SimpleNamespace(validate_timeout_seconds=30)
+        profile = self._profile()
+        profile["validate"]["test_output_dir"] = str(tmp_path / "tests")
+
+        artifact_store = MagicMock()
+        artifact_store.store_file.side_effect = [
+            {"artifact_id": "validation-test-1", "uri": "s3://bucket/test.py"},
+            {"artifact_id": "implementation-1", "uri": "s3://bucket/impl.py"},
+        ]
+        artifact_store.store_json.return_value = {
+            "artifact_id": "validation-result-1",
+            "uri": "s3://bucket/validation.json",
+        }
+
+        with patch("core.graph.nodes.validate.get_config", return_value=cfg):
+            with patch(
+                "core.graph.nodes.validate._build_test_code",
+                return_value=("def test_x(): pass", "contract:test"),
+            ):
+                with patch("core.graph.nodes.validate._run_tests", return_value="1 passed"):
+                    with patch("core.graph.nodes.artifact_refs.get_artifact_store", return_value=artifact_store):
+                        result = validate_node({"implementations": impls}, profile)
+
+        vr = result["validation_results"][0]
+        updated_impl = result["implementations"][0]
+        assert vr["test_file_artifact_id"] == "validation-test-1"
+        assert vr["implementation_artifact_id"] == "implementation-1"
+        assert vr["stored_artifact_id"] == "validation-result-1"
+        assert updated_impl["stored_artifact_id"] == "implementation-1"
+
+    def test_memory_failure_is_non_fatal(self):
+        impls = [{"class_name": "MyClass", "script_path": "fake.py"}]
+        cfg = SimpleNamespace(validate_timeout_seconds=30)
+        profile = self._profile(auto_run=False)
+        profile["validate"]["test_output_dir"] = "dev/experiments/tests"
+
+        with patch("core.graph.nodes.validate.get_config", return_value=cfg):
+            with patch("pathlib.Path.mkdir"):
+                with patch("pathlib.Path.exists", return_value=True):
+                    with patch("pathlib.Path.read_text", return_value="class MyClass:\n    pass\n"):
+                        with patch(
+                            "core.graph.nodes.validate._build_test_code",
+                            return_value=("def test_x(): pass", "contract:test"),
+                        ):
+                            with patch("pathlib.Path.write_text"):
+                                with patch(
+                                    "core.graph.nodes.validate.persist_memory_records_for_state",
+                                    side_effect=Exception("memory down"),
+                                ):
+                                    result = validate_node({"implementations": impls}, profile)
+
+        assert result["validation_results"][0]["passed"] is None
+        assert any("memory persistence failed" in e for e in result["errors"])
+
 
 # ---------------------------------------------------------------------------
 # validate_node — fix-retry loop
@@ -325,4 +445,47 @@ class TestValidateNodeFixRetry:
         assert script.read_text(encoding="utf-8") == original_code
         assert result["validation_results"][0]["passed"] is False
         assert "Fix response rejected" in result["validation_results"][0]["test_output"]
+
+    def test_preflight_make_column_name_error_triggers_fix_loop(self, tmp_path):
+        script = tmp_path / "my_class.py"
+        script.write_text(
+            "class MyClass:\n"
+            "    def make_column_name(self, name):\n"
+            "        return name\n"
+            "    def process_feature_set(self, scan=None):\n"
+            "        return self.make_column_name('a', 'b')\n",
+            encoding="utf-8",
+        )
+        impls = [{"class_name": "MyClass", "script_path": str(script)}]
+        cfg = SimpleNamespace(validate_timeout_seconds=30)
+
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = [
+            MagicMock(content="def test_x(): pass"),
+            MagicMock(
+                content=(
+                    "class MyClass:\n"
+                    "    def make_column_name(self, name):\n"
+                    "        return name\n"
+                    "    def process_feature_set(self, scan=None):\n"
+                    "        return self.make_column_name('a_b')\n"
+                )
+            ),
+        ]
+
+        test_output_dir = tmp_path / "tests"
+        profile = self._profile(max_retries=1)
+        profile["validate"]["test_output_dir"] = str(test_output_dir)
+
+        with patch("core.graph.nodes.validate.get_llm", return_value=mock_llm):
+            with patch("core.graph.nodes.validate.get_config", return_value=cfg):
+                with patch("core.graph.nodes.validate._run_tests", return_value="1 passed"):
+                    result = validate_node(
+                        {"implementations": impls},
+                        profile,
+                    )
+
+        vr = result["validation_results"][0]
+        assert vr["passed"] is True
+        assert vr["attempts"] == 1
 

@@ -14,9 +14,9 @@ import importlib
 from pathlib import Path
 from typing import Any
 
+from core.memory import MemoryService, default_memory_record_to_artifact
 from core.plugins.loader import adapter_has, load_adapter
 from core.tools.arxiv_tool import search_arxiv
-from core.tools.chroma_tool import ChromaStore
 from core.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -60,27 +60,39 @@ def collect_prior_experiments(
     tool_cfg: dict[str, Any],
     state: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Retrieve semantically similar prior experiment records from ChromaDB."""
-    storage_cfg = profile.get("storage") or {}
-    collection = tool_cfg.get("collection") or storage_cfg.get("chroma_collection")
+    """Backward-compatible alias for memory retrieval."""
+    return collect_memory(direction, profile, tool_cfg, state)
+
+
+def collect_memory(
+    direction: str,
+    profile: dict[str, Any],
+    tool_cfg: dict[str, Any],
+    state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Retrieve semantically similar canonical memory records."""
     n_results = int(tool_cfg.get("n_results", 5))
 
-    store = ChromaStore(collection_name=collection)
-    records = store.query_similar(direction, n_results=n_results)
-    artifacts = []
-    for record in records:
-        artifacts.append({
-            "artifact_id": f"prior_experiment:{record.get('id', 'unknown')}",
-            "source": tool_cfg.get("name", "prior_experiments"),
-            "source_type": "prior_experiment",
-            "title": record.get("metadata", {}).get("proposal_name") or record.get("id", "prior experiment"),
-            "summary": record.get("document", ""),
-            "metadata": {
-                **(record.get("metadata") or {}),
-                "distance": record.get("distance"),
-            },
-            "raw": record,
-        })
+    service = MemoryService.for_profile(profile)
+    hits = service.search(direction, n_results=n_results)
+    source_name = tool_cfg.get("name", "memory")
+    try:
+        adapter = load_adapter(profile)
+    except Exception:
+        adapter = None
+    artifacts: list[dict[str, Any]] = []
+    for hit in hits:
+        record = hit.get("record") or {}
+        distance = hit.get("distance")
+        if adapter_has(adapter, "memory_record_to_artifact"):
+            artifact = adapter.memory_record_to_artifact(profile, record, state)
+            artifact.setdefault("source", source_name)
+            metadata = dict(artifact.get("metadata") or {})
+            metadata.setdefault("distance", distance)
+            artifact["metadata"] = metadata
+        else:
+            artifact = default_memory_record_to_artifact(record, source_name=source_name, distance=distance)
+        artifacts.append(artifact)
     return artifacts
 
 

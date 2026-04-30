@@ -42,6 +42,11 @@ class TestExtractJsonArray:
         result = extract_json_array(text)
         assert result == [{"name": "test"}]
 
+    def test_ignores_non_json_brackets_before_array(self):
+        text = 'Notes [draft]: final answer\n[{"name": "test"}]'
+        result = extract_json_array(text)
+        assert result == [{"name": "test"}]
+
     def test_no_array_raises(self):
         with pytest.raises(ValueError, match="No JSON array"):
             extract_json_array("no array here")
@@ -85,6 +90,11 @@ class TestExtractJsonObject:
     def test_object_with_escaped_quote(self):
         result = extract_json_object('{"key": "val\\"ue"}')
         assert result == {"key": 'val"ue'}
+
+    def test_ignores_non_json_braces_before_object(self):
+        text = 'Template {draft} final: {"score": 7, "reason": "good"}'
+        result = extract_json_object(text)
+        assert result == {"score": 7, "reason": "good"}
 
     def test_no_object_raises(self):
         with pytest.raises(ValueError, match="No JSON object"):

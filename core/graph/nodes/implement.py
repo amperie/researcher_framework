@@ -18,7 +18,9 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from configs.config import get_config
+from core.graph.nodes.artifact_refs import register_implementation_artifact
 from core.graph.nodes.code_safety import extract_python_source, validate_python_source
+from core.graph.nodes.memory import persist_memory_records_for_state
 from core.graph.state import ResearchState
 from core.llm.factory import get_llm
 from core.utils.logger import get_logger
@@ -72,6 +74,7 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     implementations: list[dict] = []
+    errors = list(state.get("errors") or [])
 
     for plan in plans:
         class_name = plan.get("class_name") or plan.get("proposal_name", "UnknownClass")
@@ -83,13 +86,15 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
                 cached_code = cache_path.read_text(encoding="utf-8")
                 validate_python_source(cached_code, expected_class_name=class_name)
                 log.info("implement_node | Cache hit - %s", cache_path)
-                implementations.append({
+                implementation = {
                     "script_path": str(cache_path),
                     "class_name": class_name,
                     "proposal_name": proposal_name,
                     "plan": plan,
                     "cached": True,
-                })
+                }
+                register_implementation_artifact(profile, implementation, errors)
+                implementations.append(implementation)
                 continue
             except Exception as exc:
                 log.warning(
@@ -116,13 +121,15 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
 
             cache_path.write_text(code, encoding="utf-8")
             log.info("implement_node | Saved %d lines → %s", len(code.splitlines()), cache_path)
-            implementations.append({
+            implementation = {
                 "script_path": str(cache_path),
                 "class_name": class_name,
                 "proposal_name": proposal_name,
                 "plan": plan,
                 "cached": False,
-            })
+            }
+            register_implementation_artifact(profile, implementation, errors)
+            implementations.append(implementation)
         except Exception as exc:
             log.error("implement_node | Code generation failed for %r: %s", class_name, exc, exc_info=True)
             implementations.append({
@@ -132,8 +139,17 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
                 "plan": plan,
                 "error": str(exc),
             })
+            errors.append(f"implement: {class_name} failed: {exc}")
 
-    return {"implementations": implementations}
+    delta = {"implementations": implementations}
+    if errors:
+        delta["errors"] = errors
+    try:
+        persist_memory_records_for_state(profile, {**state, **delta})
+    except Exception as exc:
+        log.warning("implement_node | Memory persistence failed: %s", exc)
+        delta["errors"] = list(delta.get("errors") or []) + [f"implement: memory persistence failed: {exc}"]
+    return delta
 
 
 def _strip_fences(text: str) -> str:

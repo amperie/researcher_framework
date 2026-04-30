@@ -207,6 +207,40 @@ Each returned artifact should include `artifact_id`, `source`, `source_type`, `t
 
 ---
 
+## Memory System
+
+The project includes a canonical memory layer under `core/memory/` for:
+
+- semantic retrieval of prior runs and profile objects
+- exact-match reuse of deterministic artifacts such as datasets
+- profile-specific object memory without hardcoding domain schemas into the graph
+
+Core ideas:
+
+- `MemoryRecord` is the generic envelope persisted by the system.
+- Adapters own profile-specific memory construction via `build_memory_records(...)`.
+- `research` reads memory through `collect_memory(...)`.
+- `store_results` persists memory through `MemoryService`.
+
+The memory envelope distinguishes:
+
+- `kind`: retrieval/use-case class
+- `object_type`: canonical object class such as `dataset`, `featureset`, `model`, `experiment_result`, `algorithm`, `portfolio`, `backtest`
+- `object_key`: stable object identity
+- `object_role`: how the object is being remembered, such as `artifact`, `implementation`, or `result`
+
+For deterministic reuse, adapters can also persist exact-match fingerprints in
+record metadata. The current `neuralsignal` adapter stores
+`dataset_config_fingerprint` and checks memory before creating a dataset. If an
+identical ready dataset already exists and its referenced file still exists, it
+reuses that dataset instead of recomputing it.
+
+Full documentation:
+
+- [`docs/memory.md`](docs/memory.md)
+
+---
+
 ## Architecture Overview
 
 ```

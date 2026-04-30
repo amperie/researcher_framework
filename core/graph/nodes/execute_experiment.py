@@ -4,6 +4,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from core.graph.state import ResearchState
+from core.graph.nodes.memory import persist_memory_records_for_state
 from core.plugins.loader import adapter_has, load_adapter
 from core.utils.logger import get_logger
 
@@ -29,7 +30,13 @@ def execute_experiment_node(state: ResearchState, profile: dict) -> dict:
                 "experiment_results": [],
                 "errors": (state.get("errors") or []) + [f"execute_experiment: adapter failed: {exc}"],
             }
-        return _normalize_delta(delta, state)
+        normalized = _normalize_delta(delta, state)
+        try:
+            persist_memory_records_for_state(profile, {**state, **normalized})
+        except Exception as exc:
+            log.warning("execute_experiment_node | Memory persistence failed: %s", exc)
+            normalized["errors"] = list(normalized.get("errors") or []) + [f"execute_experiment: memory persistence failed: {exc}"]
+        return normalized
 
     # Legacy fallback for modules exposing run_experiment/train_model functions.
     proposals = state.get("proposals") or []
@@ -85,6 +92,11 @@ def execute_experiment_node(state: ResearchState, profile: dict) -> dict:
     delta: dict = {"experiment_results": results, "errors": errors}
     if models:
         delta["models"] = models
+    try:
+        persist_memory_records_for_state(profile, {**state, **delta})
+    except Exception as exc:
+        log.warning("execute_experiment_node | Memory persistence failed: %s", exc)
+        delta["errors"] = list(delta.get("errors") or []) + [f"execute_experiment: memory persistence failed: {exc}"]
     return delta
 
 

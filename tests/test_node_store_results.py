@@ -7,10 +7,6 @@ from unittest.mock import MagicMock, patch
 from core.graph.nodes.store_results import store_results_node
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 PROFILE = {
     "name": "test",
     "storage": {
@@ -38,10 +34,6 @@ RESULT = {
 }
 
 
-# ---------------------------------------------------------------------------
-# No results to store
-# ---------------------------------------------------------------------------
-
 class TestStoreResultsNodeEmpty:
     def test_no_results_returns_empty_ids(self):
         result = store_results_node({}, PROFILE)
@@ -52,12 +44,9 @@ class TestStoreResultsNodeEmpty:
         assert result == {"stored_result_ids": []}
 
 
-# ---------------------------------------------------------------------------
-# MLflow logging
-# ---------------------------------------------------------------------------
-
 class TestStoreResultsMLflow:
     def test_mlflow_run_logged(self):
+        mock_service = MagicMock()
         mock_run = MagicMock()
         mock_run.__enter__ = lambda s: s
         mock_run.__exit__ = MagicMock(return_value=False)
@@ -70,11 +59,10 @@ class TestStoreResultsMLflow:
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics"):
                                 with patch("mlflow.set_tags"):
-                                    with patch("core.graph.nodes.store_results.ChromaStore"):
+                                    with patch("core.graph.nodes.store_results.MemoryService.for_profile", return_value=mock_service):
                                         with patch("pymongo.MongoClient"):
                                             result = store_results_node(
-                                                {"experiment_results": [RESULT],
-                                                 "research_direction": "test"},
+                                                {"experiment_results": [RESULT], "research_direction": "test"},
                                                 PROFILE,
                                             )
 
@@ -83,14 +71,10 @@ class TestStoreResultsMLflow:
     def test_mlflow_failure_is_non_fatal(self):
         with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri", side_effect=Exception("MLflow down")):
-                with patch("core.graph.nodes.store_results.ChromaStore"):
+                with patch("core.graph.nodes.store_results.MemoryService.for_profile"):
                     with patch("pymongo.MongoClient"):
-                        result = store_results_node(
-                            {"experiment_results": [RESULT]},
-                            PROFILE,
-                        )
+                        result = store_results_node({"experiment_results": [RESULT]}, PROFILE)
 
-        # Still stored the ID and recorded the error
         assert "exp-001" in result["stored_result_ids"]
         assert any("MLflow failed" in e for e in result["errors"])
 
@@ -116,14 +100,10 @@ class TestStoreResultsMLflow:
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics", side_effect=capture_metrics):
                                 with patch("mlflow.set_tags"):
-                                    with patch("core.graph.nodes.store_results.ChromaStore"):
+                                    with patch("core.graph.nodes.store_results.MemoryService.for_profile"):
                                         with patch("pymongo.MongoClient"):
-                                            store_results_node(
-                                                {"experiment_results": [result_with_mixed]},
-                                                PROFILE,
-                                            )
+                                            store_results_node({"experiment_results": [result_with_mixed]}, PROFILE)
 
-        # bool should be excluded; strings excluded; int and float included
         assert "test_auc" in logged_metrics
         assert "count" in logged_metrics
         assert "name" not in logged_metrics
@@ -134,7 +114,7 @@ class TestStoreResultsMLflow:
             with patch("mlflow.set_tracking_uri") as set_tracking_uri:
                 with patch("mlflow.set_experiment") as set_experiment:
                     with patch("mlflow.start_run") as start_run:
-                        with patch("core.graph.nodes.store_results.ChromaStore"):
+                        with patch("core.graph.nodes.store_results.MemoryService.for_profile"):
                             with patch("pymongo.MongoClient"):
                                 result = store_results_node(
                                     {"experiment_results": [{**RESULT, "mlflow_run_id": "run-existing"}]},
@@ -147,13 +127,9 @@ class TestStoreResultsMLflow:
         start_run.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# ChromaDB storage
-# ---------------------------------------------------------------------------
-
-class TestStoreResultsChroma:
-    def test_chromadb_upsert_called(self):
-        mock_store = MagicMock()
+class TestStoreResultsMemory:
+    def test_memory_service_persist_records_called(self):
+        mock_service = MagicMock()
         mock_run = MagicMock()
         mock_run.__enter__ = lambda s: s
         mock_run.__exit__ = MagicMock(return_value=False)
@@ -166,38 +142,74 @@ class TestStoreResultsChroma:
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics"):
                                 with patch("mlflow.set_tags"):
-                                    with patch("core.graph.nodes.store_results.ChromaStore",
-                                               return_value=mock_store):
+                                    with patch("core.graph.nodes.store_results.MemoryService.for_profile", return_value=mock_service):
                                         with patch("pymongo.MongoClient"):
                                             store_results_node(
-                                                {"experiment_results": [RESULT],
-                                                 "research_direction": "test dir"},
+                                                {"experiment_results": [RESULT], "research_direction": "test dir"},
                                                 PROFILE,
                                             )
 
-        mock_store.upsert.assert_called_once()
-        call_args = mock_store.upsert.call_args
-        assert call_args[0][0] == "exp-001"  # record_id
+        mock_service.persist_records.assert_called_once()
+        records = mock_service.persist_records.call_args.args[0]
+        assert len(records) == 1
+        assert records[0]["record_id"] == "exp-001"
 
-    def test_chromadb_failure_is_non_fatal(self):
-        mock_store = MagicMock()
-        mock_store.upsert.side_effect = Exception("ChromaDB down")
+    def test_memory_record_contains_structured_metadata(self):
+        mock_service = MagicMock()
+        mock_run = MagicMock()
+        mock_run.__enter__ = lambda s: s
+        mock_run.__exit__ = MagicMock(return_value=False)
+        mock_run.info.run_id = "run-1"
+        state = {
+            "experiment_results": [RESULT],
+            "research_direction": "test dir",
+            "evaluation_summary": {
+                "llm_analysis": {
+                    "per_proposal": [
+                        {
+                            "proposal_name": "my_proposal",
+                            "assessment": "moderate",
+                            "interpretation": "Signal mostly came from mid-layer activations.",
+                            "key_features": ["layer_8_ffn_norm"],
+                            "hypothesis_supported": True,
+                        }
+                    ]
+                }
+            },
+        }
+
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+            with patch("mlflow.set_tracking_uri"):
+                with patch("mlflow.set_experiment"):
+                    with patch("mlflow.start_run", return_value=mock_run):
+                        with patch("mlflow.log_params"):
+                            with patch("mlflow.log_metrics"):
+                                with patch("mlflow.set_tags"):
+                                    with patch("core.graph.nodes.store_results.MemoryService.for_profile", return_value=mock_service):
+                                        with patch("pymongo.MongoClient"):
+                                            store_results_node(state, PROFILE)
+
+        record = mock_service.persist_records.call_args.args[0][0]
+        assert "Assessment: moderate" in record["summary"]
+        assert record["kind"] == "prior_experiment"
+        assert record["metadata"]["research_direction"] == "test dir"
+        assert record["metadata"]["assessment"] == "moderate"
+        assert record["metadata"]["hypothesis_supported"] is True
+        assert any("mid-layer activations" in lesson for lesson in record["metadata"]["lessons"])
+
+    def test_memory_persistence_failure_is_non_fatal(self):
+        mock_service = MagicMock()
+        mock_service.persist_records.side_effect = Exception("memory down")
 
         with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri", side_effect=Exception("mlflow off")):
-                with patch("core.graph.nodes.store_results.ChromaStore", return_value=mock_store):
+                with patch("core.graph.nodes.store_results.MemoryService.for_profile", return_value=mock_service):
                     with patch("pymongo.MongoClient"):
-                        result = store_results_node(
-                            {"experiment_results": [RESULT]},
-                            PROFILE,
-                        )
+                        result = store_results_node({"experiment_results": [RESULT]}, PROFILE)
 
         assert "exp-001" in result["stored_result_ids"]
+        assert any("memory persistence failed" in e for e in result["errors"])
 
-
-# ---------------------------------------------------------------------------
-# MongoDB storage
-# ---------------------------------------------------------------------------
 
 class TestStoreResultsMongo:
     def test_mongodb_insert_called(self):
@@ -214,13 +226,9 @@ class TestStoreResultsMongo:
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics"):
                                 with patch("mlflow.set_tags"):
-                                    with patch("core.graph.nodes.store_results.ChromaStore"):
-                                        with patch("pymongo.MongoClient",
-                                                   return_value=mock_client):
-                                            store_results_node(
-                                                {"experiment_results": [RESULT]},
-                                                PROFILE,
-                                            )
+                                    with patch("core.graph.nodes.store_results.MemoryService.for_profile"):
+                                        with patch("pymongo.MongoClient", return_value=mock_client):
+                                            store_results_node({"experiment_results": [RESULT]}, PROFILE)
 
         mock_client["test_db"]["experiments"].insert_one.assert_called_once()
         mock_client.close.assert_called_once()
@@ -228,13 +236,9 @@ class TestStoreResultsMongo:
     def test_mongodb_failure_is_non_fatal(self):
         with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri", side_effect=Exception("off")):
-                with patch("core.graph.nodes.store_results.ChromaStore"):
-                    with patch("pymongo.MongoClient",
-                               side_effect=Exception("MongoDB down")):
-                        result = store_results_node(
-                            {"experiment_results": [RESULT]},
-                            PROFILE,
-                        )
+                with patch("core.graph.nodes.store_results.MemoryService.for_profile"):
+                    with patch("pymongo.MongoClient", side_effect=Exception("MongoDB down")):
+                        result = store_results_node({"experiment_results": [RESULT]}, PROFILE)
 
         assert "exp-001" in result["stored_result_ids"]
         assert any("MongoDB failed" in e for e in result["errors"])
@@ -261,17 +265,12 @@ class TestStoreResultsMongo:
                         with patch("mlflow.log_params"):
                             with patch("mlflow.log_metrics", side_effect=capture_metrics):
                                 with patch("mlflow.set_tags"):
-                                    with patch("core.graph.nodes.store_results.ChromaStore"):
+                                    with patch("core.graph.nodes.store_results.MemoryService.for_profile"):
                                         with patch("pymongo.MongoClient"):
                                             store_results_node(
-                                                {
-                                                    "experiment_results": [RESULT],
-                                                    "models": [model],
-                                                },
+                                                {"experiment_results": [RESULT], "models": [model]},
                                                 PROFILE,
                                             )
 
-        # Second call should have model_ prefix
         if len(logged_metrics) > 1:
             assert any(k.startswith("model_") for k in logged_metrics)
-

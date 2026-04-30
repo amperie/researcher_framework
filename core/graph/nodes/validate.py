@@ -9,6 +9,7 @@ implementation up to ``validate.max_fix_retries``.
 """
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 from pathlib import Path
@@ -16,6 +17,12 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from configs.config import get_config
+from core.graph.nodes.artifact_refs import (
+    register_implementation_artifact,
+    register_validation_result_artifact,
+    register_validation_test_artifact,
+)
+from core.graph.nodes.memory import persist_memory_records_for_state
 from core.graph.nodes.code_safety import extract_python_source, validate_python_source
 from core.graph.state import ResearchState
 from core.llm.factory import get_llm
@@ -50,12 +57,14 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
     for idx, impl in enumerate(implementations):
         script_path = impl.get("script_path", "")
         class_name = impl.get("class_name", "unknown")
+        proposal_name = impl.get("proposal_name") or class_name
 
         if not script_path or not Path(script_path).exists():
             log.warning("validate_node | Skipping %r - no valid script_path", class_name)
             validation_results.append({
                 "script_path": script_path,
                 "class_name": class_name,
+                "proposal_name": proposal_name,
                 "passed": False,
                 "test_file": "",
                 "test_output": "No script to validate",
@@ -85,6 +94,7 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
             validation_results.append({
                 "script_path": script_path,
                 "class_name": class_name,
+                "proposal_name": proposal_name,
                 "passed": False,
                 "test_file": str(test_file),
                 "test_output": f"Test generation failed: {exc}",
@@ -99,6 +109,7 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
             validation_results.append({
                 "script_path": script_path,
                 "class_name": class_name,
+                "proposal_name": proposal_name,
                 "passed": None,
                 "test_file": str(test_file),
                 "test_output": "auto_run=False",
@@ -107,13 +118,25 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
             })
             continue
 
+        test_file_record = register_validation_test_artifact(
+            profile,
+            proposal_name=proposal_name,
+            class_name=class_name,
+            test_file=str(test_file),
+            test_source=test_source,
+            errors=errors,
+        )
         passed = False
         test_output = ""
         attempts = 0
         current_code = code
 
         while attempts <= max_retries:
-            test_output = _run_tests(test_runner, str(test_file), cfg.validate_timeout_seconds)
+            preflight_error = _preflight_validation_error(current_code)
+            if preflight_error:
+                test_output = f"PREFLIGHT VALIDATION ERROR: {preflight_error}"
+            else:
+                test_output = _run_tests(test_runner, str(test_file), cfg.validate_timeout_seconds)
             passed = _pytest_output_passed(test_output)
             failure_summary = _summarize_test_failure(test_output)
 
@@ -142,8 +165,13 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
                     SystemMessage(content=fix_prompt),
                     HumanMessage(
                         content=(
+                            "Your response must be raw ASCII Python source only.\n"
+                            "Do not include explanation, markdown fences, bullets, Unicode dashes, or any text before/after the code.\n\n"
                             f"Implementation:\n```python\n{current_code}\n```\n\n"
                             f"Test file:\n```python\n{test_code}\n```\n\n"
+                            "Important API constraint:\n"
+                            "- FeatureSetBase.make_column_name takes exactly one string payload argument.\n"
+                            "- Build the full column name first, then call self.make_column_name(full_name).\n\n"
                             f"Failure output:\n{test_output[-3000:]}"
                         )
                     ),
@@ -160,15 +188,36 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
 
             attempts += 1
 
-        validation_results.append({
+        validation_result = {
             "script_path": script_path,
             "class_name": class_name,
+            "proposal_name": proposal_name,
             "passed": passed,
             "test_file": str(test_file),
             "test_output": test_output[-2000:],
             "attempts": attempts,
             "test_source": test_source,
-        })
+        }
+        if test_file_record:
+            validation_result["test_file_artifact_id"] = test_file_record["artifact_id"]
+            validation_result["test_file_artifact_uri"] = test_file_record["uri"]
+
+        updated_impls[idx] = {
+            **impl,
+            "script_path": script_path,
+            "proposal_name": proposal_name,
+            "validated": passed,
+        }
+        register_implementation_artifact(profile, updated_impls[idx], errors)
+        if updated_impls[idx].get("stored_artifact_id"):
+            validation_result["implementation_artifact_id"] = updated_impls[idx]["stored_artifact_id"]
+            validation_result["implementation_artifact_uri"] = updated_impls[idx].get("stored_artifact_uri", "")
+
+        result_record = register_validation_result_artifact(profile, validation_result, errors)
+        if result_record:
+            validation_result["stored_artifact_id"] = result_record["artifact_id"]
+            validation_result["stored_artifact_uri"] = result_record["uri"]
+        validation_results.append(validation_result)
 
         if not passed:
             errors.append(f"validate: {class_name} failed after {attempts} fix attempt(s)")
@@ -179,13 +228,17 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
                 _summarize_test_failure(test_output) or "see validation_results.test_output",
             )
 
-        updated_impls[idx] = {**impl, "script_path": script_path, "validated": passed}
-
-    return {
+    delta = {
         "implementations": updated_impls,
         "validation_results": validation_results,
         "errors": errors,
     }
+    try:
+        persist_memory_records_for_state(profile, {**state, **delta})
+    except Exception as exc:
+        log.warning("validate_node | Memory persistence failed: %s", exc)
+        delta["errors"] = errors + [f"validate: memory persistence failed: {exc}"]
+    return delta
 
 
 def _build_test_code(
@@ -419,19 +472,22 @@ def _scan():
             "layer_0": torch.randn(8, 16),
             "layer_1": torch.randn(8, 16),
             "layer_2": torch.randn(8, 16),
+            "layer_3": torch.randn(8, 16),
         }},
         "inputs": {{
             "layer_0": torch.randn(8, 16),
             "layer_1": torch.randn(8, 16),
             "layer_2": torch.randn(8, 16),
+            "layer_3": torch.randn(8, 16),
         }},
         "layer_id_to_name": {{
             "layer_0": "model.layers.0.mlp.fc",
             "layer_1": "model.layers.0.attn.q_proj",
-            "layer_2": "model.layers.0.norm",
+            "layer_2": "model.layers.0.attn.k_proj",
+            "layer_3": "model.layers.0.attn.o_proj",
         }},
-        "layer_order": ["layer_0", "layer_1", "layer_2"],
-        "layer_passes": {{"layer_0": 1, "layer_1": 1, "layer_2": 1}},
+        "layer_order": ["layer_0", "layer_1", "layer_2", "layer_3"],
+        "layer_passes": {{"layer_0": 1, "layer_1": 1, "layer_2": 1, "layer_3": 1}},
         "zone_size": 512,
         "ground_truth": 1,
     }}
@@ -486,3 +542,29 @@ def test_feature_set_contract_invalid_output_format():
     with pytest.raises(ValueError):
         instance.process_feature_set(_scan())
 '''
+
+
+def _preflight_validation_error(code: str) -> str:
+    """Return a targeted validation error for known contract violations."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return ""
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr == "make_column_name"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "self"
+        ):
+            continue
+        if len(node.args) != 1 or node.keywords:
+            return (
+                "FeatureSetBase.make_column_name accepts exactly one positional string argument; "
+                "combine name parts first and call self.make_column_name(full_name)."
+            )
+    return ""

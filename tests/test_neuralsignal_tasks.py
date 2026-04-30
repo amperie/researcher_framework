@@ -148,6 +148,8 @@ def test_create_s1_model_uses_public_automation_api_and_normalizes_best_model(mo
     assert result["params"] == {"auc": 0.77}
     assert result["feature_importance"] == {"f": 0.77}
     assert result["artifacts"] == {"feature_importance": {"f": 0.77}}
+    assert result["model_config"] == {"description": None, "model": None, "tags": None}
+    assert result["figure_paths"] == {}
 
 
 def test_enable_mongo_no_cursor_timeout_patches_query(monkeypatch):
@@ -197,6 +199,41 @@ def test_create_s1_model_supports_s1model_config_shape(monkeypatch):
     assert result["params"] == {"auc": 0.77}
     assert result["feature_importance"] == {"f": 0.77}
     assert result["artifacts"] == {"feature_importance": {"f": 0.77}}
+    assert result["model_config"] == {"description": None, "model": None, "tags": None}
+    assert result["figure_paths"] == {}
+
+
+def test_create_s1_model_returns_config_and_existing_figure_paths(monkeypatch, tmp_path):
+    figure_path = tmp_path / "confusion_matrix.png"
+    figure_path.write_text("fake image", encoding="utf-8")
+    automation = type("Automation", (), {})()
+    automation.get_config = lambda: {"seed": 42}
+
+    class Model:
+        def __init__(self):
+            self.metrics = {"test_auc": 0.81}
+            self.params = {"max_depth": 4}
+            self.artifacts = {"feature_importance": {"f": 0.81}}
+            self.config = {
+                "description": "model description",
+                "model": "xgboost",
+                "tags": ["neuralsignal", "hallucination"],
+                "figures": {"confusion_matrix": str(figure_path)},
+            }
+
+    automation.create_s1_model = lambda cfg: [Model()]
+
+    monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
+    monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+
+    result = tasks.create_s1_model({})
+
+    assert result["model_config"] == {
+        "description": "model description",
+        "model": "xgboost",
+        "tags": ["neuralsignal", "hallucination"],
+    }
+    assert result["figure_paths"] == {"confusion_matrix": str(figure_path.resolve())}
 
 
 def test_inject_feature_processor_wraps_structural_class_and_restores_real_base(tmp_path, monkeypatch):

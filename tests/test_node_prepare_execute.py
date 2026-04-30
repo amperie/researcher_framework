@@ -134,6 +134,18 @@ class TestPrepareExperimentNewApi:
 
         assert "datasets" in result
 
+    def test_persists_memory_after_adapter_prepare(self):
+        delta = {"experiment_artifacts": [{"artifact_id": "a1", "proposal_name": "prop1"}]}
+        adapter = MagicMock()
+        adapter.prepare_experiment.return_value = delta
+
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+            with patch("core.graph.nodes.prepare_experiment.persist_memory_records_for_state") as persist_memory:
+                result = prepare_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
+
+        assert len(result["experiment_artifacts"]) == 1
+        persist_memory.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # prepare_experiment_node — legacy fallback (create_dataset per proposal)
@@ -206,6 +218,24 @@ class TestPrepareExperimentLegacy:
         assert len(result["experiment_artifacts"]) == 1
         assert result["experiment_artifacts"][0]["artifact_type"] == "none"
 
+    def test_memory_failure_is_non_fatal(self):
+        artifact = {"dataset_id": "d1", "proposal_name": "prop1"}
+        adapter = _spec_adapter("create_dataset")
+        adapter.create_dataset.return_value = artifact
+
+        with patch("core.graph.nodes.prepare_experiment.load_adapter", return_value=adapter):
+            with patch(
+                "core.graph.nodes.prepare_experiment.persist_memory_records_for_state",
+                side_effect=Exception("memory down"),
+            ):
+                result = prepare_experiment_node(
+                    {"proposals": [PROPOSAL], "implementations": [IMPL]},
+                    PROFILE,
+                )
+
+        assert len(result["experiment_artifacts"]) == 1
+        assert any("memory persistence failed" in e for e in result["errors"])
+
 
 # ---------------------------------------------------------------------------
 # execute_experiment_node — adapter load failure
@@ -265,6 +295,18 @@ class TestExecuteExperimentNewApi:
 
         assert result["experiment_results"] == []
         assert any("adapter failed" in e for e in result["errors"])
+
+    def test_persists_memory_after_adapter_execute(self):
+        exp_result = {"metrics": {"test_auc": 0.75}, "proposal_name": "prop1", "experiment_id": "e1"}
+        adapter = MagicMock()
+        adapter.execute_experiment.return_value = {"experiment_results": [exp_result]}
+
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+            with patch("core.graph.nodes.execute_experiment.persist_memory_records_for_state") as persist_memory:
+                result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
+
+        assert len(result["experiment_results"]) == 1
+        persist_memory.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -356,4 +398,19 @@ class TestExecuteExperimentLegacy:
             )
 
         assert "prior error" in result["errors"]
+
+    def test_memory_failure_is_non_fatal(self):
+        run_result = {"metrics": {"test_auc": 0.75}}
+        adapter = _spec_adapter("run_experiment")
+        adapter.run_experiment.return_value = run_result
+
+        with patch("core.graph.nodes.execute_experiment.load_adapter", return_value=adapter):
+            with patch(
+                "core.graph.nodes.execute_experiment.persist_memory_records_for_state",
+                side_effect=Exception("memory down"),
+            ):
+                result = execute_experiment_node({"proposals": [PROPOSAL]}, PROFILE)
+
+        assert len(result["experiment_results"]) == 1
+        assert any("memory persistence failed" in e for e in result["errors"])
 

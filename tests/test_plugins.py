@@ -21,6 +21,8 @@ class TestResearchAdapterProtocol:
             "prepare_experiment",
             "execute_experiment",
             "summarize_result",
+            "build_memory_records",
+            "memory_record_to_artifact",
         }
         annotations = set(ResearchAdapter.__protocol_attrs__)
         assert required.issubset(annotations)
@@ -31,11 +33,15 @@ class TestResearchAdapterProtocol:
                 return {}
             def build_context(self, profile, state):
                 return {}
-            def prepare_experiment(self, profile, proposal, implementation, state):
+            def prepare_experiment(self, profile, state):
                 return {}
-            def execute_experiment(self, profile, proposal, implementation, artifact, experiment_id, state):
+            def execute_experiment(self, profile, state):
                 return {}
-            def summarize_result(self, profile, result):
+            def summarize_result(self, profile, state):
+                return {}
+            def build_memory_records(self, profile, state):
+                return []
+            def memory_record_to_artifact(self, profile, record, state):
                 return {}
 
         adapter = GoodAdapter()

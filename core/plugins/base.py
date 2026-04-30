@@ -201,3 +201,37 @@ class ResearchAdapter(Protocol):
             experiments, mutate state, or write external records.
         """
         ...
+
+    def build_memory_records(
+        self,
+        profile: dict[str, Any],
+        state: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Return canonical memory records for persistence.
+
+        This optional hook lets a domain declare what should be remembered after
+        execution without knowing where or how it will be stored. Core persists
+        the returned records into document, vector, blob, and graph backends as
+        configured.
+
+        Return:
+            A list of canonical memory record dictionaries. Each record should
+            include generic envelope fields such as ``record_id``, ``kind``,
+            ``summary``, and plugin-specific structured payload under
+            ``content`` / ``metadata``.
+        """
+        ...
+
+    def memory_record_to_artifact(
+        self,
+        profile: dict[str, Any],
+        record: dict[str, Any],
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Convert a canonical memory record into a research artifact.
+
+        This optional hook lets domains shape how retrieved memory appears in
+        downstream prompts. Core handles retrieval and passes hydrated canonical
+        records here for adapter-specific rendering.
+        """
+        ...
