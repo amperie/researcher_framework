@@ -10,6 +10,9 @@ import pymongo
 from configs.config import get_config
 from core.memory.models import MemoryRecord
 from core.tools.chroma_tool import ChromaStore
+from core.utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class MemoryDocumentStore(Protocol):
@@ -66,6 +69,7 @@ class MongoMemoryDocumentStore:
 
     def __post_init__(self) -> None:
         if self.client is None:
+            log.debug("memory.backends | Creating Mongo memory client db=%r collection=%r", self.db_name, self.collection_name)
             self.client = pymongo.MongoClient(self.mongo_url)
 
     @property
@@ -74,16 +78,20 @@ class MongoMemoryDocumentStore:
 
     def upsert(self, record: MemoryRecord) -> None:
         doc = dict(record)
+        log.debug("memory.backends | Mongo upsert memory record id=%r", doc.get("record_id"))
         self.collection.replace_one({"record_id": doc["record_id"]}, doc, upsert=True)
 
     def get(self, record_id: str) -> MemoryRecord | None:
+        log.debug("memory.backends | Mongo get memory record id=%r", record_id)
         doc = self.collection.find_one({"record_id": record_id})
         if not doc:
+            log.debug("memory.backends | Mongo memory record not found id=%r", record_id)
             return None
         doc.pop("_id", None)
         return doc
 
     def find(self, filters: dict[str, Any], limit: int = 50) -> list[MemoryRecord]:
+        log.debug("memory.backends | Mongo find filters=%s limit=%d", filters, limit)
         docs = list(self.collection.find(filters).limit(limit))
         for doc in docs:
             doc.pop("_id", None)
@@ -99,21 +107,30 @@ class ChromaMemoryVectorStore:
 
     def __post_init__(self) -> None:
         if self.store is None:
+            log.debug("memory.backends | Creating Chroma memory vector store collection=%r", self.collection_name)
             self.store = ChromaStore(collection_name=self.collection_name)
 
     def upsert(self, record_id: str, document: str, metadata: dict[str, Any]) -> None:
+        log.debug("memory.backends | Chroma upsert memory vector id=%r document_chars=%d", record_id, len(document))
         self.store.upsert(record_id, document, metadata)
 
     def query_similar(self, text: str, n_results: int) -> list[dict[str, Any]]:
-        return self.store.query_similar(text, n_results)
+        log.debug("memory.backends | Chroma query n_results=%d query_chars=%d", n_results, len(text))
+        results = self.store.query_similar(text, n_results)
+        log.debug("memory.backends | Chroma query returned %d hit(s)", len(results))
+        return results
 
     def get_by_id(self, record_id: str) -> dict[str, Any] | None:
+        log.debug("memory.backends | Chroma get vector id=%r", record_id)
         return self.store.get_by_id(record_id)
 
     def delete(self, record_id: str) -> None:
         delete = getattr(self.store, "delete", None)
         if callable(delete):
+            log.debug("memory.backends | Chroma delete vector id=%r", record_id)
             delete(record_id)
+        else:
+            log.debug("memory.backends | Chroma delete skipped; underlying store has no delete method")
 
 
 class NoopMemoryGraphStore:
@@ -126,6 +143,7 @@ class NoopMemoryGraphStore:
         nodes: list[dict[str, Any]],
         edges: list[dict[str, Any]],
     ) -> None:
+        log.debug("memory.backends | Noop graph upsert ignored id=%r", record.get("record_id"))
         return None
 
     def query(
@@ -136,6 +154,7 @@ class NoopMemoryGraphStore:
         edge_type: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
+        log.debug("memory.backends | Noop graph query returned no results")
         return []
 
 
@@ -154,10 +173,12 @@ class Neo4jMemoryGraphStore:
             try:
                 from neo4j import GraphDatabase
             except ImportError as exc:  # pragma: no cover - exercised only without optional dep.
+                log.error("memory.backends | Neo4j graph backend requested but neo4j package is missing")
                 raise RuntimeError(
                     "Neo4j graph memory requires the 'neo4j' package. "
                     "Install project dependencies or add neo4j>=5.0."
                 ) from exc
+            log.info("memory.backends | Creating Neo4j memory graph driver uri=%r database=%r", self.uri, self.database)
             self.driver = GraphDatabase.driver(self.uri, auth=(self.username, self.password))
 
     def close(self) -> None:
@@ -174,6 +195,7 @@ class Neo4jMemoryGraphStore:
     ) -> None:
         record_id = str(record.get("record_id") or "")
         if not record_id:
+            log.warning("memory.backends | Skipping Neo4j graph upsert for record without id")
             return None
         payload = {
             "record_id": record_id,
@@ -201,6 +223,12 @@ class Neo4jMemoryGraphStore:
 
         with self.driver.session(database=self.database) as session:
             session.execute_write(self._upsert_projection, payload, clean_nodes, clean_edges)
+        log.debug(
+            "memory.backends | Neo4j graph upserted id=%r nodes=%d edges=%d",
+            record_id,
+            len(clean_nodes),
+            len(clean_edges),
+        )
 
     def query(
         self,
@@ -221,7 +249,9 @@ class Neo4jMemoryGraphStore:
                 result = session.execute_read(self._query_edges, params)
             else:
                 result = session.execute_read(self._query_nodes, params)
-        return [_decode_graph_item(dict(item)) for item in result]
+        decoded = [_decode_graph_item(dict(item)) for item in result]
+        log.debug("memory.backends | Neo4j graph query returned %d result(s)", len(decoded))
+        return decoded
 
     @staticmethod
     def _upsert_projection(tx: Any, record_payload: dict[str, Any], nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
@@ -329,6 +359,7 @@ def get_memory_document_store(profile: dict[str, Any]) -> MongoMemoryDocumentSto
         or "researcher_results"
     )
     collection_name = storage_cfg.get("memory_mongodb_collection", "memory_records")
+    log.debug("memory.backends | Configured document store db=%r collection=%r", db_name, collection_name)
     return MongoMemoryDocumentStore(
         mongo_url=cfg.mongo_url,
         db_name=db_name,
@@ -340,6 +371,7 @@ def get_memory_vector_store(profile: dict[str, Any]) -> ChromaMemoryVectorStore:
     """Build the configured vector store for memory records."""
     storage_cfg = profile.get("storage") or {}
     collection_name = storage_cfg.get("memory_chroma_collection") or storage_cfg.get("chroma_collection")
+    log.debug("memory.backends | Configured vector store collection=%r", collection_name)
     return ChromaMemoryVectorStore(collection_name=collection_name)
 
 
@@ -348,12 +380,14 @@ def get_memory_graph_store(profile: dict[str, Any]) -> MemoryGraphStore:
     cfg = get_config()
     storage_cfg = profile.get("storage") or {}
     backend = str(storage_cfg.get("memory_graph_backend") or getattr(cfg, "memory_graph_backend", "noop") or "noop").lower()
+    log.debug("memory.backends | Configured graph backend=%r", backend)
     if backend in {"neo4j", "neo4j_memory"}:
         uri = storage_cfg.get("memory_neo4j_uri") or getattr(cfg, "memory_neo4j_uri", "")
         username = storage_cfg.get("memory_neo4j_username") or getattr(cfg, "memory_neo4j_username", "")
         password = storage_cfg.get("memory_neo4j_password") or getattr(cfg, "memory_neo4j_password", "")
         database = storage_cfg.get("memory_neo4j_database") or getattr(cfg, "memory_neo4j_database", None)
         if not uri or not username:
+            log.error("memory.backends | Neo4j graph backend missing uri or username")
             raise ValueError("Neo4j memory graph backend requires memory_neo4j_uri and memory_neo4j_username.")
         return Neo4jMemoryGraphStore(
             uri=str(uri),

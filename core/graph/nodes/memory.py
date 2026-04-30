@@ -10,24 +10,32 @@ log = get_logger(__name__)
 
 def build_memory_records_for_state(profile: dict, state: dict) -> list[dict]:
     """Build the full current memory projection for a merged graph state."""
+    log.debug("memory.node | Building memory records for profile=%r", profile.get("name"))
     records = list(build_core_memory_records(profile, state))
     try:
         adapter = load_adapter(profile)
-    except Exception:
+    except Exception as exc:
+        log.debug("memory.node | No adapter memory records available: %s", exc)
         adapter = None
     if adapter is not None and adapter_has(adapter, "build_memory_records"):
         try:
-            records.extend(adapter.build_memory_records(profile, state) or [])
+            adapter_records = adapter.build_memory_records(profile, state) or []
+            log.debug("memory.node | Adapter built %d memory record(s)", len(adapter_records))
+            records.extend(adapter_records)
         except Exception as exc:
             log.warning("memory | adapter build_memory_records failed: %s", exc)
-    return dedupe_memory_records(records)
+    deduped = dedupe_memory_records(records)
+    log.info("memory.node | Built %d memory record(s) for profile=%r", len(deduped), profile.get("name"))
+    return deduped
 
 
 def persist_memory_records_for_state(profile: dict, state: dict) -> None:
     """Persist the current memory records for the given merged graph state."""
     records = build_memory_records_for_state(profile, state)
     if not records:
+        log.debug("memory.node | No memory records to persist for profile=%r", profile.get("name"))
         return
+    log.info("memory.node | Persisting %d memory record(s) for profile=%r", len(records), profile.get("name"))
     MemoryService.for_profile(profile).persist_records(records)
 
 
@@ -51,6 +59,12 @@ def emit_memory_record(
     relations: list[dict] | None = None,
 ) -> dict:
     """Emit and persist a single typed memory object from a graph node."""
+    log.info(
+        "memory.node | Emitting memory record profile=%r node=%r object_type=%r",
+        profile.get("name"),
+        node,
+        object_type,
+    )
     return MemoryService.for_profile(profile).emit(
         profile=profile,
         object_type=object_type,

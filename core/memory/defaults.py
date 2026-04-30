@@ -6,6 +6,9 @@ from typing import Any
 
 from core.memory.fingerprints import fingerprint_json
 from core.memory.models import MemoryEntity, MemoryObjectSpec, MemoryRecord, MemoryRelation
+from core.utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 def build_core_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
@@ -16,7 +19,14 @@ def build_core_memory_records(profile: dict[str, Any], state: dict[str, Any]) ->
     records.extend(build_validation_memory_records(profile, state))
     records.extend(build_experiment_artifact_memory_records(profile, state))
     records.extend(build_experiment_memory_records(profile, state))
-    return dedupe_memory_records(records)
+    deduped = dedupe_memory_records(records)
+    log.debug(
+        "memory.defaults | Built %d generic record(s), %d after dedupe profile=%r",
+        len(records),
+        len(deduped),
+        profile.get("name"),
+    )
+    return deduped
 
 
 def ensure_memory_record_defaults(record: MemoryRecord, *, node: str = "") -> MemoryRecord:
@@ -47,6 +57,11 @@ def ensure_memory_record_defaults(record: MemoryRecord, *, node: str = "") -> Me
     hydrated.setdefault("blob_refs", [])
     hydrated.setdefault("entities", [])
     hydrated.setdefault("relations", [])
+    if hydrated.keys() != record.keys():
+        log.debug(
+            "memory.defaults | Normalized record id=%r with canonical defaults",
+            hydrated.get("record_id"),
+        )
     return hydrated
 
 
@@ -55,6 +70,7 @@ def memory_object_specs(profile: dict[str, Any]) -> dict[str, MemoryObjectSpec]:
     specs: dict[str, MemoryObjectSpec] = {}
     for raw in ((profile.get("memory") or {}).get("objects") or []):
         if not isinstance(raw, dict) or not raw.get("object_type"):
+            log.warning("memory.defaults | Ignoring invalid memory object spec in profile=%r: %r", profile.get("name"), raw)
             continue
         spec: MemoryObjectSpec = dict(raw)
         spec.setdefault("schema_version", "1")
@@ -62,6 +78,7 @@ def memory_object_specs(profile: dict[str, Any]) -> dict[str, MemoryObjectSpec]:
         spec.setdefault("status_metadata_key", "status")
         spec.setdefault("ready_statuses", ["ready"])
         specs[str(spec["object_type"])] = spec
+    log.debug("memory.defaults | Loaded %d memory object spec(s) for profile=%r", len(specs), profile.get("name"))
     return specs
 
 
@@ -74,8 +91,14 @@ def fingerprint_for_spec(spec: MemoryObjectSpec, payload: dict[str, Any]) -> str
     """Compute a deterministic fingerprint from a spec's dotted payload fields."""
     fields = list(spec.get("fingerprint_fields") or [])
     if not fields:
+        log.debug("memory.defaults | Fingerprinting full payload for object_type=%r", spec.get("object_type"))
         return fingerprint_json(payload)
     selected = {field: _get_dotted(payload, field) for field in fields}
+    log.debug(
+        "memory.defaults | Fingerprinting spec object_type=%r fields=%s",
+        spec.get("object_type"),
+        fields,
+    )
     return fingerprint_json(selected)
 
 
@@ -111,6 +134,13 @@ def build_memory_record(
     key = object_key or fingerprint or str(payload.get("id") or payload.get("name") or title or object_type)
     record_id = str(payload.get("record_id") or f"{object_type}:{key}")
     created_at = _now_iso()
+    log.debug(
+        "memory.defaults | Building memory record id=%r domain=%r kind=%r object_type=%r",
+        record_id,
+        domain,
+        record_kind,
+        object_type,
+    )
 
     return {
         "record_id": record_id,
@@ -544,11 +574,17 @@ def _scalar_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 def dedupe_memory_records(records: list[MemoryRecord]) -> list[MemoryRecord]:
     deduped: dict[str, MemoryRecord] = {}
+    dropped = 0
     for record in records:
         record_id = str(record.get("record_id") or "")
         if not record_id:
+            dropped += 1
             continue
+        if record_id in deduped:
+            log.debug("memory.defaults | Dedupe replacing duplicate record id=%r", record_id)
         deduped[record_id] = record
+    if dropped:
+        log.warning("memory.defaults | Dropped %d memory record(s) without record_id", dropped)
     return list(deduped.values())
 
 

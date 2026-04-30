@@ -23,6 +23,10 @@ The memory layer is used for four different jobs:
    - vector store for semantic retrieval
    - graph store for entity/relation structure
 
+Distillation of knowledge from raw memories is intentionally deferred. The
+current implementation records enough lineage, object typing, and evidence
+structure for a later distillation layer to consume.
+
 ## Core Components
 
 ### Canonical record
@@ -98,6 +102,65 @@ It also exposes:
 - `resolve_blob_refs(...)` / `hydrate_blobs(...)` for backend-blind blob access
 - `repair_projections(...)` for rebuilding vector/graph indexes from documents
 
+#### Service API examples
+
+Emit one typed object from a graph node:
+
+```python
+from core.graph.nodes.memory import emit_memory_record
+
+emit_memory_record(
+    profile,
+    node="prepare_experiment",
+    object_type="dataset",
+    payload={"dataset_config": dataset_cfg, "dataset_artifact": artifact},
+    metadata={
+        "dataset_config_fingerprint": fingerprint,
+        "dataset_status": "ready",
+    },
+    blob_refs=[
+        {
+            "name": "dataset_artifact",
+            "uri": artifact["stored_artifact_uri"],
+            "artifact_id": artifact["stored_artifact_id"],
+            "content_type": "text/csv",
+        }
+    ],
+)
+```
+
+Run a backend-agnostic typed query:
+
+```python
+service = MemoryService.for_profile(profile)
+hits = service.query(
+    query="activation sparsity hallucination",
+    domain=profile["name"],
+    object_type="experiment_result",
+    n_results=5,
+    include_blobs=True,
+)
+```
+
+Reuse a deterministic object using the profile declaration:
+
+```python
+reuse = service.find_reusable_for_profile(
+    profile,
+    object_type="dataset",
+    fingerprint=dataset_config_fingerprint,
+)
+if reuse["reusable"]:
+    record = reuse["record"]
+```
+
+Repair projections after changing projection code, embedding settings, or graph
+backend configuration:
+
+```python
+count = service.repair_projections({"domain": profile["name"]})
+```
+
 ### Backends
 
 Current backends are defined in
@@ -109,6 +172,9 @@ Current backends are defined in
   - semantic search over memory projections
 - `NoopMemoryGraphStore`
   - placeholder until a real graph backend is configured
+- `Neo4jMemoryGraphStore`
+  - optional graph projection backend when configured through profile/global
+    graph settings
 
 ## How Memory Flows Through The Graph
 
@@ -162,7 +228,7 @@ Adapters own profile-specific memory semantics. The shared contract lives in:
 
 - [`core/plugins/base.py`](/E:/Programming/NeuralSignalResearcher/core/plugins/base.py:205)
 
-Two hooks matter:
+Three hooks matter:
 
 ### `build_memory_records(profile, state)`
 
@@ -183,6 +249,24 @@ generic fallback artifact shape.
 
 For example, the `neuralsignal` adapter adds dataset, detector, feature set
 class, and stored artifact URI into the retrieved summary.
+
+### `memory_object_specs(profile)`
+
+Use this optional hook only when object specs cannot be expressed statically in
+profile YAML. The core reads specs from `profile["memory"]["objects"]` by
+default, so most domains should prefer YAML for clarity.
+
+Specs can declare:
+
+- `object_type`: canonical type such as `dataset`, `model`, or `backtest`
+- `kind`: profile-specific memory kind
+- `schema_version`: payload schema version
+- `reusable`: whether exact reuse is allowed
+- `fingerprint_fields`: dotted payload fields for core-generated fingerprints
+- `fingerprint_metadata_key`: metadata key used for exact lookup
+- `status_metadata_key`: metadata key used for readiness/freshness
+- `ready_statuses`: statuses that count as reusable
+- `required_blob_names`: blob refs that must still resolve before reuse
 
 ## Typed Objects
 
@@ -409,6 +493,32 @@ When adding a new profile:
 3. Add fingerprints for deterministic reusable objects.
 4. Persist large files via artifact storage and reference them with `blob_refs`.
 5. Use `memory_record_to_artifact(...)` to shape prompt-facing retrieval text.
+6. Add `entities` and `relations` for object graph structure when useful.
+7. Use `find_reusable_for_profile(...)` before expensive deterministic work.
+
+## Logging
+
+The memory layer logs at multiple levels:
+
+- `DEBUG`: backend construction, record normalization, projection details,
+  filter decisions, fingerprint fields, graph/no-op behavior, and blob
+  resolution counts.
+- `INFO`: batches persisted, records emitted, query result counts, reuse hits
+  and misses, projection repair start/end.
+- `WARNING`: malformed profile memory specs, adapter memory-builder failures,
+  missing local blob refs, records dropped because they have no `record_id`.
+- `ERROR`: misconfigured graph backends or missing optional graph dependencies.
+
+Useful logger namespaces:
+
+- `core.memory.service`
+- `core.memory.backends`
+- `core.memory.defaults`
+- `core.graph.nodes.memory`
+
+These logs are intentionally backend-agnostic at the call site. Domain code can
+emit or retrieve memory without logging Mongo, Chroma, S3, or graph operations
+itself; those details are recorded by the core layer.
 
 ## Example Record Shapes
 
@@ -479,6 +589,8 @@ When adding a new profile:
 - Fingerprints should be based on effective configs, not raw profile YAML dumps.
 - `repair_projections(...)` can rebuild vector/graph projections from document
   records after schema, embedding, or backend changes.
+- Memory logs are available through the normal project logging configuration in
+  `configs/config.yaml`.
 
 ## Current Gaps / Future Work
 
@@ -496,7 +608,6 @@ The current implementation now supports:
 
 Likely next steps:
 
-- graph backend implementation for `entities` / `relations`
 - domain use of generic exact reuse for models/backtests/portfolios
 - profile-specific retention / deduplication policies
 - knowledge distillation records and jobs
