@@ -24,6 +24,12 @@ class ResearchState(TypedDict, total=False):
     continue_loop: bool
     """When True, promote the top next_step as the new direction and loop."""
 
+    source_next_step_record_id: str
+    """Optional lineage pointer to the next_step record that initiated this run."""
+
+    source_next_step_title: str
+    """Human-readable next_step title carried forward for graph lineage."""
+
     # -------------------------------------------------------------------------
     # research step
     # -------------------------------------------------------------------------

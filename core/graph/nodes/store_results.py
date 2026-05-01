@@ -39,6 +39,7 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
     storage_cfg = profile.get("storage") or {}
     mlflow_experiment = storage_cfg.get("mlflow_experiment", "researcher_experiments")
     mongo_db = storage_cfg.get("mongodb_results_db", "researcher_results")
+    mongo_collection = storage_cfg.get("mongodb_results_collection", "experiments")
     cfg = get_config()
     stored_ids: list[str] = []
     errors = list(state.get("errors") or [])
@@ -98,7 +99,7 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
                 "mlflow_run_id": mlflow_run_id,
                 "inserted_at": inserted_at,
             }
-            client[mongo_db]["experiments"].insert_one(doc)
+            client[mongo_db][mongo_collection].insert_one(doc)
             client.close()
             log.info("store_results_node | MongoDB insert - %s", experiment_id)
         except Exception as exc:

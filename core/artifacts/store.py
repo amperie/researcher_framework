@@ -13,6 +13,9 @@ from uuid import uuid4
 import pymongo
 
 from configs.config import get_config
+from core.utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class ArtifactBackend(Protocol):
@@ -47,12 +50,19 @@ class FilesystemArtifactBackend:
         dest = self.root / key
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(src.read_bytes())
+        log.debug("artifacts.store | Filesystem stored file src=%r dest=%r", str(src), str(dest))
         return str(dest.resolve())
 
     def put_bytes(self, data: bytes, key: str, content_type: str | None = None) -> str:
         dest = self.root / key
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
+        log.debug(
+            "artifacts.store | Filesystem stored bytes dest=%r size_bytes=%d content_type=%r",
+            str(dest),
+            len(data),
+            content_type,
+        )
         return str(dest.resolve())
 
 
@@ -87,6 +97,12 @@ class S3ArtifactBackend:
         extra_args = _s3_extra_args(Path(src_path))
         with Path(src_path).open("rb") as fh:
             self.client.upload_fileobj(fh, self.bucket, object_key, ExtraArgs=extra_args or None)
+        log.debug(
+            "artifacts.store | S3 stored file src=%r bucket=%r key=%r",
+            str(src_path),
+            self.bucket,
+            object_key,
+        )
         return self._uri(object_key)
 
     def put_bytes(self, data: bytes, key: str, content_type: str | None = None) -> str:
@@ -99,6 +115,13 @@ class S3ArtifactBackend:
         if content_type:
             kwargs["ContentType"] = content_type
         self.client.put_object(**kwargs)
+        log.debug(
+            "artifacts.store | S3 stored bytes bucket=%r key=%r size_bytes=%d content_type=%r",
+            self.bucket,
+            object_key,
+            len(data),
+            content_type,
+        )
         return self._uri(object_key)
 
     def _object_key(self, key: str) -> str:
@@ -134,6 +157,13 @@ class MongoArtifactMetadataStore:
     def put(self, record: dict[str, Any]) -> dict[str, Any]:
         doc = dict(record)
         self.collection.replace_one({"artifact_id": doc["artifact_id"]}, doc, upsert=True)
+        log.info(
+            "artifacts.store | Metadata upserted artifact_id=%r type=%r backend=%r uri=%r",
+            doc.get("artifact_id"),
+            doc.get("artifact_type"),
+            doc.get("storage_backend"),
+            doc.get("uri"),
+        )
         return doc
 
     def get(self, artifact_id: str) -> dict[str, Any] | None:
@@ -174,13 +204,25 @@ class ArtifactStore:
         artifact_id = str(uuid4())
         filename = artifact_name or src.name
         key = _artifact_key(profile_name, artifact_type, artifact_id, filename)
+        log.info(
+            "artifacts.store | Storing file artifact type=%r profile=%r proposal=%r experiment_id=%r src=%r",
+            artifact_type,
+            profile_name,
+            proposal_name,
+            experiment_id,
+            str(src),
+        )
         uri = self.backend.put_file(src, key)
+        location = _artifact_location(self.backend, key, uri)
 
         record = _artifact_record(
             artifact_id=artifact_id,
             artifact_type=artifact_type,
             storage_backend=self.backend.backend_name,
             uri=uri,
+            storage_key=location.get("storage_key", ""),
+            storage_bucket=location.get("storage_bucket", ""),
+            storage_endpoint_url=location.get("storage_endpoint_url", ""),
             file_name=filename,
             profile_name=profile_name,
             proposal_name=proposal_name,
@@ -191,6 +233,13 @@ class ArtifactStore:
             metadata=metadata or {},
             tags=tags or [],
             extra=extra or {},
+        )
+        log.debug(
+            "artifacts.store | Built file artifact record artifact_id=%r key=%r size_bytes=%d metadata_keys=%s",
+            artifact_id,
+            key,
+            src.stat().st_size,
+            sorted((metadata or {}).keys()),
         )
         return self.metadata_store.put(record)
 
@@ -210,13 +259,25 @@ class ArtifactStore:
         artifact_id = str(uuid4())
         data = json.dumps(payload, indent=2, sort_keys=True, default=str).encode("utf-8")
         key = _artifact_key(profile_name, artifact_type, artifact_id, artifact_name)
+        log.info(
+            "artifacts.store | Storing json artifact type=%r profile=%r proposal=%r experiment_id=%r name=%r",
+            artifact_type,
+            profile_name,
+            proposal_name,
+            experiment_id,
+            artifact_name,
+        )
         uri = self.backend.put_bytes(data, key, content_type="application/json")
+        location = _artifact_location(self.backend, key, uri)
 
         record = _artifact_record(
             artifact_id=artifact_id,
             artifact_type=artifact_type,
             storage_backend=self.backend.backend_name,
             uri=uri,
+            storage_key=location.get("storage_key", ""),
+            storage_bucket=location.get("storage_bucket", ""),
+            storage_endpoint_url=location.get("storage_endpoint_url", ""),
             file_name=artifact_name,
             profile_name=profile_name,
             proposal_name=proposal_name,
@@ -228,6 +289,13 @@ class ArtifactStore:
             tags=tags or [],
             extra=extra or {},
         )
+        log.debug(
+            "artifacts.store | Built json artifact record artifact_id=%r key=%r size_bytes=%d metadata_keys=%s",
+            artifact_id,
+            key,
+            len(data),
+            sorted((metadata or {}).keys()),
+        )
         return self.metadata_store.put(record)
 
     def get(self, artifact_id: str) -> dict[str, Any] | None:
@@ -237,20 +305,40 @@ class ArtifactStore:
         return self.metadata_store.find(filters, limit=limit)
 
 
-def get_artifact_store() -> ArtifactStore:
+def get_artifact_store(profile: dict[str, Any] | None = None) -> ArtifactStore:
     """Build the configured artifact store."""
     cfg = get_config()
+    storage_cfg = (profile or {}).get("storage") or {}
+    db_name = (
+        storage_cfg.get("artifacts_mongodb_db")
+        or storage_cfg.get("mongodb_results_db")
+        or getattr(cfg, "artifacts_db_name", "researcher_artifacts")
+    )
+    collection_name = storage_cfg.get("artifacts_collection") or getattr(cfg, "artifacts_collection", "artifacts")
     metadata_store = MongoArtifactMetadataStore(
         mongo_url=cfg.mongo_url,
-        db_name=getattr(cfg, "artifacts_db_name", "researcher_artifacts"),
-        collection_name=getattr(cfg, "artifacts_collection", "artifacts"),
+        db_name=db_name,
+        collection_name=collection_name,
     )
 
     backend_name = getattr(cfg, "artifact_store_backend", "filesystem")
+    log.info(
+        "artifacts.store | Building artifact store backend=%r metadata_db=%r collection=%r",
+        backend_name,
+        db_name,
+        collection_name,
+    )
     if backend_name == "s3":
         bucket = getattr(cfg, "s3_bucket", None)
         if not bucket:
             raise ValueError("artifact_store_backend='s3' requires s3_bucket to be configured")
+        log.info(
+            "artifacts.store | Using S3 artifact backend endpoint=%r bucket=%r prefix=%r secure=%r",
+            getattr(cfg, "s3_endpoint_url", None),
+            bucket,
+            getattr(cfg, "s3_prefix", None) or "",
+            bool(getattr(cfg, "s3_secure", True)),
+        )
         backend = S3ArtifactBackend(
             bucket=bucket,
             prefix=getattr(cfg, "s3_prefix", None) or "",
@@ -261,6 +349,10 @@ def get_artifact_store() -> ArtifactStore:
             secure=bool(getattr(cfg, "s3_secure", True)),
         )
     else:
+        log.info(
+            "artifacts.store | Using filesystem artifact backend root=%r",
+            str(Path(getattr(cfg, "artifact_store_root", "dev/artifacts")).resolve()),
+        )
         backend = FilesystemArtifactBackend(Path(getattr(cfg, "artifact_store_root", "dev/artifacts")).resolve())
     return ArtifactStore(metadata_store=metadata_store, backend=backend)
 
@@ -277,6 +369,9 @@ def _artifact_record(
     artifact_type: str,
     storage_backend: str,
     uri: str,
+    storage_key: str,
+    storage_bucket: str,
+    storage_endpoint_url: str,
     file_name: str,
     profile_name: str,
     proposal_name: str,
@@ -293,6 +388,9 @@ def _artifact_record(
         "artifact_type": artifact_type,
         "storage_backend": storage_backend,
         "uri": uri,
+        "storage_key": storage_key,
+        "storage_bucket": storage_bucket,
+        "storage_endpoint_url": storage_endpoint_url,
         "file_name": file_name,
         "format": Path(file_name).suffix.lstrip(".").lower(),
         "sha256": sha256,
@@ -311,6 +409,20 @@ def _artifact_record(
 def _s3_extra_args(path: Path) -> dict[str, Any]:
     content_type = mimetypes.guess_type(path.name)[0]
     return {"ContentType": content_type} if content_type else {}
+
+
+def _artifact_location(backend: ArtifactBackend, key: str, uri: str) -> dict[str, str]:
+    if isinstance(backend, S3ArtifactBackend):
+        return {
+            "storage_key": backend._object_key(key),
+            "storage_bucket": backend.bucket,
+            "storage_endpoint_url": backend.endpoint_url or "",
+        }
+    return {
+        "storage_key": key,
+        "storage_bucket": "",
+        "storage_endpoint_url": "",
+    }
 
 
 def _sha256_file(path: Path) -> str:

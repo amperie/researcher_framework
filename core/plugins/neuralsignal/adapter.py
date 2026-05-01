@@ -27,7 +27,13 @@ import mlflow
 
 from configs.config import get_config
 from core.artifacts import get_artifact_store
-from core.memory import MemoryService, default_memory_record_to_artifact, fingerprint_json
+from core.memory import (
+    MemoryService,
+    build_core_memory_records,
+    dedupe_memory_records,
+    default_memory_record_to_artifact,
+    fingerprint_json,
+)
 from core.plugins.base import ResearchAdapter
 from core.plugins.job_runner import TERMINAL_STATUSES, get_runner
 from core.utils.logger import get_logger
@@ -38,6 +44,7 @@ _BRIDGE_SCRIPT = Path(__file__).parent / "bridge.py"
 _TASK_RUNNER = Path(__file__).resolve().parents[1] / "task_runner.py"
 _CREATE_DATASET_TASK = "plugins.neuralsignal.tasks.create_dataset"
 _CREATE_S1_MODEL_TASK = "plugins.neuralsignal.tasks.create_s1_model"
+_RUN_PROPOSAL_BRANCH_TASK = "plugins.neuralsignal.tasks.run_proposal_branch"
 
 
 class NeuralSignalPlugin(ResearchAdapter):
@@ -65,6 +72,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             "task_runner_exists": _TASK_RUNNER.exists(),
             "dataset_task": _CREATE_DATASET_TASK,
             "model_task": _CREATE_S1_MODEL_TASK,
+            "proposal_branch_task": _RUN_PROPOSAL_BRANCH_TASK,
             "neuralsignal_python": cfg.neuralsignal_python,
             "neuralsignal_src_path": str(ns_src),
             "neuralsignal_src_exists": ns_src.exists(),
@@ -119,6 +127,15 @@ class NeuralSignalPlugin(ResearchAdapter):
                     _register_dataset_artifact(profile, artifact, errors)
                     artifacts.append(artifact)
                     datasets.append(artifact)
+                    self._persist_available_memory(
+                        profile,
+                        state,
+                        {
+                            "experiment_artifacts": artifacts,
+                            "datasets": datasets,
+                            "errors": errors,
+                        },
+                    )
                     _write_incremental_state_snapshot(
                         "prepare_experiment",
                         state,
@@ -164,6 +181,15 @@ class NeuralSignalPlugin(ResearchAdapter):
                     _register_dataset_artifact(profile, artifact, errors)
                     artifacts.append(artifact)
                     datasets.append(artifact)
+                    self._persist_available_memory(
+                        profile,
+                        state,
+                        {
+                            "experiment_artifacts": artifacts,
+                            "datasets": datasets,
+                            "errors": errors,
+                        },
+                    )
                     if artifact.get("status") != "ready":
                         errors.append(
                             f"prepare_experiment: {proposal_name} returned missing dataset file {artifact.get('dataset_path')}"
@@ -272,20 +298,13 @@ class NeuralSignalPlugin(ResearchAdapter):
                 )
                 if mlflow_run_id:
                     model["mlflow_run_id"] = mlflow_run_id
-                _register_model_artifact(profile, result_payload := {
+                result_payload = {
                     "experiment_id": experiment_id,
                     "proposal_name": proposal_name,
                     "metrics": metrics,
                     "feature_importance": feature_importance,
                     "params": params,
-                }, model, errors)
-                _register_model_sidecar_artifacts(
-                    profile,
-                    result=result_payload,
-                    model=model,
-                    figure_paths=figure_paths,
-                    errors=errors,
-                )
+                }
                 models.append(model)
                 result = {
                     **result_payload,
@@ -298,6 +317,15 @@ class NeuralSignalPlugin(ResearchAdapter):
                 if mlflow_run_id:
                     result["mlflow_run_id"] = mlflow_run_id
                 results.append(result)
+                self._persist_available_memory(
+                    profile,
+                    state,
+                    {
+                        "experiment_results": results,
+                        "models": models,
+                        "errors": errors,
+                    },
+                )
             except Exception as exc:
                 log.error("NeuralSignalPlugin.execute_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
                 errors.append(f"execute_experiment: {proposal_name} failed: {exc}")
@@ -319,11 +347,9 @@ class NeuralSignalPlugin(ResearchAdapter):
         }
 
     def submit_experiment_jobs(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Submit long-running NeuralSignal dataset/model jobs and return immediately."""
+        """Submit proposal-branch NeuralSignal jobs and return immediately."""
         jobs = list(state.get("experiment_jobs") or [])
-        artifacts = list(state.get("experiment_artifacts") or [])
         errors = list(state.get("errors") or [])
-        cfg = get_config()
         runner = get_runner(_execution_cfg(profile).get("runner", "local_process"))
 
         active_count = sum(1 for job in jobs if job.get("status") not in TERMINAL_STATUSES)
@@ -338,46 +364,27 @@ class NeuralSignalPlugin(ResearchAdapter):
             if active_count >= max_parallel:
                 break
             proposal_name = proposal.get("name", "unknown")
-            if _has_dataset_artifact(artifacts, proposal_name) or _has_job(jobs, "dataset", proposal_name):
+            if _has_result(state.get("experiment_results") or [], proposal_name) or _has_job(jobs, "proposal_branch", proposal_name):
                 continue
             try:
-                payload = self._build_dataset_config(profile, proposal, impl_by_name.get(proposal_name))
-                job = runner.submit(self._job_spec(profile, "dataset", proposal_name, _CREATE_DATASET_TASK, payload))
-                jobs.append(job)
-                submitted.append(job)
-                active_count += 1
-            except Exception as exc:
-                log.error("NeuralSignalPlugin.submit_experiment_jobs | dataset %s failed: %s", proposal_name, exc, exc_info=True)
-                errors.append(f"submit_experiment_jobs: dataset {proposal_name} failed: {exc}")
-
-        for artifact in artifacts:
-            if active_count >= max_parallel:
-                break
-            if artifact.get("artifact_type") != "dataset" or artifact.get("status") != "ready":
-                continue
-            proposal_name = artifact.get("proposal_name", "unknown")
-            if _has_result(state.get("experiment_results") or [], proposal_name) or _has_job(jobs, "model", proposal_name, artifact.get("artifact_id")):
-                continue
-            try:
-                experiment_id = str(uuid4())
-                payload = self._build_model_config(profile, artifact, experiment_id)
-                spec = self._job_spec(
-                    profile,
-                    "model",
-                    proposal_name,
-                    _CREATE_S1_MODEL_TASK,
-                    payload,
-                    artifact_id=artifact.get("artifact_id"),
-                    experiment_id=experiment_id,
-                    cwd=str(_model_task_workdir(artifact, cfg)),
+                implementation = impl_by_name.get(proposal_name)
+                payload = self._build_proposal_branch_payload(profile, state, proposal, implementation)
+                job = runner.submit(
+                    self._job_spec(
+                        profile,
+                        "proposal_branch",
+                        proposal_name,
+                        _RUN_PROPOSAL_BRANCH_TASK,
+                        payload,
+                        experiment_id=payload.get("experiment_id"),
+                    )
                 )
-                job = runner.submit(spec)
                 jobs.append(job)
                 submitted.append(job)
                 active_count += 1
             except Exception as exc:
-                log.error("NeuralSignalPlugin.submit_experiment_jobs | model %s failed: %s", proposal_name, exc, exc_info=True)
-                errors.append(f"submit_experiment_jobs: model {proposal_name} failed: {exc}")
+                log.error("NeuralSignalPlugin.submit_experiment_jobs | branch %s failed: %s", proposal_name, exc, exc_info=True)
+                errors.append(f"submit_experiment_jobs: branch {proposal_name} failed: {exc}")
 
         return {
             "experiment_jobs": jobs,
@@ -386,7 +393,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         }
 
     def check_experiment_jobs(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Poll NeuralSignal jobs and collect completed dataset/model outputs."""
+        """Poll NeuralSignal jobs and collect completed proposal-branch outputs."""
         jobs = list(state.get("experiment_jobs") or [])
         artifacts = list(state.get("experiment_artifacts") or [])
         datasets = list(state.get("datasets") or [])
@@ -402,18 +409,19 @@ class NeuralSignalPlugin(ResearchAdapter):
             if checked.get("status") == "succeeded" and not checked.get("collected"):
                 try:
                     result = _read_result(checked)
-                    if checked.get("stage") == "dataset":
-                        new_artifacts = self._dataset_artifacts_from_job(checked, result)
-                        for artifact in new_artifacts:
+                    if checked.get("stage") == "proposal_branch":
+                        branch = self._proposal_branch_outputs_from_job(profile, checked, result)
+                        artifact = branch.get("artifact") or {}
+                        if artifact:
                             _register_dataset_artifact(profile, artifact, errors)
-                        artifacts.extend(new_artifacts)
-                        datasets.extend(new_artifacts)
-                    elif checked.get("stage") == "model":
-                        experiment_result, model = self._model_result_from_job(checked, result, artifacts)
+                            artifacts = _replace_by_key(artifacts, artifact, "proposal_name")
+                            datasets = _replace_by_key(datasets, artifact, "proposal_name")
+                        experiment_result = branch.get("experiment_result") or {}
+                        model = branch.get("model") or {}
                         mlflow_run_id = _log_result_to_mlflow(
                             profile=profile,
                             state=state,
-                            artifact=experiment_result.get("artifact") or {},
+                            artifact=experiment_result.get("artifact") or artifact,
                             experiment_id=experiment_result.get("experiment_id", ""),
                             proposal_name=experiment_result.get("proposal_name", "unknown"),
                             metrics=experiment_result.get("metrics") or {},
@@ -427,9 +435,21 @@ class NeuralSignalPlugin(ResearchAdapter):
                         if mlflow_run_id:
                             model["mlflow_run_id"] = mlflow_run_id
                             experiment_result["mlflow_run_id"] = mlflow_run_id
-                        _register_model_artifact(profile, experiment_result, model, errors)
-                        results.append(experiment_result)
-                        models.append(model)
+                        if experiment_result:
+                            results = _replace_by_key(results, experiment_result, "proposal_name")
+                        if model:
+                            models = _replace_by_key(models, model, "proposal_name")
+                        self._persist_available_memory(
+                            profile,
+                            state,
+                            {
+                                "experiment_artifacts": artifacts,
+                                "datasets": datasets,
+                                "experiment_results": results,
+                                "models": models,
+                                "errors": errors,
+                            },
+                        )
                     checked["collected"] = True
                     _write_job_status(checked)
                 except Exception as exc:
@@ -456,6 +476,130 @@ class NeuralSignalPlugin(ResearchAdapter):
             delta["submitted_jobs"] = submitted_delta.get("submitted_jobs", [])
             delta["errors"] = submitted_delta.get("errors", errors)
         return delta
+
+    def _build_proposal_branch_payload(
+        self,
+        profile: dict[str, Any],
+        state: dict[str, Any],
+        proposal: dict[str, Any],
+        implementation: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        proposal_name = proposal.get("name", "unknown")
+        experiment_id = str(uuid4())
+        dataset_cfg = self._build_dataset_config(profile, proposal, implementation)
+        reused_artifact = None
+        if not _should_overwrite_existing_dataset(dataset_cfg):
+            reused_artifact = _dataset_artifact_from_memory(
+                profile=profile,
+                proposal_name=proposal_name,
+                dataset_cfg=dataset_cfg,
+            )
+            if reused_artifact is None:
+                expected_path = _expected_dataset_path(dataset_cfg)
+                if expected_path.exists():
+                    reused_artifact = _dataset_artifact(
+                        proposal_name=proposal_name,
+                        file_path=str(expected_path),
+                        cwd=str(_neuralsignal_workdir(get_config())),
+                        dataset_cfg=dataset_cfg,
+                        task_result={"skipped_existing_dataset": True, "file_paths": [str(expected_path)]},
+                        idx=0,
+                        implementation=implementation,
+                    )
+        artifact_hint = reused_artifact or {
+            "proposal_name": proposal_name,
+            "artifact_type": "dataset",
+            "status": "ready",
+            "dataset": dataset_cfg.get("dataset", ""),
+            "detector": _first(dataset_cfg.get("detector_names") or []) or proposal.get("detector", ""),
+            "dataset_path": str(_expected_dataset_path(dataset_cfg)),
+            "file_path": str(_expected_dataset_path(dataset_cfg)),
+            "dataset_config": dataset_cfg,
+        }
+        model_cfg = self._build_model_config(profile, artifact_hint, experiment_id)
+        return {
+            "proposal_name": proposal_name,
+            "experiment_id": experiment_id,
+            "research_direction": str(state.get("research_direction", "")),
+            "proposal": proposal,
+            "implementation": _implementation_summary(implementation),
+            "dataset_config": dataset_cfg,
+            "model_config_base": model_cfg,
+            "reused_dataset_artifact": _serializable_artifact_summary(reused_artifact) if reused_artifact else {},
+        }
+
+    def _proposal_branch_outputs_from_job(
+        self,
+        profile: dict[str, Any],
+        job: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        spec = _read_job_spec(job)
+        payload = spec.get("payload") or _read_payload(job)
+        proposal_name = job.get("proposal_name", payload.get("proposal_name", "unknown"))
+        experiment_id = job.get("experiment_id") or payload.get("experiment_id") or str(uuid4())
+        implementation = _as_dict(payload.get("implementation"))
+        dataset_cfg = _as_dict(payload.get("dataset_config"))
+        dataset_result = _as_dict(result.get("dataset_result"))
+        model_result = _as_dict(result.get("model_result"))
+        reused_artifact = _as_dict(payload.get("reused_dataset_artifact"))
+        cwd = str(_neuralsignal_workdir(get_config()))
+
+        artifact: dict[str, Any]
+        if dataset_result.get("file_paths") or dataset_result.get("paths"):
+            artifact = _dataset_artifact(
+                proposal_name=proposal_name,
+                file_path=_first(_as_list(dataset_result.get("file_paths") or dataset_result.get("paths"))),
+                cwd=cwd,
+                dataset_cfg=dataset_cfg,
+                task_result=dataset_result,
+                idx=0,
+                implementation=implementation,
+            )
+        elif reused_artifact:
+            artifact = dict(reused_artifact)
+            artifact.setdefault("proposal_name", proposal_name)
+            artifact.setdefault("artifact_type", "dataset")
+            artifact.setdefault("status", "ready")
+            artifact.setdefault("dataset_config", dataset_cfg)
+            if implementation:
+                artifact["implementation"] = implementation
+        else:
+            raise RuntimeError("proposal branch job returned no dataset output")
+
+        metrics = _as_dict(model_result.get("metrics"))
+        feature_importance = _as_dict(model_result.get("feature_importance"))
+        params = _as_dict(model_result.get("params"))
+        model_config_payload = _as_dict(model_result.get("model_config"))
+        figure_paths = _as_dict(model_result.get("figure_paths"))
+        model = {
+            "model_id": model_config_payload.get("model_name") or f"{proposal_name}_{experiment_id}",
+            "experiment_id": experiment_id,
+            "proposal_name": proposal_name,
+            "metrics": metrics,
+            "params": params,
+            "feature_importance": feature_importance,
+            "artifacts": _as_dict(model_result.get("artifacts")),
+            "model_config": model_config_payload,
+            "figure_paths": figure_paths,
+            "task_result": _json_safe(model_result),
+            "job_id": job.get("job_id"),
+        }
+        experiment_result = {
+            "experiment_id": experiment_id,
+            "proposal_name": proposal_name,
+            "proposal": _as_dict(payload.get("proposal")),
+            "metrics": metrics,
+            "feature_importance": feature_importance,
+            "params": params,
+            "artifact": _serializable_artifact_summary(artifact),
+            "model": model,
+            "artifacts": _as_dict(model_result.get("artifacts")),
+            "model_config": model_config_payload,
+            "figure_paths": figure_paths,
+            "job_id": job.get("job_id"),
+        }
+        return {"artifact": artifact, "experiment_result": experiment_result, "model": model}
 
     def summarize_result(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Return a compact NeuralSignal-specific result summary."""
@@ -500,7 +644,8 @@ class NeuralSignalPlugin(ResearchAdapter):
         records: list[dict[str, Any]] = []
         emitted_dataset_keys: set[str] = set()
         emitted_featureset_keys: set[str] = set()
-        emitted_model_keys: set[str] = set()
+        source_next_step_record_id = str(state.get("source_next_step_record_id") or "")
+        source_next_step_title = str(state.get("source_next_step_title") or "")
 
         for proposal_name, implementation in implementations_by_name.items():
             proposal = proposals_by_name.get(proposal_name) or {}
@@ -547,41 +692,6 @@ class NeuralSignalPlugin(ResearchAdapter):
                     dataset_fingerprint=dataset_fingerprint,
                 ))
                 emitted_dataset_keys.add(dataset_fingerprint)
-
-        for proposal_name, model in models_by_name.items():
-            proposal = proposals_by_name.get(proposal_name) or {}
-            artifact = artifacts_by_name.get(proposal_name) or {}
-            dataset_config = _as_dict(artifact.get("dataset_config"))
-            dataset_name = str(
-                artifact.get("dataset")
-                or dataset_config.get("dataset")
-                or proposal.get("dataset")
-                or ""
-            )
-            detector = str(
-                artifact.get("detector")
-                or _first(dataset_config.get("detector_names") or [])
-                or proposal.get("detector")
-                or ""
-            )
-            model_config = _as_dict(model.get("model_config"))
-            metrics = _as_dict(model.get("metrics"))
-            dataset_fingerprint = _dataset_config_fingerprint(dataset_config) if dataset_config else ""
-            model_fingerprint = _model_config_fingerprint(model_config, dataset_fingerprint=dataset_fingerprint)
-            model_key = model_fingerprint or str(model.get("model_id") or model_config.get("model_name") or proposal_name)
-            if model_key not in emitted_model_keys:
-                records.append(_neuralsignal_model_memory_record(
-                    profile=profile,
-                    proposal_name=proposal_name,
-                    model=model,
-                    model_config=model_config,
-                    dataset_name=dataset_name,
-                    detector=detector,
-                    dataset_fingerprint=dataset_fingerprint,
-                    model_fingerprint=model_fingerprint,
-                    metrics=metrics,
-                ))
-                emitted_model_keys.add(model_key)
 
         for result in results:
             proposal_name = str(result.get("proposal_name") or "unknown")
@@ -647,6 +757,11 @@ class NeuralSignalPlugin(ResearchAdapter):
                     "feature_importance": feature_importance,
                     "artifacts": _as_dict(result.get("artifacts")),
                     "figure_paths": figure_paths,
+                    "mlflow": {
+                        "run_id": result.get("mlflow_run_id") or model.get("mlflow_run_id") or "",
+                        "tracking_uri": str(getattr(get_config(), "mlflow_uri", "") or ""),
+                        "experiment_name": str((profile.get("storage") or {}).get("mlflow_experiment", "researcher_experiments")),
+                    },
                     "implementation": _implementation_summary(implementations_by_name.get(proposal_name)),
                     "evaluation_summary": evaluation_summary,
                 },
@@ -666,14 +781,11 @@ class NeuralSignalPlugin(ResearchAdapter):
                     "hypothesis_supported": hypothesis_supported,
                     "lessons": lessons,
                     "mlflow_run_id": result.get("mlflow_run_id") or model.get("mlflow_run_id") or "",
-                    "stored_artifact_id": result.get("stored_artifact_id") or model.get("stored_artifact_id") or "",
-                    "stored_artifact_uri": result.get("stored_artifact_uri") or model.get("stored_artifact_uri") or "",
+                    "mlflow_tracking_uri": str(getattr(get_config(), "mlflow_uri", "") or ""),
+                    "mlflow_experiment": str((profile.get("storage") or {}).get("mlflow_experiment", "researcher_experiments")),
+                    "source_next_step_record_id": source_next_step_record_id,
+                    "source_next_step_title": source_next_step_title,
                     "figure_names": sorted(figure_paths.keys()),
-                    "figure_artifact_ids": [
-                        item.get("artifact_id", "")
-                        for item in _as_list(result.get("stored_figure_artifacts") or model.get("stored_figure_artifacts"))
-                        if isinstance(item, dict)
-                    ],
                     "feature_importance_keys": sorted(feature_importance.keys())[:20],
                     **{k: float(v) for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
                 },
@@ -684,7 +796,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                 ],
                 "created_at": _now_iso(),
                 "source_run_id": result.get("mlflow_run_id") or model.get("mlflow_run_id"),
-                "blob_refs": _neuralsignal_blob_refs(result, model, artifact),
+                "blob_refs": _neuralsignal_blob_refs(artifact),
                 "entities": _neuralsignal_entities(
                     proposal_name=proposal_name,
                     dataset_name=dataset_name,
@@ -693,15 +805,33 @@ class NeuralSignalPlugin(ResearchAdapter):
                     model_name=str(model.get("model_id") or model_config.get("model_name") or ""),
                 ),
                 "relations": _neuralsignal_relations(
+                    experiment_id=record_id,
                     proposal_name=proposal_name,
                     dataset_name=dataset_name,
                     detector=detector,
                     class_name=class_name,
                     model_name=str(model.get("model_id") or model_config.get("model_name") or ""),
+                    source_next_step_record_id=source_next_step_record_id,
+                    source_next_step_title=source_next_step_title,
                 ),
             }
             records.append(record)
         return records
+
+    def _persist_available_memory(self, profile: dict[str, Any], state: dict[str, Any], delta: dict[str, Any]) -> None:
+        merged = {**state, **delta}
+        records = dedupe_memory_records([
+            *build_core_memory_records(profile, merged),
+            *(self.build_memory_records(profile, merged) or []),
+        ])
+        if not records:
+            log.debug("NeuralSignalPlugin | No memory records to persist for incremental state")
+            return
+        log.info(
+            "NeuralSignalPlugin | Persisting %d memory record(s) immediately for available results",
+            len(records),
+        )
+        MemoryService.for_profile(profile).persist_records(records)
 
     def memory_record_to_artifact(
         self,
@@ -730,8 +860,8 @@ class NeuralSignalPlugin(ResearchAdapter):
             summary_lines.append(f"Feature set class: {class_name}")
         if metric_value is not None:
             summary_lines.append(f"{primary_metric}: {metric_value}")
-        if metadata.get("stored_artifact_uri"):
-            summary_lines.append(f"Stored artifact: {metadata['stored_artifact_uri']}")
+        if metadata.get("mlflow_run_id"):
+            summary_lines.append(f"MLflow run: {metadata['mlflow_run_id']}")
         artifact["summary"] = "\n".join(line for line in summary_lines if line)
         artifact["source_type"] = record.get("kind", "neuralsignal_experiment")
         artifact.pop("source", None)
@@ -1134,39 +1264,17 @@ def _neuralsignal_memory_summary(
     return "\n".join(line for line in lines if line and line.strip())
 
 
-def _neuralsignal_blob_refs(result: dict[str, Any], model: dict[str, Any], artifact: dict[str, Any]) -> list[dict[str, Any]]:
+def _neuralsignal_blob_refs(artifact: dict[str, Any]) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
-    for name, uri_key, id_key in (
-        ("model_artifact", "stored_artifact_uri", "stored_artifact_id"),
-        ("dataset_artifact", "stored_artifact_uri", "stored_artifact_id"),
-    ):
-        source = model if name == "model_artifact" else artifact
-        uri = source.get(uri_key)
-        artifact_id = source.get(id_key)
-        if uri or artifact_id:
-            refs.append({
-                "name": name,
-                "uri": str(uri or ""),
-                "artifact_id": str(artifact_id or ""),
-                "metadata": {"kind": name},
-            })
-    for source in (result, model):
-        for figure_artifact in _as_list(source.get("stored_figure_artifacts")):
-            if not isinstance(figure_artifact, dict):
-                continue
-            uri = figure_artifact.get("uri")
-            if not isinstance(uri, str) or not uri:
-                continue
-            refs.append({
-                "name": str(figure_artifact.get("name") or "model_figure"),
-                "uri": uri,
-                "artifact_id": str(figure_artifact.get("artifact_id") or ""),
-                "content_type": str(figure_artifact.get("mime_type") or ""),
-                "metadata": {
-                    "kind": "model_figure",
-                    "figure_name": str(figure_artifact.get("figure_name") or figure_artifact.get("name") or ""),
-                },
-            })
+    uri = artifact.get("stored_artifact_uri")
+    artifact_id = artifact.get("stored_artifact_id")
+    if uri or artifact_id:
+        refs.append({
+            "name": "dataset_artifact",
+            "uri": str(uri or ""),
+            "artifact_id": str(artifact_id or ""),
+            "metadata": {"kind": "dataset_artifact"},
+        })
     return refs
 
 
@@ -1217,13 +1325,37 @@ def _neuralsignal_entities(
 
 def _neuralsignal_relations(
     *,
+    experiment_id: str,
     proposal_name: str,
     dataset_name: str,
     detector: str,
     class_name: str,
     model_name: str,
+    source_next_step_record_id: str = "",
+    source_next_step_title: str = "",
 ) -> list[dict[str, Any]]:
     relations: list[dict[str, Any]] = []
+    if source_next_step_title:
+        relations.append({
+            "relation_type": "inspires_proposal",
+            "source_type": "next_step",
+            "source_key": source_next_step_title,
+            "target_type": "proposal",
+            "target_key": proposal_name,
+            "metadata": {
+                "domain": "neuralsignal",
+                "source_next_step_record_id": source_next_step_record_id,
+            },
+        })
+    if experiment_id:
+        relations.append({
+            "relation_type": "executed_as",
+            "source_type": "proposal",
+            "source_key": proposal_name,
+            "target_type": "experiment_result",
+            "target_key": experiment_id,
+            "metadata": {"domain": "neuralsignal"},
+        })
     if dataset_name:
         relations.append({
             "relation_type": "tested_on",
@@ -1463,6 +1595,7 @@ def _neuralsignal_dataset_memory_record(
             model_name="",
         ),
         "relations": _neuralsignal_relations(
+            experiment_id="",
             proposal_name=proposal_name,
             dataset_name=dataset_name,
             detector=detector,
@@ -1525,6 +1658,7 @@ def _neuralsignal_featureset_memory_record(
             model_name="",
         ),
         "relations": _neuralsignal_relations(
+            experiment_id="",
             proposal_name=proposal_name,
             dataset_name=dataset_name,
             detector=detector,
@@ -1597,6 +1731,7 @@ def _neuralsignal_model_memory_record(
             model_name=model_name,
         ),
         "relations": _neuralsignal_relations(
+            experiment_id="",
             proposal_name=proposal_name,
             dataset_name=dataset_name,
             detector=detector,
@@ -1694,7 +1829,7 @@ def _register_dataset_artifact(profile: dict[str, Any], artifact: dict[str, Any]
     if not dataset_path:
         return
     try:
-        record = get_artifact_store().store_file(
+        record = get_artifact_store(profile).store_file(
             dataset_path,
             artifact_type="dataset",
             profile_name=profile.get("name", ""),
@@ -1712,6 +1847,9 @@ def _register_dataset_artifact(profile: dict[str, Any], artifact: dict[str, Any]
         )
         artifact["stored_artifact_id"] = record["artifact_id"]
         artifact["stored_artifact_uri"] = record["uri"]
+        artifact["stored_artifact_key"] = record.get("storage_key", "")
+        artifact["stored_artifact_bucket"] = record.get("storage_bucket", "")
+        artifact["stored_artifact_endpoint_url"] = record.get("storage_endpoint_url", "")
     except Exception as exc:
         log.warning("NeuralSignalPlugin | dataset artifact storage failed for %s: %s", artifact.get("proposal_name"), exc)
         errors.append(f"artifact_store: dataset {artifact.get('proposal_name', 'unknown')} failed: {exc}")
@@ -1724,7 +1862,7 @@ def _register_model_artifact(
     errors: list[str],
 ) -> None:
     try:
-        record = get_artifact_store().store_json(
+        record = get_artifact_store(profile).store_json(
             {
                 "experiment_result": result,
                 "model": model,
@@ -1742,8 +1880,14 @@ def _register_model_artifact(
         )
         model["stored_artifact_id"] = record["artifact_id"]
         model["stored_artifact_uri"] = record["uri"]
+        model["stored_artifact_key"] = record.get("storage_key", "")
+        model["stored_artifact_bucket"] = record.get("storage_bucket", "")
+        model["stored_artifact_endpoint_url"] = record.get("storage_endpoint_url", "")
         result["stored_artifact_id"] = record["artifact_id"]
         result["stored_artifact_uri"] = record["uri"]
+        result["stored_artifact_key"] = record.get("storage_key", "")
+        result["stored_artifact_bucket"] = record.get("storage_bucket", "")
+        result["stored_artifact_endpoint_url"] = record.get("storage_endpoint_url", "")
     except Exception as exc:
         log.warning("NeuralSignalPlugin | model artifact storage failed for %s: %s", result.get("proposal_name"), exc)
         errors.append(f"artifact_store: model {result.get('proposal_name', 'unknown')} failed: {exc}")
@@ -1765,7 +1909,7 @@ def _register_model_sidecar_artifacts(
         if not path.exists():
             continue
         try:
-            record = get_artifact_store().store_file(
+            record = get_artifact_store(profile).store_file(
                 path,
                 artifact_type="model_figure",
                 profile_name=profile.get("name", ""),
@@ -1781,6 +1925,9 @@ def _register_model_sidecar_artifacts(
             stored_figures.append({
                 "artifact_id": record["artifact_id"],
                 "uri": record["uri"],
+                "storage_key": record.get("storage_key", ""),
+                "storage_bucket": record.get("storage_bucket", ""),
+                "storage_endpoint_url": record.get("storage_endpoint_url", ""),
                 "artifact_type": "model_figure",
                 "mime_type": record.get("mime_type", ""),
                 "name": f"figure:{figure_name}",
@@ -2163,6 +2310,22 @@ def _has_job(
 
 def _has_result(results: list[dict[str, Any]], proposal_name: str) -> bool:
     return any(result.get("proposal_name") == proposal_name for result in results)
+
+
+def _replace_by_key(items: list[dict[str, Any]], item: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    marker = item.get(key)
+    output: list[dict[str, Any]] = []
+    replaced = False
+    for existing in items:
+        if existing.get(key) == marker:
+            if not replaced:
+                output.append(item)
+                replaced = True
+            continue
+        output.append(existing)
+    if not replaced:
+        output.append(item)
+    return output
 
 
 def _read_result(job: dict[str, Any]) -> dict[str, Any]:

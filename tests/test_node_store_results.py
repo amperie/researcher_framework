@@ -12,6 +12,7 @@ PROFILE = {
     "storage": {
         "mlflow_experiment": "test_exp",
         "mongodb_results_db": "test_db",
+        "mongodb_results_collection": "test_experiments",
         "chroma_collection": "test_col",
     },
 }
@@ -230,7 +231,7 @@ class TestStoreResultsMongo:
                                         with patch("pymongo.MongoClient", return_value=mock_client):
                                             store_results_node({"experiment_results": [RESULT]}, PROFILE)
 
-        mock_client["test_db"]["experiments"].insert_one.assert_called_once()
+        mock_client["test_db"]["test_experiments"].insert_one.assert_called_once()
         mock_client.close.assert_called_once()
 
     def test_mongodb_failure_is_non_fatal(self):

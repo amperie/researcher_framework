@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import Any
 
 from core.utils.logger import setup_logging, get_logger
 
@@ -98,22 +99,49 @@ def main() -> None:
     from core.graph.builder import build_graph
     graph = build_graph(profile)
 
-    initial_state = {
+    seen_directions: set[str] = set()
+    current_direction = direction
+    initial_state: dict[str, Any] = {
         "profile_name": profile_name,
-        "research_direction": direction,
+        "research_direction": current_direction,
         "continue_loop": args.loop,
         "errors": [],
     }
 
-    print(f"\n[{profile_name}] Researching: {direction!r}\n")
+    while True:
+        print(f"\n[{profile_name}] Researching: {current_direction!r}\n")
+        try:
+            final_state = graph.invoke(initial_state)
+        except Exception:
+            log.critical("Pipeline raised an unhandled exception", exc_info=True)
+            raise
 
-    try:
-        final_state = graph.invoke(initial_state)
-    except Exception:
-        log.critical("Pipeline raised an unhandled exception", exc_info=True)
-        raise
+        _print_results(final_state, profile_name)
+        seen_directions.add(current_direction)
 
-    _print_results(final_state, profile_name)
+        if not args.loop:
+            break
+        next_seed = _next_loop_seed(profile_name, current_direction, final_state)
+        if not next_seed:
+            break
+        next_direction = str(next_seed["research_direction"])
+        if not next_direction or next_direction in seen_directions:
+            log.info("Loop stopping because next direction is empty or already seen: %r", next_direction)
+            break
+        log.info(
+            "Loop continuing with next_step=%r next_direction=%r",
+            next_seed.get("source_next_step_title"),
+            next_direction,
+        )
+        current_direction = next_direction
+        initial_state = {
+            "profile_name": profile_name,
+            "research_direction": current_direction,
+            "continue_loop": args.loop,
+            "errors": [],
+            "source_next_step_record_id": next_seed["source_next_step_record_id"],
+            "source_next_step_title": next_seed["source_next_step_title"],
+        }
 
 
 def _print_results(state: dict, profile_name: str) -> None:
@@ -150,6 +178,24 @@ def _print_results(state: dict, profile_name: str) -> None:
             print(f"  - {e}")
 
     print("=" * 72 + "\n")
+
+
+def _next_loop_seed(profile_name: str, current_direction: str, state: dict[str, Any]) -> dict[str, str] | None:
+    from core.memory.defaults import next_step_record_id
+
+    next_steps = state.get("next_steps") or []
+    if not next_steps:
+        return None
+    top = next_steps[0]
+    next_direction = str(top.get("suggested_direction") or top.get("title") or "").strip()
+    if not next_direction:
+        return None
+    title = str(top.get("title") or top.get("suggested_direction") or "next_step").strip()
+    return {
+        "research_direction": next_direction,
+        "source_next_step_record_id": next_step_record_id(profile_name, current_direction, top),
+        "source_next_step_title": title,
+    }
 
 
 if __name__ == "__main__":

@@ -190,6 +190,8 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
     models = state.get("models") or []
     evaluation_summary = state.get("evaluation_summary") or {}
     direction = state.get("research_direction", "")
+    source_next_step_record_id = str(state.get("source_next_step_record_id") or "")
+    source_next_step_title = str(state.get("source_next_step_title") or "")
     model_by_exp = {m.get("experiment_id"): m for m in models}
 
     for result in experiment_results:
@@ -246,13 +248,22 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
                 "lessons": lessons,
                 "inserted_at": inserted_at,
                 "mlflow_run_id": result.get("mlflow_run_id") or model.get("mlflow_run_id") or "",
+                "source_next_step_record_id": source_next_step_record_id,
+                "source_next_step_title": source_next_step_title,
                 **{k: float(v) for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
             },
             "tags": [str(profile.get("name") or ""), "prior_experiment"],
             "created_at": inserted_at,
             "source_run_id": str(result.get("mlflow_run_id") or model.get("mlflow_run_id") or "") or None,
-            "entities": _experiment_entities(profile, proposal_name, proposal),
-            "relations": _experiment_relations(profile, proposal_name, proposal),
+            "entities": _experiment_entities(profile, proposal_name, proposal, experiment_id or proposal_name),
+            "relations": _experiment_relations(
+                profile,
+                proposal_name,
+                proposal,
+                experiment_id or proposal_name,
+                source_next_step_record_id=source_next_step_record_id,
+                source_next_step_title=source_next_step_title,
+            ),
         }
         records.append(record)
     return records
@@ -429,6 +440,8 @@ def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]
     proposals = state.get("proposals") or []
     direction = state.get("research_direction", "")
     domain = str(profile.get("name") or "")
+    source_next_step_record_id = str(state.get("source_next_step_record_id") or "")
+    source_next_step_title = str(state.get("source_next_step_title") or "")
     records: list[MemoryRecord] = []
 
     for proposal in proposals:
@@ -460,11 +473,20 @@ def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]
                 "proposal_name": proposal_name,
                 "dataset": proposal.get("dataset", ""),
                 "detector": proposal.get("detector", ""),
+                "source_next_step_record_id": source_next_step_record_id,
+                "source_next_step_title": source_next_step_title,
             },
             "tags": [domain, "proposal"],
             "created_at": _now_iso(),
             "entities": _proposal_entities(domain, direction, proposal_name, proposal),
-            "relations": _proposal_relations(domain, direction, proposal_name, proposal),
+            "relations": _proposal_relations(
+                domain,
+                direction,
+                proposal_name,
+                proposal,
+                source_next_step_record_id=source_next_step_record_id,
+                source_next_step_title=source_next_step_title,
+            ),
         })
     return records
 
@@ -721,13 +743,8 @@ def build_next_step_memory_records(profile: dict[str, Any], state: dict[str, Any
 
     for step in next_steps:
         title = str(step.get("title") or step.get("suggested_direction") or "next_step")
-        step_fingerprint = fingerprint_json({
-            "domain": domain,
-            "direction": direction,
-            "next_step": step,
-        })
         records.append({
-            "record_id": f"next_step:{step_fingerprint}",
+            "record_id": next_step_record_id(domain, direction, step),
             "domain": domain,
             "kind": "next_step",
             "object_type": "next_step",
@@ -753,6 +770,15 @@ def build_next_step_memory_records(profile: dict[str, Any], state: dict[str, Any
             "relations": _next_step_relations(domain, direction, title, step),
         })
     return records
+
+
+def next_step_record_id(domain: str, direction: str, step: dict[str, Any]) -> str:
+    step_fingerprint = fingerprint_json({
+        "domain": domain,
+        "direction": direction,
+        "next_step": step,
+    })
+    return f"next_step:{step_fingerprint}"
 
 
 def default_memory_record_to_artifact(record: MemoryRecord, *, source_name: str, distance: float | None = None) -> dict[str, Any]:
@@ -805,7 +831,7 @@ def default_memory_projection(record: MemoryRecord) -> dict[str, Any]:
             "object_role": record.get("object_role", ""),
             "schema_version": record.get("schema_version", "1"),
             "title": record.get("title", ""),
-            "tags": list(record.get("tags") or []),
+            "tags": "|".join(str(tag) for tag in (record.get("tags") or [])[:20]),
             **_scalar_metadata(metadata),
             "memory_summary": record.get("summary", ""),
         },
@@ -879,7 +905,7 @@ def _scalar_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(value, bool):
             compact[key] = value
         elif isinstance(value, list) and all(isinstance(item, str) for item in value[:20]):
-            compact[key] = value[:20]
+            compact[key] = " | ".join(str(item) for item in value[:20])
     return compact
 
 
@@ -896,6 +922,11 @@ def dedupe_memory_records(records: list[MemoryRecord]) -> list[MemoryRecord]:
         deduped[record_id] = record
     if dropped:
         log.warning("memory.defaults | Dropped %d memory record(s) without record_id", dropped)
+    log.debug(
+        "memory.defaults | Dedupe complete kept=%d ids=%s",
+        len(deduped),
+        sorted(deduped.keys()),
+    )
     return list(deduped.values())
 
 
@@ -960,7 +991,12 @@ def _proposal_lessons(proposal_name: str, evaluation_summary: dict[str, Any]) ->
     return lessons
 
 
-def _experiment_entities(profile: dict[str, Any], proposal_name: str, proposal: dict[str, Any]) -> list[MemoryEntity]:
+def _experiment_entities(
+    profile: dict[str, Any],
+    proposal_name: str,
+    proposal: dict[str, Any],
+    experiment_key: str,
+) -> list[MemoryEntity]:
     domain = str(profile.get("name") or "")
     entities: list[MemoryEntity] = [
         {
@@ -970,6 +1006,13 @@ def _experiment_entities(profile: dict[str, Any], proposal_name: str, proposal: 
             "metadata": {"domain": domain},
         }
     ]
+    if experiment_key:
+        entities.append({
+            "entity_type": "experiment_result",
+            "key": experiment_key,
+            "name": experiment_key,
+            "metadata": {"domain": domain},
+        })
     dataset = proposal.get("dataset")
     if dataset:
         entities.append({
@@ -989,8 +1032,37 @@ def _experiment_entities(profile: dict[str, Any], proposal_name: str, proposal: 
     return entities
 
 
-def _experiment_relations(profile: dict[str, Any], proposal_name: str, proposal: dict[str, Any]) -> list[MemoryRelation]:
+def _experiment_relations(
+    profile: dict[str, Any],
+    proposal_name: str,
+    proposal: dict[str, Any],
+    experiment_key: str,
+    *,
+    source_next_step_record_id: str = "",
+    source_next_step_title: str = "",
+) -> list[MemoryRelation]:
     relations: list[MemoryRelation] = []
+    if experiment_key:
+        relations.append({
+            "relation_type": "executed_as",
+            "source_type": "proposal",
+            "source_key": proposal_name,
+            "target_type": "experiment_result",
+            "target_key": experiment_key,
+            "metadata": {"domain": profile.get("name", "")},
+        })
+    if source_next_step_title:
+        relations.append({
+            "relation_type": "inspires_proposal",
+            "source_type": "next_step",
+            "source_key": source_next_step_title,
+            "target_type": "proposal",
+            "target_key": proposal_name,
+            "metadata": {
+                "domain": profile.get("name", ""),
+                "source_next_step_record_id": source_next_step_record_id,
+            },
+        })
     dataset = proposal.get("dataset")
     if dataset:
         relations.append({
@@ -1277,8 +1349,28 @@ def _proposal_entities(domain: str, direction: str, proposal_name: str, proposal
     return entities
 
 
-def _proposal_relations(domain: str, direction: str, proposal_name: str, proposal: dict[str, Any]) -> list[MemoryRelation]:
+def _proposal_relations(
+    domain: str,
+    direction: str,
+    proposal_name: str,
+    proposal: dict[str, Any],
+    *,
+    source_next_step_record_id: str = "",
+    source_next_step_title: str = "",
+) -> list[MemoryRelation]:
     relations: list[MemoryRelation] = []
+    if source_next_step_title:
+        relations.append({
+            "relation_type": "inspires_proposal",
+            "source_type": "next_step",
+            "source_key": source_next_step_title,
+            "target_type": "proposal",
+            "target_key": proposal_name,
+            "metadata": {
+                "domain": domain,
+                "source_next_step_record_id": source_next_step_record_id,
+            },
+        })
     if direction:
         relations.append({
             "relation_type": "proposed_for",

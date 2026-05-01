@@ -10,6 +10,17 @@ from core.utils.logger import get_logger
 log = get_logger(__name__)
 
 
+def _attach_storage_refs(target: dict[str, Any], record: dict[str, Any]) -> None:
+    target["stored_artifact_id"] = record["artifact_id"]
+    target["stored_artifact_uri"] = record["uri"]
+    if record.get("storage_key"):
+        target["stored_artifact_key"] = record.get("storage_key", "")
+    if record.get("storage_bucket"):
+        target["stored_artifact_bucket"] = record.get("storage_bucket", "")
+    if record.get("storage_endpoint_url"):
+        target["stored_artifact_endpoint_url"] = record.get("storage_endpoint_url", "")
+
+
 def register_implementation_artifact(
     profile: dict[str, Any],
     implementation: dict[str, Any],
@@ -24,7 +35,7 @@ def register_implementation_artifact(
         return
 
     try:
-        record = get_artifact_store().store_file(
+        record = get_artifact_store(profile).store_file(
             path,
             artifact_type="implementation",
             profile_name=profile.get("name", ""),
@@ -39,8 +50,7 @@ def register_implementation_artifact(
             },
             tags=["implementation", profile.get("name", "")],
         )
-        implementation["stored_artifact_id"] = record["artifact_id"]
-        implementation["stored_artifact_uri"] = record["uri"]
+        _attach_storage_refs(implementation, record)
     except Exception as exc:
         log.warning(
             "artifact_refs | implementation artifact storage failed for %s: %s",
@@ -68,7 +78,7 @@ def register_validation_test_artifact(
         return None
 
     try:
-        return get_artifact_store().store_file(
+        return get_artifact_store(profile).store_file(
             path,
             artifact_type="validation_test",
             profile_name=profile.get("name", ""),
@@ -100,7 +110,7 @@ def register_validation_result_artifact(
         "validation_result": validation_result,
     }
     try:
-        return get_artifact_store().store_json(
+        return get_artifact_store(profile).store_json(
             payload,
             artifact_type="validation_result",
             profile_name=profile.get("name", ""),

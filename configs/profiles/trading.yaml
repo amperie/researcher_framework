@@ -138,8 +138,13 @@ evaluation:
 
 storage:
   mlflow_experiment: trading_agent_experiments
-  mongodb_results_db: agent_experiments
+  mongodb_results_db: researcher
+  mongodb_results_collection: trading_experiments
   chroma_collection: agent_experiments
+  memory_mongodb_db: researcher
+  memory_mongodb_collection: trading_memory_records
+  artifacts_mongodb_db: researcher
+  artifacts_collection: trading_artifacts
   memory_neo4j_database: researcher_framework
 
 prompts:

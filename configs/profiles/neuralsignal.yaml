@@ -185,7 +185,7 @@ datasets:
         - probe_weights
         - concept_mean_activations
         - logit_lens_projections
-    row_limit: 1000                # max scans pulled when creating dataset (0 = no limit)
+    row_limit: 40                # max scans pulled when creating dataset (0 = no limit)
     overwrite_existing_dataset: false  # if true, regenerate CSV even when it already exists
     balanced_target:
       enabled: true
@@ -212,8 +212,13 @@ evaluation:
 # ── Results Storage ───────────────────────────────────────────────────────────
 storage:
   mlflow_experiment: neuralsignal_agent_experiments
-  mongodb_results_db: agent_experiments
+  mongodb_results_db: researcher_framework
+  mongodb_results_collection: neuralsignal_experiments
   chroma_collection: agent_experiments
+  memory_mongodb_db: researcher
+  memory_mongodb_collection: neuralsignal_memory_records
+  artifacts_mongodb_db: researcher
+  artifacts_collection: neuralsignal_artifacts
   memory_neo4j_database: neo4j
 
 # ── Prompts ────────────────────────────────────────────────────────────────────
