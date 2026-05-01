@@ -2367,7 +2367,7 @@ def _neuralsignal_workdir(cfg: Any) -> Path:
 def _pythonpath_entries(cfg: Any) -> list[Path]:
     configured = Path(getattr(cfg, "neuralsignal_src_path", "")).resolve()
     workdir = _neuralsignal_workdir(cfg)
-    researcher_root = _TASK_RUNNER.resolve().parents[1]
+    researcher_root = _TASK_RUNNER.resolve().parents[2]
 
     entries = [workdir, configured, researcher_root]
     if _is_package_dir(configured):

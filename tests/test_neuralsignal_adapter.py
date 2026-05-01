@@ -42,22 +42,34 @@ def _mock_artifact_store():
             return {
                 "artifact_id": f"stored-figure-{artifact_name or '1'}",
                 "uri": f"file:///stored/{artifact_name or 'figure.png'}",
+                "storage_key": f"neuralsignal/model_figure/{artifact_name or 'figure.png'}",
+                "storage_bucket": "researcher-artifacts",
+                "storage_endpoint_url": "http://hp.lan:9000",
                 "mime_type": "image/png",
             }
         if artifact_type == "implementation":
             return {
                 "artifact_id": "stored-implementation-1",
                 "uri": "file:///stored/implementation.py",
+                "storage_key": "neuralsignal/implementation/stored-implementation-1/implementation.py",
+                "storage_bucket": "researcher-artifacts",
+                "storage_endpoint_url": "http://hp.lan:9000",
             }
         return {
             "artifact_id": "stored-dataset-1",
             "uri": "file:///stored/dataset.csv",
+            "storage_key": "neuralsignal/dataset/stored-dataset-1/dataset.csv",
+            "storage_bucket": "researcher-artifacts",
+            "storage_endpoint_url": "http://hp.lan:9000",
         }
 
     store.store_file.side_effect = _store_file
     store.store_json.side_effect = lambda *args, **kwargs: {
         "artifact_id": "stored-model-1",
         "uri": "file:///stored/model.json",
+        "storage_key": "neuralsignal/model/stored-model-1/model.json",
+        "storage_bucket": "researcher-artifacts",
+        "storage_endpoint_url": "http://hp.lan:9000",
     }
     return store
 
@@ -139,11 +151,13 @@ def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path)
     adapter = NeuralSignalPlugin()
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
 
+    mock_memory_service = MagicMock()
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
         with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch("core.plugins.neuralsignal.adapter._write_incremental_state_snapshot") as write_snapshot:
-                with patch.object(adapter, "_call_task", return_value={"file_paths": [str(csv_path)]}) as call_task:
-                    delta = adapter.prepare_experiment(_profile(), state)
+            with patch("core.plugins.neuralsignal.adapter.MemoryService.for_profile", return_value=mock_memory_service):
+                with patch("core.plugins.neuralsignal.adapter._write_incremental_state_snapshot") as write_snapshot:
+                    with patch.object(adapter, "_call_task", return_value={"file_paths": [str(csv_path)]}) as call_task:
+                        delta = adapter.prepare_experiment(_profile(), state)
 
     call_task.assert_called_once()
     assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_dataset"
@@ -155,11 +169,14 @@ def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path)
     assert artifact["artifact_type"] == "dataset"
     assert artifact["dataset_source"] == "generated"
     assert artifact["stored_artifact_id"] == "stored-dataset-1"
+    assert artifact["stored_artifact_bucket"] == "researcher-artifacts"
+    assert artifact["stored_artifact_key"] == "neuralsignal/dataset/stored-dataset-1/dataset.csv"
     assert artifact["status"] == "ready"
     assert artifact["rows"] == 2
     assert artifact["columns"] == 2
     assert artifact["column_names"] == ["a", "b"]
     assert delta["datasets"] == [artifact]
+    mock_memory_service.persist_records.assert_called_once()
     write_snapshot.assert_called_once()
     assert write_snapshot.call_args.args[0] == "prepare_experiment"
 
@@ -203,6 +220,7 @@ def test_prepare_experiment_reuses_existing_dataset_when_overwrite_disabled(tmp_
     artifact = delta["experiment_artifacts"][0]
     assert artifact["dataset_source"] == "existing"
     assert artifact["stored_artifact_id"] == "stored-dataset-1"
+    assert artifact["stored_artifact_bucket"] == "researcher-artifacts"
     assert artifact["status"] == "ready"
     assert artifact["dataset_path"] == str(csv_path)
     assert artifact["rows"] == 1
@@ -322,19 +340,21 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
     mock_run.__exit__ = MagicMock(return_value=False)
     mock_run.info.run_id = "mlflow-run-123"
 
+    mock_memory_service = MagicMock()
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
         with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch("core.plugins.neuralsignal.adapter._write_incremental_state_snapshot") as write_snapshot:
-                with patch("mlflow.set_tracking_uri"):
-                    with patch("mlflow.set_experiment"):
-                        with patch("mlflow.start_run", return_value=mock_run):
-                            with patch("mlflow.log_params"):
-                                with patch("mlflow.log_metrics"):
-                                    with patch("mlflow.set_tags"):
-                                        with patch("mlflow.log_dict"):
-                                            with patch("mlflow.log_figure"):
-                                                with patch.object(adapter, "_call_task", return_value=task_result) as call_task:
-                                                    delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
+            with patch("core.plugins.neuralsignal.adapter.MemoryService.for_profile", return_value=mock_memory_service):
+                with patch("core.plugins.neuralsignal.adapter._write_incremental_state_snapshot") as write_snapshot:
+                    with patch("mlflow.set_tracking_uri"):
+                        with patch("mlflow.set_experiment"):
+                            with patch("mlflow.start_run", return_value=mock_run):
+                                with patch("mlflow.log_params"):
+                                    with patch("mlflow.log_metrics"):
+                                        with patch("mlflow.set_tags"):
+                                            with patch("mlflow.log_dict"):
+                                                with patch("mlflow.log_figure"):
+                                                    with patch.object(adapter, "_call_task", return_value=task_result) as call_task:
+                                                        delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
 
     call_task.assert_called_once()
     assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_s1_model"
@@ -351,11 +371,10 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
     assert delta["experiment_results"][0]["metrics"]["test_auc"] == 0.72
     assert delta["experiment_results"][0]["feature_importance"] == {"a": 0.8}
     assert delta["experiment_results"][0]["mlflow_run_id"] == "mlflow-run-123"
-    assert delta["experiment_results"][0]["stored_artifact_id"] == "stored-model-1"
     assert delta["models"][0]["params"] == {"max_depth": 3}
     assert delta["models"][0]["mlflow_run_id"] == "mlflow-run-123"
-    assert delta["models"][0]["stored_artifact_id"] == "stored-model-1"
     assert delta["models"][0]["experiment_id"] == delta["experiment_results"][0]["experiment_id"]
+    mock_memory_service.persist_records.assert_called_once()
     write_snapshot.assert_called_once()
     assert write_snapshot.call_args.args[0] == "execute_experiment"
 
@@ -541,7 +560,7 @@ def test_execute_experiment_logs_dataset_and_confusion_figure_artifacts(tmp_path
     assert "model_description.txt" in text_calls
 
 
-def test_execute_experiment_registers_figure_artifacts(tmp_path):
+def test_execute_experiment_does_not_register_figure_artifacts_in_state(tmp_path):
     adapter = NeuralSignalPlugin()
     dataset_path = tmp_path / "features.csv"
     dataset_path.write_text("a,b\n1,2\n", encoding="utf-8")
@@ -573,9 +592,8 @@ def test_execute_experiment_registers_figure_artifacts(tmp_path):
                     with patch.object(adapter, "_call_task", return_value=task_result):
                         delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
 
-    stored_figures = delta["models"][0]["stored_figure_artifacts"]
-    assert stored_figures[0]["artifact_id"] == "stored-figure-confusion_matrix.png"
-    assert stored_figures[0]["figure_name"] == "confusion_matrix"
+    assert "stored_figure_artifacts" not in delta["models"][0]
+    assert "stored_figure_artifacts" not in delta["experiment_results"][0]
 
 
 def test_build_memory_records_returns_neuralsignal_specific_records(tmp_path):
@@ -607,15 +625,12 @@ def test_build_memory_records_returns_neuralsignal_specific_records(tmp_path):
             "artifacts": {"feature_importance": {"layer_8_ffn_norm": 0.8}},
             "model_config": {"model_name": "activation_sparsity_ab12cd34"},
             "figure_paths": {"roc_curve": "roc.png"},
-            "stored_artifact_id": "stored-model-1",
-            "stored_artifact_uri": "file:///stored/model.json",
             "mlflow_run_id": "mlflow-run-123",
         }],
         "models": [{
             "model_id": "activation_sparsity_ab12cd34",
             "proposal_name": "activation_sparsity",
-            "stored_artifact_id": "stored-model-1",
-            "stored_artifact_uri": "file:///stored/model.json",
+            "mlflow_run_id": "mlflow-run-123",
         }],
         "evaluation_summary": {
             "llm_analysis": {
@@ -635,18 +650,18 @@ def test_build_memory_records_returns_neuralsignal_specific_records(tmp_path):
     kinds = {record["kind"] for record in records}
     assert "neuralsignal_dataset" in kinds
     assert "neuralsignal_featureset" in kinds
-    assert "neuralsignal_model" in kinds
     assert "neuralsignal_experiment" in kinds
 
     experiment_record = next(record for record in records if record["kind"] == "neuralsignal_experiment")
     dataset_record = next(record for record in records if record["kind"] == "neuralsignal_dataset")
     featureset_record = next(record for record in records if record["kind"] == "neuralsignal_featureset")
-    model_record = next(record for record in records if record["kind"] == "neuralsignal_model")
 
     assert experiment_record["object_type"] == "experiment_result"
     assert experiment_record["metadata"]["dataset"] == "HaluBench"
     assert experiment_record["metadata"]["assessment"] == "strong"
     assert experiment_record["metadata"]["dataset_config_fingerprint"]
+    assert experiment_record["metadata"]["mlflow_run_id"] == "mlflow-run-123"
+    assert experiment_record["metadata"]["mlflow_experiment"] == "researcher_experiments"
     assert "Feature set class: ActivationSparsity" in experiment_record["summary"]
     assert any(entity["entity_type"] == "feature_set" for entity in experiment_record["entities"])
     assert any(rel["relation_type"] == "implemented_by" for rel in experiment_record["relations"])
@@ -659,9 +674,6 @@ def test_build_memory_records_returns_neuralsignal_specific_records(tmp_path):
     assert featureset_record["metadata"]["feature_set_fingerprint"]
     assert featureset_record["metadata"]["stored_artifact_uri"] == "file:///stored/implementation.py"
     assert featureset_record["blob_refs"][0]["artifact_id"] == "stored-implementation-1"
-
-    assert model_record["object_type"] == "model"
-    assert model_record["metadata"]["model_config_fingerprint"]
 
 
 def test_memory_record_to_artifact_returns_neuralsignal_specific_summary():
@@ -676,7 +688,7 @@ def test_memory_record_to_artifact_returns_neuralsignal_specific_summary():
             "dataset": "HaluBench",
             "detector": "hallucination",
             "feature_set_class_name": "ActivationSparsity",
-            "stored_artifact_uri": "file:///stored/model.json",
+            "mlflow_run_id": "mlflow-run-123",
             "test_auc": 0.72,
         },
     }
@@ -688,7 +700,7 @@ def test_memory_record_to_artifact_returns_neuralsignal_specific_summary():
     assert "detector=hallucination" in artifact["title"]
     assert "Feature set class: ActivationSparsity" in artifact["summary"]
     assert "test_auc: 0.72" in artifact["summary"]
-    assert "file:///stored/model.json" in artifact["summary"]
+    assert "mlflow-run-123" in artifact["summary"]
 
 
 def test_execute_experiment_records_not_ready_dataset_error():
@@ -743,15 +755,15 @@ def test_task_timeout_prefers_stage_override_then_job_timeout(tmp_path):
     assert call_task.call_args.kwargs["timeout"] == 14400
 
 
-def test_submit_experiment_jobs_submits_dataset_job(tmp_path):
+def test_submit_experiment_jobs_submits_proposal_branch_job(tmp_path):
     adapter = NeuralSignalPlugin()
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
     runner = MagicMock()
     runner.submit.return_value = {
-        "job_id": "dataset_activation_sparsity",
+        "job_id": "proposal_branch_activation_sparsity",
         "job_dir": str(tmp_path / "job"),
         "status": "submitted",
-        "stage": "dataset",
+        "stage": "proposal_branch",
         "proposal_name": "activation_sparsity",
     }
 
@@ -764,71 +776,99 @@ def test_submit_experiment_jobs_submits_dataset_job(tmp_path):
 
     runner.submit.assert_called_once()
     spec = runner.submit.call_args.args[0]
-    assert spec["stage"] == "dataset"
-    assert spec["task_path"] == "plugins.neuralsignal.tasks.create_dataset"
-    assert spec["payload"]["dataset"] == "HaluBench"
+    assert spec["stage"] == "proposal_branch"
+    assert spec["task_path"] == "plugins.neuralsignal.tasks.run_proposal_branch"
+    assert spec["payload"]["dataset_config"]["dataset"] == "HaluBench"
+    assert spec["payload"]["model_config_base"]["dataset"] == "HaluBench"
     assert delta["experiment_jobs"][0]["status"] == "submitted"
 
 
-def test_check_experiment_jobs_collects_dataset_and_submits_model_job(tmp_path):
+def test_check_experiment_jobs_collects_completed_proposal_branch(tmp_path):
     csv_path = tmp_path / "features.csv"
     csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
-    job_dir = tmp_path / "dataset_job"
+    feature_path = tmp_path / "Feature.py"
+    feature_path.write_text("class Feature: pass\n", encoding="utf-8")
+    job_dir = tmp_path / "proposal_branch_job"
     job_dir.mkdir()
     payload = {
-        "dataset": "HaluBench",
-        "detector_names": ["hallucination"],
-        "application_name": "HaluBench",
-        "sub_application_name": "GranularAttention",
-        "zone_size": 512,
-        "feature_set_class_path": str(tmp_path / "Feature.py"),
-        "feature_set_class_name": "Feature",
+        "proposal_name": "activation_sparsity",
+        "experiment_id": "exp-123",
+        "proposal": _proposal(),
+        "implementation": {
+            "proposal_name": "activation_sparsity",
+            "class_name": "Feature",
+            "script_path": str(feature_path),
+            "validated": True,
+        },
+        "dataset_config": {
+            "dataset": "HaluBench",
+            "detector_names": ["hallucination"],
+            "application_name": "HaluBench",
+            "sub_application_name": "GranularAttention",
+            "zone_size": 512,
+            "feature_set_class_path": str(feature_path),
+            "feature_set_class_name": "Feature",
+            "file_out": "features.csv",
+            "dataset_output_dir": str(tmp_path),
+        },
+        "model_config_base": {
+            "dataset": "HaluBench",
+            "file_out": "features.csv",
+            "dataset_path": str(csv_path),
+            "feature_set_class_name": "Feature",
+        },
     }
     (job_dir / "payload.json").write_text(json.dumps(payload), encoding="utf-8")
     (job_dir / "job.json").write_text(
         json.dumps({
-            "job_id": "dataset_job",
+            "job_id": "proposal_branch_job",
             "job_dir": str(job_dir),
-            "task_path": "plugins.neuralsignal.tasks.create_dataset",
+            "task_path": "plugins.neuralsignal.tasks.run_proposal_branch",
+            "payload": payload,
         }),
         encoding="utf-8",
     )
     result_path = job_dir / "result.json"
-    result_path.write_text(json.dumps({"file_paths": [str(csv_path)]}), encoding="utf-8")
+    result_path.write_text(json.dumps({
+        "proposal_name": "activation_sparsity",
+        "experiment_id": "exp-123",
+        "dataset_result": {"file_paths": [str(csv_path)]},
+        "model_result": {
+            "metrics": {"test_auc": 0.72},
+            "params": {"max_depth": 3},
+            "feature_importance": {"a": 0.8},
+            "artifacts": {"feature_importance": {"a": 0.8}},
+            "model_config": {"model_name": "activation_sparsity_exp123", "model": "xgboost"},
+            "figure_paths": {},
+        },
+    }), encoding="utf-8")
 
     runner = MagicMock()
     runner.check.return_value = {
-        "job_id": "dataset_job",
+        "job_id": "proposal_branch_job",
         "job_dir": str(job_dir),
         "result_path": str(result_path),
         "status": "succeeded",
-        "stage": "dataset",
+        "stage": "proposal_branch",
         "proposal_name": "activation_sparsity",
-    }
-    runner.submit.return_value = {
-        "job_id": "model_job",
-        "job_dir": str(tmp_path / "model_job"),
-        "status": "submitted",
-        "stage": "model",
-        "proposal_name": "activation_sparsity",
-        "artifact_id": "activation_sparsity_dataset_0",
+        "experiment_id": "exp-123",
     }
 
     adapter = NeuralSignalPlugin()
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
         with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
             with patch("core.plugins.neuralsignal.adapter.get_runner", return_value=runner):
-                delta = adapter.check_experiment_jobs(
-                    {**_profile(), "execution": {"runner": "local_process", "max_parallel_jobs": 1}},
-                    {"experiment_jobs": [{"job_id": "dataset_job", "job_dir": str(job_dir)}]},
+                with patch("core.plugins.neuralsignal.adapter._log_result_to_mlflow", return_value="mlflow-run-branch"):
+                    delta = adapter.check_experiment_jobs(
+                        {**_profile(), "execution": {"runner": "local_process", "max_parallel_jobs": 1}},
+                    {"experiment_jobs": [{"job_id": "proposal_branch_job", "job_dir": str(job_dir), "proposal_name": "activation_sparsity"}]},
                 )
 
     assert delta["experiment_artifacts"][0]["status"] == "ready"
     assert delta["experiment_artifacts"][0]["rows"] == 1
-    runner.submit.assert_called_once()
-    assert runner.submit.call_args.args[0]["stage"] == "model"
-    assert runner.submit.call_args.args[0]["cwd"] == str(tmp_path)
-    assert delta["submitted_jobs"][0]["job_id"] == "model_job"
+    assert delta["experiment_results"][0]["experiment_id"] == "exp-123"
+    assert delta["experiment_results"][0]["mlflow_run_id"] == "mlflow-run-branch"
+    assert delta["models"][0]["mlflow_run_id"] == "mlflow-run-branch"
 
 
 def test_call_task_sets_neuralsignal_src_on_pythonpath(tmp_path, monkeypatch):

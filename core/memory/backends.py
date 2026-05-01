@@ -78,7 +78,12 @@ class MongoMemoryDocumentStore:
 
     def upsert(self, record: MemoryRecord) -> None:
         doc = dict(record)
-        log.debug("memory.backends | Mongo upsert memory record id=%r", doc.get("record_id"))
+        log.debug(
+            "memory.backends | Mongo upsert memory record id=%r db=%r collection=%r",
+            doc.get("record_id"),
+            self.db_name,
+            self.collection_name,
+        )
         self.collection.replace_one({"record_id": doc["record_id"]}, doc, upsert=True)
 
     def get(self, record_id: str) -> MemoryRecord | None:
@@ -111,7 +116,12 @@ class ChromaMemoryVectorStore:
             self.store = ChromaStore(collection_name=self.collection_name)
 
     def upsert(self, record_id: str, document: str, metadata: dict[str, Any]) -> None:
-        log.debug("memory.backends | Chroma upsert memory vector id=%r document_chars=%d", record_id, len(document))
+        log.debug(
+            "memory.backends | Chroma upsert memory vector id=%r collection=%r document_chars=%d",
+            record_id,
+            self.collection_name,
+            len(document),
+        )
         self.store.upsert(record_id, document, metadata)
 
     def query_similar(self, text: str, n_results: int) -> list[dict[str, Any]]:
@@ -178,7 +188,7 @@ class Neo4jMemoryGraphStore:
                     "Neo4j graph memory requires the 'neo4j' package. "
                     "Install project dependencies or add neo4j>=5.0."
                 ) from exc
-            log.info("memory.backends | Creating Neo4j memory graph driver uri=%r database=%r", self.uri, self.database)
+            log.debug("memory.backends | Creating Neo4j memory graph driver uri=%r database=%r", self.uri, self.database)
             self.driver = GraphDatabase.driver(self.uri, auth=(self.username, self.password))
 
     def close(self) -> None:
@@ -224,8 +234,9 @@ class Neo4jMemoryGraphStore:
         with self.driver.session(database=self.database) as session:
             session.execute_write(self._upsert_projection, payload, clean_nodes, clean_edges)
         log.debug(
-            "memory.backends | Neo4j graph upserted id=%r nodes=%d edges=%d",
+            "memory.backends | Neo4j graph upserted id=%r database=%r nodes=%d edges=%d",
             record_id,
+            self.database,
             len(clean_nodes),
             len(clean_edges),
         )
@@ -360,6 +371,7 @@ def get_memory_document_store(profile: dict[str, Any]) -> MongoMemoryDocumentSto
     )
     collection_name = storage_cfg.get("memory_mongodb_collection", "memory_records")
     log.debug("memory.backends | Configured document store db=%r collection=%r", db_name, collection_name)
+    log.debug("memory.backends | Using Mongo document store db=%r collection=%r", db_name, collection_name)
     return MongoMemoryDocumentStore(
         mongo_url=cfg.mongo_url,
         db_name=db_name,
@@ -372,6 +384,7 @@ def get_memory_vector_store(profile: dict[str, Any]) -> ChromaMemoryVectorStore:
     storage_cfg = profile.get("storage") or {}
     collection_name = storage_cfg.get("memory_chroma_collection") or storage_cfg.get("chroma_collection")
     log.debug("memory.backends | Configured vector store collection=%r", collection_name)
+    log.debug("memory.backends | Using Chroma vector store collection=%r", collection_name)
     return ChromaMemoryVectorStore(collection_name=collection_name)
 
 
@@ -389,12 +402,19 @@ def get_memory_graph_store(profile: dict[str, Any]) -> MemoryGraphStore:
         if not uri or not username:
             log.error("memory.backends | Neo4j graph backend missing uri or username")
             raise ValueError("Neo4j memory graph backend requires memory_neo4j_uri and memory_neo4j_username.")
+        log.debug(
+            "memory.backends | Using Neo4j graph store uri=%r database=%r username=%r",
+            uri,
+            database,
+            username,
+        )
         return Neo4jMemoryGraphStore(
             uri=str(uri),
             username=str(username),
             password=str(password or ""),
             database=str(database) if database else None,
         )
+    log.debug("memory.backends | Using noop graph store")
     return NoopMemoryGraphStore()
 
 

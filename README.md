@@ -2,7 +2,7 @@
 
 A configuration-driven, plug-and-play agentic research pipeline built on LangGraph. The system automates the full research loop — from literature review through implementation, validation, experimentation, and result storage — for any research domain described by a **profile YAML file**.
 
-Experiment execution is modular: the same adapter/job architecture can run experiments locally today and can be routed to a cluster runner such as Ray later without changing the graph or profile shape.
+Experiments can run locally or be spun off to a Ray cluster through the same adapter/job architecture, without changing the graph or profile shape.
 
 ![Architecture overview with async runner model](docs/architecture_async_runner.png)
 
@@ -71,6 +71,16 @@ uv run python main.py --profile neuralsignal --direction "attention head special
 # List available profiles
 uv run python main.py --list-profiles
 ```
+
+### Run Inspector
+
+```bash
+uv run python -m web
+```
+
+Open `http://127.0.0.1:8090` to inspect aggregated experiment runs across
+Mongo memory records, Chroma projections, Neo4j graph data, MLflow runs, and
+artifact references.
 
 ---
 

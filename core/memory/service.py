@@ -49,7 +49,14 @@ class MemoryService:
 
     @classmethod
     def for_profile(cls, profile: dict[str, Any]) -> "MemoryService":
-        log.debug("memory.service | Building service for profile=%r", profile.get("name"))
+        storage_cfg = profile.get("storage") or {}
+        log.debug(
+            "memory.service | Building service for profile=%r mongo_db=%r chroma_collection=%r graph_backend=%r",
+            profile.get("name"),
+            storage_cfg.get("memory_mongodb_db") or storage_cfg.get("mongodb_results_db") or "researcher_results",
+            storage_cfg.get("memory_chroma_collection") or storage_cfg.get("chroma_collection"),
+            storage_cfg.get("memory_graph_backend"),
+        )
         return cls(
             document_store=get_memory_document_store(profile),
             vector_store=get_memory_vector_store(profile),
@@ -65,12 +72,21 @@ class MemoryService:
         record = ensure_memory_record_defaults(record)
         plan = projection or default_memory_projection(record)
         record_id = str(record.get("record_id") or "")
-        log.debug(
+        log.info(
             "memory.service | Persisting record id=%r domain=%r kind=%r object_type=%r",
             record_id,
             record.get("domain"),
             record.get("kind"),
             record.get("object_type"),
+        )
+        log.debug(
+            "memory.service | Record id=%r title=%r tags=%s blob_refs=%d entities=%d relations=%d",
+            record_id,
+            record.get("title"),
+            list(record.get("tags") or []),
+            len(record.get("blob_refs") or []),
+            len(record.get("entities") or []),
+            len(record.get("relations") or []),
         )
         self.document_store.upsert(record)
         self.vector_store.upsert(
@@ -79,8 +95,9 @@ class MemoryService:
             dict(plan.get("vector_metadata") or {}),
         )
         log.debug(
-            "memory.service | Vector projection upserted id=%r metadata_keys=%s",
+            "memory.service | Vector projection upserted id=%r embedding_chars=%d metadata_keys=%s",
             record_id,
+            len(str(plan.get("embedding_text") or "")),
             sorted((plan.get("vector_metadata") or {}).keys()),
         )
         if self.graph_store is not None:
@@ -97,6 +114,12 @@ class MemoryService:
                 len(nodes),
                 len(edges),
             )
+            log.debug(
+                "memory.service | Graph payload id=%r node_types=%s edge_types=%s",
+                record_id,
+                [str(node.get("node_type") or "") for node in nodes],
+                [str(edge.get("edge_type") or "") for edge in edges],
+            )
 
     def persist_records(
         self,
@@ -104,9 +127,10 @@ class MemoryService:
         *,
         projections: dict[str, MemoryProjection] | None = None,
     ) -> None:
-        log.info("memory.service | Persisting %d memory record(s)", len(records))
+        log.debug("memory.service | Persisting %d memory record(s)", len(records))
         for record in records:
             record_id = str(record.get("record_id") or "")
+            log.debug("memory.service | Persist batch includes id=%r", record_id)
             self.persist_record(record, projection=(projections or {}).get(record_id))
 
     def emit(
@@ -157,8 +181,14 @@ class MemoryService:
             entities=entities or [],
             relations=relations or [],
         )
+        log.debug(
+            "memory.service | Built emitted record id=%r title=%r metadata_keys=%s",
+            record.get("record_id"),
+            record.get("title"),
+            sorted((record.get("metadata") or {}).keys()),
+        )
         self.persist_record(record)
-        log.info(
+        log.debug(
             "memory.service | Emitted memory record id=%r object_type=%r node=%r",
             record.get("record_id"),
             object_type,
@@ -240,7 +270,7 @@ class MemoryService:
             )
 
         records = self.find_records(filters, limit=limit)
-        log.info("memory.service | Structured query returned %d memory record(s)", len(records))
+        log.info("memory.service | Retrieved %d memory record(s) from structured query", len(records))
         output: list[MemorySearchHit] = []
         for record in records:
             if include_blobs:

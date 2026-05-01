@@ -24,6 +24,9 @@ def test_implement_registers_artifact_and_persists_memory(tmp_path):
     store.store_file.return_value = {
         "artifact_id": "impl-1",
         "uri": "s3://bucket/impl.py",
+        "storage_key": "neuralsignal/implementation/impl-1/impl.py",
+        "storage_bucket": "researcher-artifacts",
+        "storage_endpoint_url": "http://hp.lan:9000",
     }
     state = {
         "profile_name": "neuralsignal",
@@ -39,6 +42,8 @@ def test_implement_registers_artifact_and_persists_memory(tmp_path):
     implementation = result["implementations"][0]
     assert implementation["stored_artifact_id"] == "impl-1"
     assert implementation["stored_artifact_uri"] == "s3://bucket/impl.py"
+    assert implementation["stored_artifact_bucket"] == "researcher-artifacts"
+    assert implementation["stored_artifact_key"] == "neuralsignal/implementation/impl-1/impl.py"
     persist_memory.assert_called_once()
 
 

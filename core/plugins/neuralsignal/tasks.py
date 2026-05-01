@@ -63,6 +63,43 @@ def create_s1_model(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def run_proposal_branch(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run one proposal branch: dataset creation/reuse then model training."""
+    reused_artifact = payload.get("reused_dataset_artifact") or {}
+    dataset_result: dict[str, Any]
+    dataset_path = ""
+
+    if isinstance(reused_artifact, dict) and reused_artifact:
+        dataset_path = str(reused_artifact.get("dataset_path") or reused_artifact.get("file_path") or "")
+        if dataset_path and Path(dataset_path).exists():
+            dataset_result = {
+                "file_paths": [dataset_path],
+                "reused_from_memory": bool(reused_artifact.get("memory_record_id")),
+                "reused_existing_file": not bool(reused_artifact.get("memory_record_id")),
+                "memory_record_id": reused_artifact.get("memory_record_id", ""),
+            }
+        else:
+            dataset_result = create_dataset(dict(payload.get("dataset_config") or {}))
+            dataset_path = str(_first_path(dataset_result))
+    else:
+        dataset_result = create_dataset(dict(payload.get("dataset_config") or {}))
+        dataset_path = str(_first_path(dataset_result))
+
+    if not dataset_path:
+        return {"error": "Proposal branch produced no dataset path"}
+
+    model_cfg = dict(payload.get("model_config_base") or {})
+    model_cfg["dataset_path"] = dataset_path
+    model_cfg["file_out"] = Path(dataset_path).name
+    model_result = create_s1_model(model_cfg)
+    return {
+        "proposal_name": payload.get("proposal_name", "unknown"),
+        "experiment_id": payload.get("experiment_id", ""),
+        "dataset_result": dataset_result,
+        "model_result": model_result,
+    }
+
+
 def _automation_config(payload: dict[str, Any]) -> dict[str, Any]:
     """Merge task payload over NeuralSignal's packaged automation defaults."""
     from neuralsignal.automation import get_config  # type: ignore
@@ -136,6 +173,13 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
             seen.add(item)
             result.append(item)
     return result
+
+
+def _first_path(result: dict[str, Any]) -> str:
+    file_paths = result.get("file_paths") or result.get("paths") or []
+    if isinstance(file_paths, list) and file_paths:
+        return str(file_paths[0])
+    return ""
 
 
 def _move_dataset_files(file_paths: list[Any], cfg: dict[str, Any]) -> list[str]:

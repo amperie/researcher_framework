@@ -10,7 +10,11 @@ log = get_logger(__name__)
 
 def build_memory_records_for_state(profile: dict, state: dict) -> list[dict]:
     """Build the full current memory projection for a merged graph state."""
-    log.debug("memory.node | Building memory records for profile=%r", profile.get("name"))
+    log.debug(
+        "memory.node | Building memory records for profile=%r state_keys=%s",
+        profile.get("name"),
+        sorted(state.keys()),
+    )
     records = list(build_core_memory_records(profile, state))
     try:
         adapter = load_adapter(profile)
@@ -25,7 +29,21 @@ def build_memory_records_for_state(profile: dict, state: dict) -> list[dict]:
         except Exception as exc:
             log.warning("memory | adapter build_memory_records failed: %s", exc)
     deduped = dedupe_memory_records(records)
-    log.info("memory.node | Built %d memory record(s) for profile=%r", len(deduped), profile.get("name"))
+    type_counts: dict[str, int] = {}
+    for record in deduped:
+        object_type = str(record.get("object_type") or record.get("kind") or "unknown")
+        type_counts[object_type] = type_counts.get(object_type, 0) + 1
+    log.debug(
+        "memory.node | Built %d memory record(s) for profile=%r types=%s",
+        len(deduped),
+        profile.get("name"),
+        type_counts,
+    )
+    log.debug(
+        "memory.node | Built record ids for profile=%r ids=%s",
+        profile.get("name"),
+        [str(record.get("record_id") or "") for record in deduped],
+    )
     return deduped
 
 
@@ -35,7 +53,12 @@ def persist_memory_records_for_state(profile: dict, state: dict) -> None:
     if not records:
         log.debug("memory.node | No memory records to persist for profile=%r", profile.get("name"))
         return
-    log.info("memory.node | Persisting %d memory record(s) for profile=%r", len(records), profile.get("name"))
+    log.debug("memory.node | Persisting %d memory record(s) for profile=%r", len(records), profile.get("name"))
+    log.debug(
+        "memory.node | Persisting record ids for profile=%r ids=%s",
+        profile.get("name"),
+        [str(record.get("record_id") or "") for record in records],
+    )
     MemoryService.for_profile(profile).persist_records(records)
 
 
@@ -59,7 +82,7 @@ def emit_memory_record(
     relations: list[dict] | None = None,
 ) -> dict:
     """Emit and persist a single typed memory object from a graph node."""
-    log.info(
+    log.debug(
         "memory.node | Emitting memory record profile=%r node=%r object_type=%r",
         profile.get("name"),
         node,

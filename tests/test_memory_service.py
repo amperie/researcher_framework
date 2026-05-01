@@ -8,7 +8,7 @@ from typing import Any
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.memory import MemoryService, Neo4jMemoryGraphStore, fingerprint_for_spec, memory_object_specs
+from core.memory import MemoryService, Neo4jMemoryGraphStore, default_memory_projection, fingerprint_for_spec, memory_object_specs
 from core.memory.backends import get_memory_graph_store
 
 
@@ -212,6 +212,28 @@ def test_repair_projections_reindexes_canonical_records():
     assert repaired == 1
     assert vector_store.upsert_count == 1
     assert vector_store.get_by_id("r1") is not None
+
+
+def test_default_memory_projection_flattens_list_metadata_for_vectors():
+    projection = default_memory_projection({
+        "record_id": "r1",
+        "domain": "demo",
+        "kind": "demo_note",
+        "object_type": "note",
+        "object_key": "r1",
+        "title": "Note",
+        "summary": "hello",
+        "content": {},
+        "metadata": {
+            "lessons": ["first", "second"],
+            "feature_importance_keys": ["a", "b"],
+        },
+        "tags": ["demo", "note"],
+    })
+
+    assert projection["vector_metadata"]["tags"] == "demo|note"
+    assert projection["vector_metadata"]["lessons"] == "first | second"
+    assert projection["vector_metadata"]["feature_importance_keys"] == "a | b"
 
 
 def test_neo4j_graph_store_upserts_projection_and_decodes_query_metadata():

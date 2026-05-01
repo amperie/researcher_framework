@@ -152,6 +152,34 @@ def test_create_s1_model_uses_public_automation_api_and_normalizes_best_model(mo
     assert result["figure_paths"] == {}
 
 
+def test_run_proposal_branch_reuses_existing_dataset_and_trains_model(monkeypatch, tmp_path):
+    dataset_path = tmp_path / "features.csv"
+    dataset_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    seen = {}
+
+    monkeypatch.setattr(tasks, "create_dataset", lambda payload: {"file_paths": [str(tmp_path / "unexpected.csv")]})
+
+    def _create_model(payload):
+        seen["payload"] = dict(payload)
+        return {"metrics": {"test_auc": 0.77}, "params": {}, "feature_importance": {}, "artifacts": {}, "model_config": {}, "figure_paths": {}}
+
+    monkeypatch.setattr(tasks, "create_s1_model", _create_model)
+
+    result = tasks.run_proposal_branch({
+        "proposal_name": "activation_sparsity",
+        "experiment_id": "exp-1",
+        "dataset_config": {"dataset": "HaluBench"},
+        "model_config_base": {"dataset": "HaluBench"},
+        "reused_dataset_artifact": {"dataset_path": str(dataset_path), "memory_record_id": "dataset:abc"},
+    })
+
+    assert result["proposal_name"] == "activation_sparsity"
+    assert result["experiment_id"] == "exp-1"
+    assert result["dataset_result"]["reused_from_memory"] is True
+    assert seen["payload"]["dataset_path"] == str(dataset_path)
+    assert seen["payload"]["file_out"] == "features.csv"
+
+
 def test_enable_mongo_no_cursor_timeout_patches_query(monkeypatch):
     backend_module = ModuleType("neuralsignal.backend.mongo_backend")
 
