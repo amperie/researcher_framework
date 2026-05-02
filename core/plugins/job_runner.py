@@ -26,9 +26,11 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from core.plugins.task_runner import load_callable
+from core.utils.logger import get_logger, setup_plugin_file_logging, setup_logging
 
 
 TERMINAL_STATUSES = {"succeeded", "failed", "timed_out", "cancelled"}
+log = get_logger("core.plugins.job_runner")
 
 
 class JobRunner(Protocol):
@@ -94,6 +96,19 @@ class LocalProcessRunner:
             status["result_path"] = str(result_path)
         status["stdout_path"] = str(job_dir / "stdout.log")
         status["stderr_path"] = str(job_dir / "stderr.log")
+        if status.get("status") == "submitted" and not result_path.exists():
+            stderr_path = job_dir / "stderr.log"
+            if stderr_path.exists():
+                stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
+                if stderr_text:
+                    failed = {
+                        **status,
+                        "status": "failed",
+                        "updated_at": datetime.now(UTC).isoformat(),
+                        "error": stderr_text.splitlines()[-1][:1000],
+                    }
+                    _write_json(status_path, failed)
+                    status = failed
         return status
 
 
@@ -106,13 +121,25 @@ def get_runner(name: str | None = None) -> JobRunner:
 
 def run_job(job_dir: str) -> None:
     """Worker entry point. Runs one job and writes durable status/result files."""
+    setup_logging()
     root = Path(job_dir).resolve()
     spec = _read_json(root / "job.json")
     payload = _read_json(root / "payload.json")
     job_id = spec["job_id"]
+    plugin_name = str(spec.get("plugin_name") or "")
+    if plugin_name:
+        setup_plugin_file_logging(
+            plugin_name,
+            logger_prefixes=[
+                "core.plugins.neuralsignal",
+                "core.plugins.task_runner",
+                "core.plugins.job_runner",
+            ],
+        )
 
     _write_json(root / "status.json", _status(job_id, "running", spec))
     try:
+        log.info("Running plugin job id=%s task=%s plugin=%s", job_id, spec.get("task_path"), plugin_name or "unknown")
         task = load_callable(spec["task_path"])
         result = task(payload)
         _write_json(root / "result.json", result)
@@ -129,7 +156,7 @@ def run_job(job_dir: str) -> None:
 def _worker_command(spec: dict[str, Any], job_dir: Path) -> list[str]:
     python = spec.get("python") or sys.executable
     parts = str(python).split()
-    return parts + ["-u", "-m", "plugins.job_runner", "run", str(job_dir)]
+    return parts + ["-u", "-m", "core.plugins.job_runner", "run", str(job_dir)]
 
 
 def _status(

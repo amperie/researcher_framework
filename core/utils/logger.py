@@ -26,8 +26,6 @@ _DEFAULT_FILE_FORMAT = (
     "%(asctime)s [%(levelname)-8s] %(name)-40s (%(filename)s:%(lineno)d): %(message)s"
 )
 _FALLBACK_LEVEL = logging.INFO
-
-
 def _level(name: str) -> int:
     level = logging.getLevelName(name.upper()) if isinstance(name, str) else name
     return level if isinstance(level, int) else _FALLBACK_LEVEL
@@ -88,7 +86,19 @@ def setup_logging(config_path: str = "configs/config.yaml") -> None:
             f"file(level={logging.getLevelName(file_level)}, path={log_path})"
         )
 
-    for noisy in ("httpx", "httpcore", "urllib3", "chromadb", "langsmith"):
+    for noisy in (
+        "httpx",
+        "httpcore",
+        "urllib3",
+        "chromadb",
+        "langsmith",
+        "pymongo",
+        "pymongo.command",
+        "pymongo.connection",
+        "pymongo.serverSelection",
+        "pymongo.topology",
+        "pymongo.network",
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     log = get_logger(__name__)
@@ -119,3 +129,98 @@ def _load_yaml_section(config_path: str) -> dict[str, Any]:
 def get_logger(name: str) -> logging.Logger:
     """Return a named logger. Always call as ``get_logger(__name__)``."""
     return logging.getLogger(name)
+
+
+class _LoggerPrefixFilter(logging.Filter):
+    """Include or exclude records by logger-name prefix."""
+
+    def __init__(self, prefixes: list[str], *, include: bool) -> None:
+        super().__init__()
+        self.prefixes = tuple(prefix for prefix in prefixes if prefix)
+        self.include = include
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        matched = any(
+            record.name == prefix or record.name.startswith(f"{prefix}.")
+            for prefix in self.prefixes
+        )
+        return matched if self.include else not matched
+
+
+def setup_plugin_file_logging(
+    plugin_name: str,
+    *,
+    logger_prefixes: list[str],
+    config_path: str = "configs/config.yaml",
+) -> Path | None:
+    """Route selected logger prefixes to a plugin-specific file.
+
+    Matching records are excluded from the main rotating file handler and
+    instead written to a separate file whose name includes ``plugin_name``.
+    Console logging remains unchanged.
+    """
+    cfg = _load_yaml_section(config_path)
+    file_cfg: dict[str, Any] = cfg.get("file", {})
+    if not file_cfg.get("enabled", False):
+        return None
+
+    plugin_name = str(plugin_name).strip()
+    if not plugin_name:
+        return None
+
+    prefixes = [prefix for prefix in logger_prefixes if prefix]
+    if not prefixes:
+        return None
+
+    root = logging.getLogger()
+    main_log_path = Path(file_cfg.get("path", "logs/research.log"))
+    plugin_log_path = _plugin_log_path(main_log_path, plugin_name)
+    plugin_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    exclude_filter = _LoggerPrefixFilter(prefixes, include=False)
+    include_filter = _LoggerPrefixFilter(prefixes, include=True)
+
+    for handler in root.handlers:
+        if isinstance(handler, logging.handlers.RotatingFileHandler):
+            base_filename = getattr(handler, "baseFilename", "")
+            if Path(base_filename) == main_log_path.resolve():
+                if not any(
+                    isinstance(existing, _LoggerPrefixFilter)
+                    and existing.include is False
+                    and existing.prefixes == exclude_filter.prefixes
+                    for existing in handler.filters
+                ):
+                    handler.addFilter(exclude_filter)
+
+    handler_name = f"plugin-file:{plugin_name}"
+    for handler in root.handlers:
+        if getattr(handler, "name", "") == handler_name:
+            return plugin_log_path
+
+    plugin_handler = logging.handlers.RotatingFileHandler(
+        filename=plugin_log_path,
+        maxBytes=file_cfg.get("max_bytes", 10 * 1024 * 1024),
+        backupCount=file_cfg.get("backup_count", 5),
+        encoding="utf-8",
+    )
+    plugin_handler.set_name(handler_name)
+    plugin_handler.setLevel(_level(file_cfg.get("level", "DEBUG")))
+    plugin_handler.setFormatter(
+        logging.Formatter(
+            fmt=file_cfg.get("format", _DEFAULT_FILE_FORMAT),
+            datefmt=file_cfg.get("datefmt", "%Y-%m-%d %H:%M:%S"),
+        )
+    )
+    plugin_handler.addFilter(include_filter)
+    root.addHandler(plugin_handler)
+    return plugin_log_path
+
+
+def _plugin_log_path(main_log_path: Path, plugin_name: str) -> Path:
+    safe_plugin = "".join(
+        ch if ch.isalnum() or ch in ("_", "-") else "_"
+        for ch in plugin_name.strip().lower()
+    ) or "plugin"
+    if main_log_path.suffix:
+        return main_log_path.with_name(f"{main_log_path.stem}.{safe_plugin}{main_log_path.suffix}")
+    return main_log_path.with_name(f"{main_log_path.name}.{safe_plugin}")

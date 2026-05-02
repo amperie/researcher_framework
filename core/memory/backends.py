@@ -36,6 +36,8 @@ class MemoryVectorStore(Protocol):
 
     def delete(self, record_id: str) -> None: ...
 
+    def list_ids(self, *, domain: str | None = None) -> list[str]: ...
+
 
 class MemoryGraphStore(Protocol):
     """Store for graph projections."""
@@ -56,6 +58,12 @@ class MemoryGraphStore(Protocol):
         edge_type: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]: ...
+
+    def list_record_ids(self, *, domain: str | None = None) -> list[str]: ...
+
+    def delete_record(self, record_id: str) -> None: ...
+
+    def prune_orphan_entities(self) -> None: ...
 
 
 @dataclass
@@ -142,6 +150,13 @@ class ChromaMemoryVectorStore:
         else:
             log.debug("memory.backends | Chroma delete skipped; underlying store has no delete method")
 
+    def list_ids(self, *, domain: str | None = None) -> list[str]:
+        list_ids = getattr(self.store, "list_ids", None)
+        if callable(list_ids):
+            return [str(item) for item in list_ids(domain=domain) if item]
+        log.debug("memory.backends | Chroma list_ids skipped; underlying store has no list_ids method")
+        return []
+
 
 class NoopMemoryGraphStore:
     """Placeholder graph store until a concrete backend is configured."""
@@ -166,6 +181,16 @@ class NoopMemoryGraphStore:
     ) -> list[dict[str, Any]]:
         log.debug("memory.backends | Noop graph query returned no results")
         return []
+
+    def list_record_ids(self, *, domain: str | None = None) -> list[str]:
+        return []
+
+    def delete_record(self, record_id: str) -> None:
+        _ = record_id
+        return None
+
+    def prune_orphan_entities(self) -> None:
+        return None
 
 
 @dataclass
@@ -210,6 +235,7 @@ class Neo4jMemoryGraphStore:
         payload = {
             "record_id": record_id,
             "domain": str(record.get("domain") or ""),
+            "profile": str(record.get("domain") or ""),
             "kind": str(record.get("kind") or ""),
             "object_type": str(record.get("object_type") or ""),
             "object_key": str(record.get("object_key") or ""),
@@ -264,6 +290,21 @@ class Neo4jMemoryGraphStore:
         log.debug("memory.backends | Neo4j graph query returned %d result(s)", len(decoded))
         return decoded
 
+    def list_record_ids(self, *, domain: str | None = None) -> list[str]:
+        with self.driver.session(database=self.database) as session:
+            rows = session.execute_read(self._list_record_ids, str(domain) if domain else None)
+        return [str(item) for item in rows if item]
+
+    def delete_record(self, record_id: str) -> None:
+        with self.driver.session(database=self.database) as session:
+            session.execute_write(self._delete_record_projection, str(record_id))
+        log.debug("memory.backends | Neo4j graph deleted record projection id=%r", record_id)
+
+    def prune_orphan_entities(self) -> None:
+        with self.driver.session(database=self.database) as session:
+            session.execute_write(self._prune_orphan_entities)
+        log.debug("memory.backends | Neo4j graph pruned orphan entities")
+
     @staticmethod
     def _upsert_projection(tx: Any, record_payload: dict[str, Any], nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
         record_id = record_payload["record_id"]
@@ -286,6 +327,9 @@ class Neo4jMemoryGraphStore:
                 """
                 MERGE (entity:MemoryEntity {node_type: $node_type, node_key: $node_key})
                 SET entity.name = $name,
+                    entity.raw_key = $raw_key,
+                    entity.domain = $domain,
+                    entity.profile = $profile,
                     entity.metadata_json = $metadata_json
                 WITH entity
                 MATCH (record:MemoryRecord {record_id: $record_id})
@@ -299,8 +343,14 @@ class Neo4jMemoryGraphStore:
                 """
                 MERGE (source:MemoryEntity {node_type: $source_type, node_key: $source_key})
                 ON CREATE SET source.name = $source_key, source.metadata_json = '{}'
+                SET source.raw_key = $source_raw_key,
+                    source.domain = $domain,
+                    source.profile = $profile
                 MERGE (target:MemoryEntity {node_type: $target_type, node_key: $target_key})
                 ON CREATE SET target.name = $target_key, target.metadata_json = '{}'
+                SET target.raw_key = $target_raw_key,
+                    target.domain = $domain,
+                    target.profile = $profile
                 MERGE (source)-[relation:MEMORY_RELATION {
                     record_id: $record_id,
                     edge_type: $edge_type,
@@ -309,8 +359,14 @@ class Neo4jMemoryGraphStore:
                     target_type: $target_type,
                     target_key: $target_key
                 }]->(target)
-                SET relation.metadata_json = $metadata_json
+                SET relation.metadata_json = $metadata_json,
+                    relation.domain = $domain,
+                    relation.profile = $profile,
+                    relation.source_raw_key = $source_raw_key,
+                    relation.target_raw_key = $target_raw_key
                 """,
+                domain=record_payload.get("domain", ""),
+                profile=record_payload.get("profile", ""),
                 record_id=record_id,
                 **edge,
             )
@@ -321,11 +377,13 @@ class Neo4jMemoryGraphStore:
             """
             MATCH (node:MemoryEntity)
             WHERE ($node_type IS NULL OR node.node_type = $node_type)
-              AND ($node_key IS NULL OR node.node_key = $node_key)
+              AND ($node_key IS NULL OR node.node_key = $node_key OR node.raw_key = $node_key)
             OPTIONAL MATCH (record:MemoryRecord)-[:PROJECTS_ENTITY]->(node)
             RETURN {
                 node_type: node.node_type,
                 node_key: node.node_key,
+                raw_key: node.raw_key,
+                domain: node.domain,
                 name: node.name,
                 metadata_json: node.metadata_json,
                 record_ids: collect(DISTINCT record.record_id)
@@ -343,13 +401,20 @@ class Neo4jMemoryGraphStore:
             MATCH (source:MemoryEntity)-[relation:MEMORY_RELATION]->(target:MemoryEntity)
             WHERE ($edge_type IS NULL OR relation.edge_type = $edge_type)
               AND ($node_type IS NULL OR source.node_type = $node_type OR target.node_type = $node_type)
-              AND ($node_key IS NULL OR source.node_key = $node_key OR target.node_key = $node_key)
+              AND ($node_key IS NULL
+                OR source.node_key = $node_key
+                OR target.node_key = $node_key
+                OR source.raw_key = $node_key
+                OR target.raw_key = $node_key)
             RETURN {
                 edge_type: relation.edge_type,
                 source_type: source.node_type,
                 source_key: source.node_key,
+                source_raw_key: source.raw_key,
                 target_type: target.node_type,
                 target_key: target.node_key,
+                target_raw_key: target.raw_key,
+                domain: relation.domain,
                 metadata_json: relation.metadata_json,
                 record_id: relation.record_id
             } AS item
@@ -358,6 +423,45 @@ class Neo4jMemoryGraphStore:
             **params,
         )
         return [row["item"] for row in result]
+
+    @staticmethod
+    def _list_record_ids(tx: Any, domain: str | None = None) -> list[str]:
+        result = tx.run(
+            """
+            MATCH (record:MemoryRecord)
+            WHERE ($domain IS NULL OR record.domain = $domain OR record.profile = $domain)
+            RETURN record.record_id AS record_id
+            """,
+            domain=domain,
+        )
+        return [row.get("record_id") for row in result]
+
+    @staticmethod
+    def _delete_record_projection(tx: Any, record_id: str) -> None:
+        tx.run(
+            """
+            MATCH (record:MemoryRecord {record_id: $record_id})
+            OPTIONAL MATCH (record)-[projection:PROJECTS_ENTITY]->()
+            DELETE projection
+            WITH record
+            OPTIONAL MATCH ()-[relation:MEMORY_RELATION {record_id: $record_id}]->()
+            DELETE relation
+            WITH record
+            DETACH DELETE record
+            """,
+            record_id=record_id,
+        )
+
+    @staticmethod
+    def _prune_orphan_entities(tx: Any) -> None:
+        tx.run(
+            """
+            MATCH (entity:MemoryEntity)
+            WHERE NOT EXISTS { MATCH (:MemoryRecord)-[:PROJECTS_ENTITY]->(entity) }
+              AND NOT EXISTS { MATCH (entity)-[:MEMORY_RELATION]-() }
+            DELETE entity
+            """
+        )
 
 
 def get_memory_document_store(profile: dict[str, Any]) -> MongoMemoryDocumentStore:
@@ -423,11 +527,15 @@ def _graph_node_payload(node: dict[str, Any]) -> dict[str, Any] | None:
     node_key = str(node.get("node_key") or "")
     if not node_type or not node_key:
         return None
+    metadata = dict(node.get("metadata") or {})
     return {
         "node_type": node_type,
         "node_key": node_key,
         "name": str(node.get("name") or node_key),
-        "metadata_json": _json_safe_json(node.get("metadata") or {}),
+        "raw_key": str(node.get("raw_key") or metadata.get("raw_key") or node_key),
+        "domain": str(metadata.get("domain") or metadata.get("profile") or ""),
+        "profile": str(metadata.get("profile") or metadata.get("domain") or ""),
+        "metadata_json": _json_safe_json(metadata),
     }
 
 
@@ -439,13 +547,18 @@ def _graph_edge_payload(edge: dict[str, Any]) -> dict[str, Any] | None:
     target_key = str(edge.get("target_key") or "")
     if not all((edge_type, source_type, source_key, target_type, target_key)):
         return None
+    metadata = dict(edge.get("metadata") or {})
     return {
         "edge_type": edge_type,
         "source_type": source_type,
         "source_key": source_key,
         "target_type": target_type,
         "target_key": target_key,
-        "metadata_json": _json_safe_json(edge.get("metadata") or {}),
+        "source_raw_key": str(edge.get("source_raw_key") or metadata.get("source_raw_key") or source_key),
+        "target_raw_key": str(edge.get("target_raw_key") or metadata.get("target_raw_key") or target_key),
+        "domain": str(metadata.get("domain") or metadata.get("profile") or ""),
+        "profile": str(metadata.get("profile") or metadata.get("domain") or ""),
+        "metadata_json": _json_safe_json(metadata),
     }
 
 

@@ -58,7 +58,7 @@ memory:
 
 # ── LLM Model Selection ────────────────────────────────────────────────────────
 llm:
-  default_model: claude-opus-4-6
+  default_model: claude-sonnet-4-6
   step_overrides:
     research: claude-sonnet-4-6     # faster for scoring/summarizing many papers
     refine: claude-sonnet-4-6

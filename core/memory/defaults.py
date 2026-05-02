@@ -820,11 +820,12 @@ def default_memory_record_to_artifact(record: MemoryRecord, *, source_name: str,
 def default_memory_projection(record: MemoryRecord) -> dict[str, Any]:
     """Build default vector and graph projections for a canonical memory record."""
     metadata = dict(record.get("metadata") or {})
+    domain = str(record.get("domain") or metadata.get("profile") or "")
     return {
         "embedding_text": _embedding_text(record),
         "vector_metadata": {
             "record_id": record.get("record_id", ""),
-            "domain": record.get("domain", ""),
+            "domain": domain,
             "memory_kind": record.get("kind", ""),
             "object_type": record.get("object_type", ""),
             "object_key": record.get("object_key", ""),
@@ -838,9 +839,14 @@ def default_memory_projection(record: MemoryRecord) -> dict[str, Any]:
         "graph_nodes": [
             {
                 "node_type": entity.get("entity_type", ""),
-                "node_key": entity.get("key", ""),
-                "name": entity.get("name", ""),
-                "metadata": entity.get("metadata") or {},
+                "node_key": _namespaced_graph_key(domain, entity.get("entity_type", ""), entity.get("key", "")),
+                "raw_key": str(entity.get("key", "")),
+                "name": _prefixed_graph_name(domain, entity.get("name", "") or entity.get("key", "")),
+                "metadata": {
+                    "domain": domain,
+                    "profile": domain,
+                    **dict(entity.get("metadata") or {}),
+                },
             }
             for entity in (record.get("entities") or [])
         ],
@@ -848,10 +854,16 @@ def default_memory_projection(record: MemoryRecord) -> dict[str, Any]:
             {
                 "edge_type": relation.get("relation_type", ""),
                 "source_type": relation.get("source_type", ""),
-                "source_key": relation.get("source_key", ""),
+                "source_key": _namespaced_graph_key(domain, relation.get("source_type", ""), relation.get("source_key", "")),
                 "target_type": relation.get("target_type", ""),
-                "target_key": relation.get("target_key", ""),
-                "metadata": relation.get("metadata") or {},
+                "target_key": _namespaced_graph_key(domain, relation.get("target_type", ""), relation.get("target_key", "")),
+                "source_raw_key": str(relation.get("source_key", "")),
+                "target_raw_key": str(relation.get("target_key", "")),
+                "metadata": {
+                    "domain": domain,
+                    "profile": domain,
+                    **dict(relation.get("metadata") or {}),
+                },
             }
             for relation in (record.get("relations") or [])
         ],
@@ -1744,3 +1756,28 @@ def _blob_refs_from_metadata_targets(
             ref["content_type"] = content_type
         refs.append(ref)
     return refs
+
+
+def _namespaced_graph_key(domain: str, entity_type: Any, key: Any) -> str:
+    domain_text = str(domain or "").strip()
+    entity_type_text = str(entity_type or "").strip()
+    key_text = str(key or "").strip()
+    if not key_text:
+        return ""
+    if domain_text and entity_type_text:
+        return f"{domain_text}:{entity_type_text}:{key_text}"
+    if domain_text:
+        return f"{domain_text}:{key_text}"
+    return key_text
+
+
+def _prefixed_graph_name(domain: str, name: Any) -> str:
+    name_text = str(name or "").strip()
+    domain_text = str(domain or "").strip()
+    if not name_text:
+        return ""
+    if not domain_text:
+        return name_text
+    if name_text.startswith(f"{domain_text}:"):
+        return name_text
+    return f"{domain_text}:{name_text}"

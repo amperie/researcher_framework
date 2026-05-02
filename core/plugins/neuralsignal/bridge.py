@@ -12,8 +12,8 @@ import sys
 from pathlib import Path
 
 _TASKS = {
-    "create_dataset": "plugins.neuralsignal.tasks.create_dataset",
-    "create_s1_model": "plugins.neuralsignal.tasks.create_s1_model",
+    "create_dataset": "core.plugins.neuralsignal.tasks.create_dataset",
+    "create_s1_model": "core.plugins.neuralsignal.tasks.create_s1_model",
 }
 
 
@@ -39,4 +39,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

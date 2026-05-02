@@ -36,15 +36,25 @@ from core.memory import (
 )
 from core.plugins.base import ResearchAdapter
 from core.plugins.job_runner import TERMINAL_STATUSES, get_runner
-from core.utils.logger import get_logger
+from core.utils.logger import get_logger, setup_plugin_file_logging
 
 log = get_logger(__name__)
 
 _BRIDGE_SCRIPT = Path(__file__).parent / "bridge.py"
 _TASK_RUNNER = Path(__file__).resolve().parents[1] / "task_runner.py"
-_CREATE_DATASET_TASK = "plugins.neuralsignal.tasks.create_dataset"
-_CREATE_S1_MODEL_TASK = "plugins.neuralsignal.tasks.create_s1_model"
-_RUN_PROPOSAL_BRANCH_TASK = "plugins.neuralsignal.tasks.run_proposal_branch"
+_CREATE_DATASET_TASK = "core.plugins.neuralsignal.tasks.create_dataset"
+_CREATE_S1_MODEL_TASK = "core.plugins.neuralsignal.tasks.create_s1_model"
+_RUN_PROPOSAL_BRANCH_TASK = "core.plugins.neuralsignal.tasks.run_proposal_branch"
+_PLUGIN_NAME = "neuralsignal"
+_PLUGIN_LOGGER_PREFIXES = [
+    "core.plugins.neuralsignal",
+    "core.plugins.task_runner",
+    "core.plugins.job_runner",
+]
+
+
+def _ensure_plugin_logging() -> None:
+    setup_plugin_file_logging(_PLUGIN_NAME, logger_prefixes=_PLUGIN_LOGGER_PREFIXES)
 
 
 class NeuralSignalPlugin(ResearchAdapter):
@@ -63,6 +73,7 @@ class NeuralSignalPlugin(ResearchAdapter):
 
     def validate_environment(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Return cheap diagnostics for research context and troubleshooting."""
+        _ensure_plugin_logging()
         cfg = get_config()
         ns_src = Path(cfg.neuralsignal_src_path).resolve()
         return {
@@ -81,6 +92,7 @@ class NeuralSignalPlugin(ResearchAdapter):
 
     def build_context(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Expose NeuralSignal constraints to research/ideation tools."""
+        _ensure_plugin_logging()
         return {
             "datasets": profile.get("datasets") or [],
             "base_classes": profile.get("base_classes") or [],
@@ -96,6 +108,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         executed in the NeuralSignal subprocess, and normalized into dataset
         artifacts that downstream graph nodes can consume.
         """
+        _ensure_plugin_logging()
         proposals = state.get("proposals") or []
         implementations = state.get("implementations") or []
         impl_by_name = _implementations_by_proposal(implementations)
@@ -221,6 +234,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         execute it in the NeuralSignal subprocess, and normalize metrics,
         feature importance, and model metadata for generic evaluation/storage.
         """
+        _ensure_plugin_logging()
         artifacts = state.get("experiment_artifacts") or []
         errors = list(state.get("errors") or [])
         results: list[dict[str, Any]] = []
@@ -348,6 +362,7 @@ class NeuralSignalPlugin(ResearchAdapter):
 
     def submit_experiment_jobs(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Submit proposal-branch NeuralSignal jobs and return immediately."""
+        _ensure_plugin_logging()
         jobs = list(state.get("experiment_jobs") or [])
         errors = list(state.get("errors") or [])
         runner = get_runner(_execution_cfg(profile).get("runner", "local_process"))
@@ -394,6 +409,7 @@ class NeuralSignalPlugin(ResearchAdapter):
 
     def check_experiment_jobs(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Poll NeuralSignal jobs and collect completed proposal-branch outputs."""
+        _ensure_plugin_logging()
         jobs = list(state.get("experiment_jobs") or [])
         artifacts = list(state.get("experiment_artifacts") or [])
         datasets = list(state.get("datasets") or [])
@@ -1008,6 +1024,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         return {
             "job_id": job_id,
             "job_dir": str(jobs_dir / job_id),
+            "plugin_name": profile.get("name", _PLUGIN_NAME),
             "runner": _execution_cfg(profile).get("runner", "local_process"),
             "stage": stage,
             "proposal_name": proposal_name,
@@ -1017,7 +1034,11 @@ class NeuralSignalPlugin(ResearchAdapter):
             "payload": payload,
             "python": cfg.neuralsignal_python,
             "cwd": cwd or str(_neuralsignal_workdir(cfg)),
-            "env": {"PYTHONPATH": os.pathsep.join(pythonpath_entries)},
+            "env": {
+                "PYTHONPATH": os.pathsep.join(pythonpath_entries),
+                "RESEARCH_PLUGIN_LOG": profile.get("name", _PLUGIN_NAME),
+                "RESEARCH_PLUGIN_LOGGERS": ",".join(_PLUGIN_LOGGER_PREFIXES),
+            },
         }
 
     def _dataset_artifacts_from_job(self, job: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1085,6 +1106,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         cwd: str | None = None,
     ) -> dict[str, Any]:
         """Run a dotted task path in a NeuralSignal-capable subprocess."""
+        _ensure_plugin_logging()
         cfg = get_config()
         timeout = timeout or cfg.experiment_timeout_seconds
         env = os.environ.copy()
@@ -1094,8 +1116,10 @@ class NeuralSignalPlugin(ResearchAdapter):
         if existing:
             pythonpath_entries.append(existing)
         env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
+        env["RESEARCH_PLUGIN_LOG"] = _PLUGIN_NAME
+        env["RESEARCH_PLUGIN_LOGGERS"] = ",".join(_PLUGIN_LOGGER_PREFIXES)
 
-        cmd = cfg.neuralsignal_python.split() + ["-u", "-m", "plugins.task_runner", task_path]
+        cmd = cfg.neuralsignal_python.split() + ["-u", "-m", "core.plugins.task_runner", task_path]
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,

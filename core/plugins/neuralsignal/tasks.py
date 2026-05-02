@@ -6,14 +6,16 @@ imports here instead of in ``adapter.py``.
 from __future__ import annotations
 
 import importlib.util
-import logging
+import os
 import tempfile
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
-log = logging.getLogger(__name__)
+from core.utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 def create_dataset(payload: dict[str, Any]) -> dict[str, Any]:
@@ -91,7 +93,13 @@ def run_proposal_branch(payload: dict[str, Any]) -> dict[str, Any]:
     model_cfg = dict(payload.get("model_config_base") or {})
     model_cfg["dataset_path"] = dataset_path
     model_cfg["file_out"] = Path(dataset_path).name
-    model_result = create_s1_model(model_cfg)
+    model_cwd = str(Path(dataset_path).resolve().parent)
+    previous_cwd = os.getcwd()
+    try:
+        os.chdir(model_cwd)
+        model_result = create_s1_model(model_cfg)
+    finally:
+        os.chdir(previous_cwd)
     return {
         "proposal_name": payload.get("proposal_name", "unknown"),
         "experiment_id": payload.get("experiment_id", ""),

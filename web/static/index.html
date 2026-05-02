@@ -107,6 +107,35 @@
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 12px;
     }
+    .accordion-stack {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .accordion {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .accordion summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 12px 14px;
+      font-weight: 700;
+      background: linear-gradient(180deg, rgba(11, 110, 79, 0.06), rgba(11, 110, 79, 0.02));
+    }
+    .accordion summary::-webkit-details-marker {
+      display: none;
+    }
+    .accordion pre {
+      margin: 0;
+      border: 0;
+      border-top: 1px solid var(--line);
+      border-radius: 0;
+      background: #fcfaf7;
+      max-height: 520px;
+    }
     .meta-item {
       border: 1px solid var(--line);
       border-radius: 12px;
@@ -170,6 +199,10 @@
       padding: 12px;
       background: #fff;
     }
+    .danger {
+      background: var(--accent-2);
+      border-color: var(--accent-2);
+    }
     .artifact a, .record a { color: var(--accent); }
     .graph {
       display: grid;
@@ -207,6 +240,16 @@
           <button id="refreshRuns">Refresh Runs</button>
           <button id="loadDiagnostics" class="secondary">Show Diagnostics</button>
         </div>
+        <div class="panel stack">
+          <div>
+            <h3>Orphan Cleanup</h3>
+            <p class="muted">Dry-run and remove Chroma, Neo4j, and artifact storage entries that are not rooted in Mongo memory records.</p>
+          </div>
+          <button id="scanOrphans">Scan Orphans</button>
+          <button id="deleteOrphans" class="danger" disabled>Delete Orphans</button>
+          <div id="orphanSummary" class="muted">No scan has been run.</div>
+          <pre id="orphanJson"></pre>
+        </div>
         <div id="runList" class="run-list"></div>
         <div id="diagnosticsPanel" class="panel" style="display:none">
           <h3>Diagnostics</h3>
@@ -224,6 +267,7 @@
           </div>
           <div id="runChips" class="chips"></div>
           <div id="summaryGrid" class="meta-grid"></div>
+          <div id="textPanels" class="accordion-stack"></div>
         </section>
 
         <section class="panel">
@@ -306,6 +350,11 @@
     const runViewEl = document.getElementById("runView");
     const diagnosticsPanelEl = document.getElementById("diagnosticsPanel");
     const diagnosticsJsonEl = document.getElementById("diagnosticsJson");
+    const orphanSummaryEl = document.getElementById("orphanSummary");
+    const orphanJsonEl = document.getElementById("orphanJson");
+    const deleteOrphansEl = document.getElementById("deleteOrphans");
+
+    state.orphanScan = null;
 
     async function loadRuns() {
       const response = await fetch("/api/runs?limit=200");
@@ -319,6 +368,36 @@
       const data = await response.json();
       diagnosticsJsonEl.textContent = JSON.stringify(data, null, 2);
       diagnosticsPanelEl.style.display = "";
+    }
+
+    async function scanOrphans() {
+      orphanSummaryEl.textContent = "Scanning backend projections and artifact storage...";
+      orphanJsonEl.textContent = "";
+      deleteOrphansEl.disabled = true;
+      const response = await fetch("/api/admin/orphans/scan", { method: "POST" });
+      const data = await response.json();
+      state.orphanScan = data;
+      orphanJsonEl.textContent = JSON.stringify(data, null, 2);
+      const totals = data.totals || {};
+      orphanSummaryEl.textContent = `Found ${totals.orphan_chroma_records || 0} Chroma, ${totals.orphan_neo4j_records || 0} Neo4j, ${totals.orphan_artifact_metadata_records || 0} artifact metadata, and ${totals.orphan_artifact_storage_objects || 0} artifact storage orphans across ${(data.profiles || []).length} profile(s).`;
+      deleteOrphansEl.disabled = !hasOrphans(totals);
+    }
+
+    async function deleteOrphans() {
+      orphanSummaryEl.textContent = "Deleting orphaned backend state...";
+      deleteOrphansEl.disabled = true;
+      const response = await fetch("/api/admin/orphans/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      const data = await response.json();
+      orphanJsonEl.textContent = JSON.stringify(data, null, 2);
+      const deleted = data.deleted || {};
+      const errors = data.errors || [];
+      orphanSummaryEl.textContent = `Deleted ${deleted.chroma_records || 0} Chroma, ${deleted.neo4j_records || 0} Neo4j, ${deleted.artifact_metadata_records || 0} artifact metadata, and ${deleted.artifact_storage_objects || 0} artifact storage orphans.${errors.length ? ` Errors: ${errors.length}.` : ""}`;
+      state.orphanScan = null;
+      await loadRuns();
     }
 
     function renderRunList() {
@@ -381,11 +460,24 @@
       ].join("");
 
       document.getElementById("summaryGrid").innerHTML = [
-        metaItem("MLflow Run", summary.mlflow_run_id || "n/a"),
+        metaItem(
+          "MLflow Run",
+          summary.mlflow_ui_url
+            ? `<a href="${escapeAttr(summary.mlflow_ui_url)}" target="_blank" rel="noreferrer">${escapeHtml(summary.mlflow_run_id || "Open Run")}</a>`
+            : (summary.mlflow_run_id || "n/a"),
+        ),
         metaItem("Experiment ID", summary.experiment_id || "n/a"),
         metaItem("Hypothesis Supported", String(summary.hypothesis_supported)),
         metaItem("Created At", summary.created_at || "n/a"),
       ].join("");
+      document.getElementById("textPanels").innerHTML = (state.detail.run.text_panels || []).length
+        ? state.detail.run.text_panels.map((panel) => `
+            <details class="accordion">
+              <summary>${escapeHtml(panel.title || "Details")}</summary>
+              <pre>${escapeHtml(panel.body || "")}</pre>
+            </details>
+          `).join("")
+        : "";
 
       const related = state.detail.backend.mongo.related_records || [];
       document.getElementById("relatedRecords").innerHTML = related.length
@@ -506,6 +598,15 @@
       return `${run.primary_metric_name}=${run.primary_metric_value ?? "n/a"}`;
     }
 
+    function hasOrphans(totals) {
+      return [
+        totals.orphan_chroma_records,
+        totals.orphan_neo4j_records,
+        totals.orphan_artifact_metadata_records,
+        totals.orphan_artifact_storage_objects,
+      ].some((value) => Number(value || 0) > 0);
+    }
+
     function escapeHtml(value) {
       return String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -530,6 +631,8 @@
 
     document.getElementById("refreshRuns").addEventListener("click", loadRuns);
     document.getElementById("loadDiagnostics").addEventListener("click", loadDiagnostics);
+    document.getElementById("scanOrphans").addEventListener("click", scanOrphans);
+    deleteOrphansEl.addEventListener("click", deleteOrphans);
     profileFilterEl.addEventListener("input", renderRunList);
     searchFilterEl.addEventListener("input", renderRunList);
     loadRuns();

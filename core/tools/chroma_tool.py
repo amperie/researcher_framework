@@ -68,6 +68,19 @@ class ChromaStore:
             return None
         return {"id": raw["ids"][0], "document": raw["documents"][0], "metadata": raw["metadatas"][0]}
 
+    def list_ids(self, *, domain: str | None = None) -> list[str]:
+        col = self._get_collection()
+        if domain:
+            raw = col.get(where={"domain": str(domain)})
+        else:
+            raw = col.get()
+        return [str(item) for item in raw.get("ids", []) if item]
+
+    def delete(self, record_id: str) -> None:
+        col = self._get_collection()
+        col.delete(ids=[record_id])
+        log.debug("ChromaStore.delete | %r", record_id)
+
     def list_recent(self, n: int) -> list[dict]:
         col = self._get_collection()
         raw = col.get()

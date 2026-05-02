@@ -15,18 +15,14 @@ from __future__ import annotations
 
 import importlib
 import json
-import logging
+import os
 import sys
 from collections.abc import Callable
 from typing import Any
 
-logging.basicConfig(
-    level=logging.INFO,
-    stream=sys.stderr,
-    format="%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger(__name__)
+from core.utils.logger import get_logger, setup_logging, setup_plugin_file_logging
+
+log = get_logger("core.plugins.task_runner")
 
 
 def load_callable(dotted_path: str) -> Callable[[dict[str, Any]], Any]:
@@ -43,6 +39,16 @@ def load_callable(dotted_path: str) -> Callable[[dict[str, Any]], Any]:
 
 
 def main() -> None:
+    setup_logging()
+    plugin_name = str(os.environ.get("RESEARCH_PLUGIN_LOG") or "").strip()
+    plugin_loggers = [
+        item.strip()
+        for item in str(os.environ.get("RESEARCH_PLUGIN_LOGGERS") or "").split(",")
+        if item.strip()
+    ]
+    if plugin_name and plugin_loggers:
+        setup_plugin_file_logging(plugin_name, logger_prefixes=plugin_loggers)
+
     if len(sys.argv) != 2:
         print(json.dumps({"error": "Usage: task_runner.py <package.module.function>"}))
         sys.exit(1)
@@ -69,4 +75,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

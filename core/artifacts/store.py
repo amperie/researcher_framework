@@ -27,6 +27,10 @@ class ArtifactBackend(Protocol):
 
     def put_bytes(self, data: bytes, key: str, content_type: str | None = None) -> str: ...
 
+    def list_keys(self) -> list[str]: ...
+
+    def delete(self, key: str) -> None: ...
+
 
 class ArtifactMetadataStore(Protocol):
     """Metadata registry for stored artifacts."""
@@ -36,6 +40,8 @@ class ArtifactMetadataStore(Protocol):
     def get(self, artifact_id: str) -> dict[str, Any] | None: ...
 
     def find(self, filters: dict[str, Any], limit: int = 50) -> list[dict[str, Any]]: ...
+
+    def delete(self, artifact_id: str) -> None: ...
 
 
 @dataclass
@@ -64,6 +70,24 @@ class FilesystemArtifactBackend:
             content_type,
         )
         return str(dest.resolve())
+
+    def list_keys(self) -> list[str]:
+        if not self.root.exists():
+            return []
+        return [str(path.relative_to(self.root)).replace("\\", "/") for path in self.root.rglob("*") if path.is_file()]
+
+    def delete(self, key: str) -> None:
+        dest = self.root / key
+        if not dest.exists():
+            return
+        dest.unlink()
+        parent = dest.parent
+        while parent != self.root and parent.exists():
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
 
 
 @dataclass
@@ -124,6 +148,29 @@ class S3ArtifactBackend:
         )
         return self._uri(object_key)
 
+    def list_keys(self) -> list[str]:
+        continuation_token: str | None = None
+        keys: list[str] = []
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": self.bucket}
+            if continuation_token:
+                kwargs["ContinuationToken"] = continuation_token
+            response = self.client.list_objects_v2(**kwargs)
+            for item in response.get("Contents", []) or []:
+                key = str(item.get("Key") or "")
+                if key:
+                    keys.append(key)
+            if not response.get("IsTruncated"):
+                break
+            continuation_token = str(response.get("NextContinuationToken") or "")
+            if not continuation_token:
+                break
+        return keys
+
+    def delete(self, key: str) -> None:
+        self.client.delete_object(Bucket=self.bucket, Key=key)
+        log.debug("artifacts.store | S3 deleted object bucket=%r key=%r", self.bucket, key)
+
     def _object_key(self, key: str) -> str:
         cleaned = key.lstrip("/").replace("\\", "/")
         if self.prefix:
@@ -178,6 +225,10 @@ class MongoArtifactMetadataStore:
         for doc in docs:
             doc.pop("_id", None)
         return docs
+
+    def delete(self, artifact_id: str) -> None:
+        self.collection.delete_one({"artifact_id": artifact_id})
+        log.info("artifacts.store | Metadata deleted artifact_id=%r", artifact_id)
 
 
 @dataclass

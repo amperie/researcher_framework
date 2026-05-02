@@ -8,6 +8,7 @@ from mlflow.tracking import MlflowClient
 
 from configs.config import get_config
 from core.artifacts.store import MongoArtifactMetadataStore
+from core.maintenance import delete_profile_orphans, scan_profiles
 from core.memory import MemoryService
 from core.memory.backends import get_memory_document_store
 from core.memory.backends import get_memory_graph_store, get_memory_vector_store
@@ -49,6 +50,7 @@ def list_run_summaries(*, profile_name: str | None = None, limit: int = 100) -> 
             continue
         for record in records:
             metadata = dict(record.get("metadata") or {})
+            mlflow_bundle = _mlflow_bundle(ctx.profile, metadata)
             runs.append({
                 "profile_name": ctx.name,
                 "record_id": str(record.get("record_id") or ""),
@@ -60,6 +62,7 @@ def list_run_summaries(*, profile_name: str | None = None, limit: int = 100) -> 
                 "detector": str(metadata.get("detector") or ""),
                 "assessment": str(metadata.get("assessment") or ""),
                 "mlflow_run_id": str(metadata.get("mlflow_run_id") or ""),
+                "mlflow_ui_url": str(mlflow_bundle.get("ui_url") or ""),
                 "primary_metric_name": _primary_metric_name(ctx.profile, metadata),
                 "primary_metric_value": metadata.get(_primary_metric_name(ctx.profile, metadata), None),
             })
@@ -112,6 +115,14 @@ def diagnostics() -> dict[str, Any]:
     }
 
 
+def scan_orphans(*, profile_name: str | None = None) -> dict[str, Any]:
+    return scan_profiles(_load_profiles(profile_name))
+
+
+def delete_orphans(*, profile_name: str | None = None) -> dict[str, Any]:
+    return delete_profile_orphans(_load_profiles(profile_name))
+
+
 def get_run_bundle(profile_name: str, record_id: str) -> dict[str, Any]:
     ctx = _load_context(profile_name)
     record = ctx.memory_service.document_store.get(record_id)
@@ -142,9 +153,11 @@ def get_run_bundle(profile_name: str, record_id: str) -> dict[str, Any]:
                 "hypothesis_supported": metadata.get("hypothesis_supported"),
                 "created_at": str(record.get("created_at") or ""),
                 "mlflow_run_id": str(metadata.get("mlflow_run_id") or ""),
+                "mlflow_ui_url": str(mlflow_bundle.get("ui_url") or ""),
                 "primary_metric_name": _primary_metric_name(ctx.profile, metadata),
                 "primary_metric_value": metadata.get(_primary_metric_name(ctx.profile, metadata), None),
             },
+            "text_panels": _run_text_panels(record, related_records),
         },
         "backend": {
             "mongo": {
@@ -168,6 +181,15 @@ def _load_context(profile_name: str) -> ProfileContext:
         profile=profile,
         memory_service=MemoryService.for_profile(profile),
     )
+
+
+def _load_profiles(profile_name: str | None = None) -> dict[str, dict[str, Any]]:
+    profiles: dict[str, dict[str, Any]] = {}
+    for name in list_profiles():
+        if profile_name and name != profile_name:
+            continue
+        profiles[name] = load_profile(name)
+    return profiles
 
 
 def _primary_metric_name(profile: dict[str, Any], metadata: dict[str, Any]) -> str:
@@ -343,6 +365,178 @@ def _mlflow_bundle(profile: dict[str, Any], metadata: dict[str, Any]) -> dict[st
             "ui_url": "",
             "error": str(exc),
         }
+
+
+def _run_text_panels(run_record: dict[str, Any], related_records: list[dict[str, Any]]) -> list[dict[str, str]]:
+    metadata = dict(run_record.get("metadata") or {})
+    panels: list[dict[str, str]] = []
+
+    def add_panel(title: str, body: str) -> None:
+        text = str(body or "").strip()
+        if not text:
+            return
+        if any(item["title"] == title for item in panels):
+            return
+        panels.append({"title": title, "body": text})
+
+    add_panel("Direction", str(metadata.get("research_direction") or ""))
+
+    research_record = _find_related_record(related_records, "research_summary")
+    add_panel(
+        "Research Summary",
+        _record_content_text(research_record, content_keys=["research_summary"]) or str((research_record or {}).get("summary") or ""),
+    )
+
+    idea_record = _find_related_record(related_records, "idea")
+    add_panel("Idea", _record_text(idea_record))
+
+    refined_idea_record = _find_related_record(related_records, "refined_idea")
+    add_panel("Refined Idea", _record_text(refined_idea_record))
+
+    proposal_record = _find_related_record(related_records, "proposal")
+    proposal_text = _record_text(proposal_record)
+    if not proposal_text:
+        proposal = metadata.get("proposal") if isinstance(metadata.get("proposal"), dict) else {}
+        proposal_text = _mapping_text(
+            proposal,
+            [
+                ("name", "Name"),
+                ("description", "Description"),
+                ("dataset", "Dataset"),
+                ("detector", "Detector"),
+                ("hypothesis", "Hypothesis"),
+                ("rationale", "Rationale"),
+            ],
+        )
+    add_panel("Proposal", proposal_text)
+
+    add_panel("Run Goal", _run_goal_text(run_record))
+
+    implementation_plan_record = _find_related_record(related_records, "implementation_plan")
+    add_panel("Implementation Plan", _record_text(implementation_plan_record))
+
+    implementation_record = _find_related_record(related_records, "implementation")
+    validation_record = _find_related_record(related_records, "validation_result")
+
+    validated_code_path = _record_content_value(validation_record, "script_path")
+    implementation_code_path = _record_content_value(implementation_record, "script_path")
+    validated_code = _read_text_file(validated_code_path)
+    implementation_code = _read_text_file(implementation_code_path)
+
+    if validated_code:
+        add_panel("Validated Code", validated_code)
+    elif implementation_code:
+        add_panel("Code", implementation_code)
+
+    validation_test_path = _record_content_value(validation_record, "test_file")
+    add_panel("Validation Test", _read_text_file(validation_test_path))
+    add_panel("Validation Output", _record_content_value(validation_record, "test_output"))
+
+    evaluation_record = _find_related_record(related_records, "evaluation_summary")
+    add_panel("Evaluation Summary", _record_text(evaluation_record))
+    return panels
+
+
+def _find_related_record(records: list[dict[str, Any]], kind: str) -> dict[str, Any] | None:
+    for record in records:
+        if str(record.get("kind") or record.get("object_type") or "") == kind:
+            return record
+    return None
+
+
+def _record_text(record: dict[str, Any] | None) -> str:
+    if not record:
+        return ""
+    content = record.get("content")
+    if isinstance(content, dict):
+        preferred = _mapping_text(
+            content,
+            [
+                ("research_summary", "Summary"),
+                ("description", "Description"),
+                ("hypothesis", "Hypothesis"),
+                ("rationale", "Rationale"),
+                ("dataset", "Dataset"),
+                ("detector", "Detector"),
+                ("base_class", "Base Class"),
+                ("main_method", "Main Method"),
+                ("class_name", "Class"),
+                ("proposal_name", "Proposal"),
+                ("passed", "Passed"),
+                ("attempts", "Attempts"),
+                ("test_source", "Test Source"),
+                ("test_output", "Test Output"),
+            ],
+        )
+        if preferred:
+            return preferred
+    return str(record.get("summary") or "")
+
+
+def _record_content_text(record: dict[str, Any] | None, *, content_keys: list[str]) -> str:
+    if not record:
+        return ""
+    content = record.get("content")
+    if not isinstance(content, dict):
+        return ""
+    for key in content_keys:
+        value = content.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _record_content_value(record: dict[str, Any] | None, key: str) -> str:
+    if not record:
+        return ""
+    content = record.get("content")
+    if not isinstance(content, dict):
+        return ""
+    value = content.get(key)
+    return str(value or "")
+
+
+def _mapping_text(value: dict[str, Any], fields: list[tuple[str, str]]) -> str:
+    lines: list[str] = []
+    for key, label in fields:
+        item = value.get(key)
+        if item is None or item == "":
+            continue
+        lines.append(f"{label}: {item}")
+    return "\n".join(lines).strip()
+
+
+def _run_goal_text(run_record: dict[str, Any]) -> str:
+    metadata = dict(run_record.get("metadata") or {})
+    proposal = metadata.get("proposal") if isinstance(metadata.get("proposal"), dict) else {}
+    parts = [
+        f"Direction: {metadata.get('research_direction')}" if metadata.get("research_direction") else "",
+        f"Proposal: {metadata.get('proposal_name')}" if metadata.get("proposal_name") else "",
+        f"Dataset: {proposal.get('dataset') or metadata.get('dataset')}" if (proposal.get("dataset") or metadata.get("dataset")) else "",
+        f"Detector: {proposal.get('detector') or metadata.get('detector')}" if (proposal.get("detector") or metadata.get("detector")) else "",
+        f"What it is testing: {proposal.get('description')}" if proposal.get("description") else "",
+        f"Hypothesis: {proposal.get('hypothesis')}" if proposal.get("hypothesis") else "",
+        f"Rationale: {proposal.get('rationale')}" if proposal.get("rationale") else "",
+        f"Assessment: {metadata.get('assessment')}" if metadata.get("assessment") else "",
+        f"Hypothesis supported: {metadata.get('hypothesis_supported')}" if metadata.get("hypothesis_supported") is not None else "",
+    ]
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _read_text_file(path_value: str, *, max_chars: int = 50000) -> str:
+    path_str = str(path_value or "").strip()
+    if not path_str:
+        return ""
+    try:
+        path = Path(path_str)
+        if not path.exists() or not path.is_file():
+            return ""
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}\n\n... [truncated]"
 
 
 def _dedupe_dicts(items: list[dict[str, Any]], keys: tuple[str, ...]) -> list[dict[str, Any]]:

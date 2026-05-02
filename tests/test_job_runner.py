@@ -19,6 +19,7 @@ def test_run_job_executes_task_and_writes_result(tmp_path):
         json.dumps({
             "job_id": "job1",
             "job_dir": str(job_dir),
+            "plugin_name": "neuralsignal",
             "task_path": "tests.test_job_runner.echo_task",
             "runner": "local_process",
             "stage": "unit",
@@ -27,12 +28,14 @@ def test_run_job_executes_task_and_writes_result(tmp_path):
     )
     (job_dir / "payload.json").write_text(json.dumps({"value": 42}), encoding="utf-8")
 
-    run_job(str(job_dir))
+    with patch("core.plugins.job_runner.setup_plugin_file_logging") as setup_plugin_logging:
+        run_job(str(job_dir))
 
     status = json.loads((job_dir / "status.json").read_text(encoding="utf-8"))
     result = json.loads((job_dir / "result.json").read_text(encoding="utf-8"))
     assert status["status"] == "succeeded"
     assert result == {"echo": 42}
+    setup_plugin_logging.assert_called_once()
 
 
 def test_local_process_submit_writes_job_files_and_launches_module(tmp_path):
@@ -40,11 +43,16 @@ def test_local_process_submit_writes_job_files_and_launches_module(tmp_path):
     spec = {
         "job_id": "job1",
         "job_dir": str(tmp_path / "job1"),
+        "plugin_name": "neuralsignal",
         "task_path": "tests.test_job_runner.echo_task",
         "payload": {"value": 1},
         "python": "python",
         "cwd": str(tmp_path),
-        "env": {"PYTHONPATH": "x"},
+        "env": {
+            "PYTHONPATH": "x",
+            "RESEARCH_PLUGIN_LOG": "neuralsignal",
+            "RESEARCH_PLUGIN_LOGGERS": "core.plugins.neuralsignal,core.plugins.task_runner,core.plugins.job_runner",
+        },
         "stage": "unit",
         "proposal_name": "p1",
     }
@@ -61,4 +69,5 @@ def test_local_process_submit_writes_job_files_and_launches_module(tmp_path):
     assert cmd[-1] == str(job_dir.resolve())
     assert popen.call_args.kwargs["cwd"] == str(tmp_path)
     assert popen.call_args.kwargs["env"]["PYTHONPATH"] == "x"
+    assert popen.call_args.kwargs["env"]["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
 

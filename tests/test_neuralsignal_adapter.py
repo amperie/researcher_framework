@@ -895,7 +895,9 @@ def test_call_task_sets_neuralsignal_src_on_pythonpath(tmp_path, monkeypatch):
     assert pythonpath[0] == cfg.neuralsignal_src_path
     assert str((Path(os.getcwd()) / "core").resolve()) in pythonpath
     assert "existing_path" in pythonpath
-    assert popen.call_args.args[0][-3:] == ["-m", "plugins.task_runner", "some.module.task"]
+    assert env["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
+    assert "core.plugins.neuralsignal" in env["RESEARCH_PLUGIN_LOGGERS"]
+    assert popen.call_args.args[0][-3:] == ["-m", "core.plugins.task_runner", "some.module.task"]
     assert popen.call_args.kwargs["cwd"] == str(tmp_path)
 
 
@@ -949,4 +951,7 @@ def test_call_task_supports_package_dir_as_neuralsignal_src_path(tmp_path, monke
     assert str(package_dir.parent) in pythonpath
     assert str(package_dir) in pythonpath
     assert str((Path(os.getcwd()) / "core").resolve()) in pythonpath
-    assert popen.call_args.args[0][-3:] == ["-m", "plugins.task_runner", "some.module.task"]
+    env = popen.call_args.kwargs["env"]
+    assert env["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
+    assert "core.plugins.job_runner" in env["RESEARCH_PLUGIN_LOGGERS"]
+    assert popen.call_args.args[0][-3:] == ["-m", "core.plugins.task_runner", "some.module.task"]
