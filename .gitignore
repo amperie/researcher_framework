@@ -76,6 +76,7 @@ Thumbs.db
 # Application logs
 logs/
 *.log
+mlflow.db
 
 # Secrets and local tool config
 configs/.env

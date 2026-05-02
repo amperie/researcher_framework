@@ -82,6 +82,15 @@ Open `http://127.0.0.1:8090` to inspect aggregated experiment runs across
 Mongo memory records, Chroma projections, Neo4j graph data, MLflow runs, and
 artifact references.
 
+The run inspector summary view includes:
+
+- a direct MLflow run link in the top metadata strip
+- collapsible text panels for the main run narrative, such as research direction,
+  research summary, ideas, refined ideas, proposal, run goal, implementation
+  plan, generated code, validation details, and evaluation summary when those
+  records are available
+- admin controls for scanning and deleting orphaned backend state
+
 ---
 
 ## Running Individual Steps
@@ -421,6 +430,11 @@ To run trading experiments end to end, implement `TradingAdapter.execute_experim
 | `configs/config.yaml` | All runtime settings: backends, timeouts, paths, logging. Secrets via `${ENV_VAR}` |
 | `configs/.env` | Optional local overrides (API keys, URLs). Not committed. |
 | `configs/profiles/*.yaml` | Per-domain research profiles (steps, prompts, datasets, etc.) |
+
+Logging writes the main application stream to `logs/research.log`. Plugin-specific
+adapter and bridge-process logs can also be routed to plugin-named files such as
+`logs/research.neuralsignal.log` to keep subprocess-heavy domains separate from
+the main pipeline log.
 
 ---
 
