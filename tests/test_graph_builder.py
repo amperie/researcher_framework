@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.graph.builder import build_graph, _wrap_node
+from core.graph.builder import build_graph, _wrap_node, pipeline_steps
 from core.graph.nodes import STEP_REGISTRY
 
 
@@ -67,6 +67,21 @@ class TestBuildGraph:
     def test_multi_step_compiles(self):
         compiled = build_graph(self._minimal_profile(["research", "ideate", "refine"]))
         assert compiled is not None
+
+    def test_pipeline_steps_returns_validated_steps(self):
+        steps = pipeline_steps(self._minimal_profile(["research", "ideate", "refine"]))
+        assert steps == ["research", "ideate", "refine"]
+
+    def test_build_graph_can_start_from_later_node(self):
+        compiled = build_graph(
+            self._minimal_profile(["research", "ideate", "refine"]),
+            start_node="ideate",
+        )
+        assert compiled is not None
+
+    def test_build_graph_rejects_unknown_start_node(self):
+        with pytest.raises(ValueError, match="Start node"):
+            build_graph(self._minimal_profile(["research", "ideate"]), start_node="refine")
 
     def test_all_registry_steps_compile(self):
         all_steps = list(STEP_REGISTRY.keys())

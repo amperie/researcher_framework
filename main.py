@@ -14,7 +14,9 @@ from typing import Any
 from uuid import uuid4
 
 from core.handoffs import resolve_next_step_seed, resolve_proposal_seed, resolve_run_handoff_seed
+from core.graph.builder import pipeline_steps
 from core.maintenance.dev_cleanup import run_periodic_dev_cleanup
+from core.pipeline_resume import build_resume_state, ensure_resume_state_for_node
 from core.utils.logger import setup_logging, get_logger
 
 setup_logging()
@@ -53,6 +55,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Explicit persisted next_step record id to launch as the next direction.",
     )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Persisted memory record id to hydrate state from before restarting at a later node.",
+    )
+    parser.add_argument(
+        "--start-node",
+        type=str,
+        default=None,
+        help="Pipeline node to start from, then continue through all remaining nodes.",
+    )
     parser.add_argument("--loop", action="store_true", default=False,
                         help="Auto-loop: use top next_step as the next direction.")
     parser.add_argument(
@@ -63,6 +77,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--list-profiles", action="store_true",
                         help="List available profiles and exit.")
+    parser.add_argument("--list-nodes", action="store_true",
+                        help="List pipeline nodes for the selected profile and exit.")
     return parser.parse_args()
 
 
@@ -143,14 +159,51 @@ def main() -> None:
         print(f"Error loading profile {profile_name!r}: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    if args.list_nodes:
+        print("Pipeline nodes:")
+        for step in pipeline_steps(profile):
+            print(f"  {step}")
+        return
+
     _add_plugin_to_path(profile)
+
+    if args.resume_from and (args.direction or args.source_experiment or args.handoff or args.proposal_seed or args.next_step):
+        print(
+            "Error: --resume-from cannot be used together with --direction, --source-experiment, --handoff, --proposal-seed, or --next-step.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     if args.direction and (args.source_experiment or args.handoff or args.proposal_seed or args.next_step):
         print("Error: --direction cannot be used together with --source-experiment, --handoff, --proposal-seed, or --next-step.", file=sys.stderr)
         sys.exit(1)
 
+    start_node = _resolve_start_node(profile_name, profile, args)
+    profile_steps = pipeline_steps(profile)
+    if not args.resume_from and start_node != profile_steps[0]:
+        print(
+            f"Error: --start-node {start_node!r} requires --resume-from because it is not the pipeline entry node.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     # Resolve direction
-    seed = _resolve_initial_seed(profile, profile_name, args)
+    if args.resume_from:
+        try:
+            seed = build_resume_state(profile, str(args.resume_from or ""))
+            ensure_resume_state_for_node(start_node, seed)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        log.info(
+            "Resolved resume state profile=%r source_record=%r start_node=%r direction=%r",
+            profile_name,
+            args.resume_from,
+            start_node,
+            seed.get("research_direction"),
+        )
+    else:
+        seed = _resolve_initial_seed(profile, profile_name, args)
     direction = str(seed["research_direction"])
 
     if args.loop and args.run_next_steps_once:
@@ -162,7 +215,7 @@ def main() -> None:
     log.info("Starting pipeline — profile=%r, direction=%r mode=%s", profile_name, direction, run_mode)
 
     from core.graph.builder import build_graph
-    graph = build_graph(profile)
+    graph = build_graph(profile, start_node=start_node)
 
     seen_directions: set[str] = set()
     current_direction = direction
@@ -342,6 +395,36 @@ def _print_results(state: dict, profile_name: str) -> None:
             print(f"  - {e}")
 
     print("=" * 72 + "\n")
+
+
+def _resolve_start_node(profile_name: str, profile: dict[str, Any], args: argparse.Namespace) -> str:
+    steps = pipeline_steps(profile)
+    if args.start_node:
+        if args.start_node not in steps:
+            print(
+                f"Error: start node {args.start_node!r} is not in pipeline: {steps}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return str(args.start_node)
+
+    if args.resume_from:
+        print("\nStart node options:")
+        for index, step in enumerate(steps, 1):
+            print(f"  {index}. {step}")
+        choice = input(f"[{profile_name}] Start at node [default {steps[0]}]: ").strip()
+        if not choice:
+            return steps[0]
+        if choice.isdigit():
+            selected = int(choice)
+            if 1 <= selected <= len(steps):
+                return steps[selected - 1]
+        if choice in steps:
+            return choice
+        print(f"Error: invalid start node selection {choice!r}.", file=sys.stderr)
+        sys.exit(1)
+
+    return steps[0]
 
 
 def _resolve_initial_seed(profile: dict[str, Any], profile_name: str, args: argparse.Namespace) -> dict[str, Any]:

@@ -25,7 +25,22 @@ def _wrap_node(fn: Callable, profile: dict) -> Callable:
     return wrapper
 
 
-def build_graph(profile: dict):
+def pipeline_steps(profile: dict) -> list[str]:
+    """Return the validated linear step list for the given profile."""
+    steps: list[str] = (profile.get("pipeline") or {}).get("steps") or []
+    if not steps:
+        raise ValueError(f"Profile {profile.get('name')!r} has no pipeline.steps defined")
+
+    unknown = [s for s in steps if s not in STEP_REGISTRY]
+    if unknown:
+        raise ValueError(
+            f"Unknown step(s) in profile {profile.get('name')!r}: {unknown}. "
+            f"Available: {sorted(STEP_REGISTRY.keys())}"
+        )
+    return steps
+
+
+def build_graph(profile: dict, *, start_node: str | None = None):
     """Build and compile a LangGraph StateGraph from the profile's step list.
 
     Args:
@@ -37,17 +52,13 @@ def build_graph(profile: dict):
     Raises:
         ValueError: If a step name in the profile is not in STEP_REGISTRY.
     """
-    steps: list[str] = (profile.get("pipeline") or {}).get("steps") or []
-    if not steps:
-        raise ValueError(f"Profile {profile.get('name')!r} has no pipeline.steps defined")
-
-    # Validate all step names up front
-    unknown = [s for s in steps if s not in STEP_REGISTRY]
-    if unknown:
-        raise ValueError(
-            f"Unknown step(s) in profile {profile.get('name')!r}: {unknown}. "
-            f"Available: {sorted(STEP_REGISTRY.keys())}"
-        )
+    steps = pipeline_steps(profile)
+    if start_node:
+        if start_node not in steps:
+            raise ValueError(
+                f"Start node {start_node!r} is not in profile {profile.get('name')!r} pipeline: {steps}"
+            )
+        steps = steps[steps.index(start_node):]
 
     log.info("builder | Assembling pipeline for profile=%r — steps=%s", profile.get("name"), steps)
 
