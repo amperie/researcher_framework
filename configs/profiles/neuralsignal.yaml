@@ -30,7 +30,7 @@ pipeline:
 
 execution:
   mode: async
-  runner: local_process
+  runner: ray   # local_process | ray
   max_parallel_jobs: 2
   auto_submit_next_stage: true
   poll_interval_seconds: 30

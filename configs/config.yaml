@@ -54,6 +54,9 @@ experiments_dir: ${EXPERIMENTS_DIR:dev/experiments}
 # ── neuralsignal plugin ───────────────────────────────────────────────────────
 neuralsignal_python: ${NEURALSIGNAL_PYTHON:uv run python}
 neuralsignal_src_path: ${NEURALSIGNAL_SRC_PATH:../neuralsignal/neuralsignal}
+ray_mode: ${RAY_MODE:local}              # local | remote
+ray_address: ${RAY_ADDRESS:auto}         # remote cluster address when ray_mode=remote
+ray_namespace: ${RAY_NAMESPACE:neuralsignalresearcher}
 
 # ── Arxiv ─────────────────────────────────────────────────────────────────────
 max_arxiv_papers: 20

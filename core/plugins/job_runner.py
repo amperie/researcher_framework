@@ -9,12 +9,14 @@ The runner stores each job in a directory:
     stdout.log    worker stdout
     stderr.log    worker stderr and exception traces
 
-Only the local-process runner is implemented now. The public shape is small so
-future runners such as Ray can implement the same submit/check methods.
+The public shape is small so different backends can implement the same
+submit/check methods. This module currently provides local-process and Ray
+runners.
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import subprocess
@@ -25,6 +27,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from configs.config import get_config
 from core.plugins.task_runner import load_callable
 from core.utils.logger import get_logger, setup_plugin_file_logging, setup_logging
 
@@ -84,18 +87,8 @@ class LocalProcessRunner:
     def check(self, job: dict[str, Any]) -> dict[str, Any]:
         job_dir = Path(job["job_dir"])
         status_path = job_dir / "status.json"
-        if not status_path.exists():
-            return {
-                **job,
-                "status": "unknown",
-                "error": f"Missing status file: {status_path}",
-            }
-        status = _read_json(status_path)
+        status = _read_durable_status(job)
         result_path = job_dir / "result.json"
-        if result_path.exists():
-            status["result_path"] = str(result_path)
-        status["stdout_path"] = str(job_dir / "stdout.log")
-        status["stderr_path"] = str(job_dir / "stderr.log")
         if status.get("status") == "submitted" and not result_path.exists():
             stderr_path = job_dir / "stderr.log"
             if stderr_path.exists():
@@ -112,10 +105,41 @@ class LocalProcessRunner:
         return status
 
 
+class RayRunner:
+    """Submit jobs to Ray tasks while keeping the same durable on-disk contract."""
+
+    runner_name = "ray"
+
+    def __init__(self) -> None:
+        self._cfg = get_config()
+
+    def submit(self, spec: dict[str, Any]) -> dict[str, Any]:
+        ray = _ensure_ray(self._cfg)
+        job_id = spec.get("job_id") or str(uuid4())
+        job_dir = Path(spec["job_dir"]).resolve()
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        job_spec = {**spec, "job_id": job_id, "job_dir": str(job_dir), "runner": self.runner_name}
+        payload = job_spec.pop("payload")
+
+        _write_json(job_dir / "job.json", job_spec)
+        _write_json(job_dir / "payload.json", payload)
+        _write_json(job_dir / "status.json", _status(job_id, "submitted", job_spec))
+
+        task = ray.remote(_ray_run_job).options(runtime_env=_ray_runtime_env(job_spec, self._cfg))
+        task.remote(job_spec)
+        return self.check({"job_id": job_id, "job_dir": str(job_dir)})
+
+    def check(self, job: dict[str, Any]) -> dict[str, Any]:
+        return _read_durable_status(job)
+
+
 def get_runner(name: str | None = None) -> JobRunner:
     runner = name or "local_process"
     if runner == "local_process":
         return LocalProcessRunner()
+    if runner == "ray":
+        return RayRunner()
     raise ValueError(f"Unknown job runner {runner!r}")
 
 
@@ -153,10 +177,87 @@ def run_job(job_dir: str) -> None:
         raise
 
 
+def _ray_run_job(spec: dict[str, Any]) -> dict[str, Any]:
+    job_dir = Path(spec["job_dir"]).resolve()
+    cmd = _worker_command(spec, job_dir)
+    env = os.environ.copy()
+    env.update(spec.get("env") or {})
+    stdout_path = job_dir / "stdout.log"
+    stderr_path = job_dir / "stderr.log"
+
+    try:
+        with stdout_path.open("a", encoding="utf-8") as stdout, stderr_path.open("a", encoding="utf-8") as stderr:
+            proc = subprocess.run(
+                cmd,
+                cwd=spec.get("cwd") or None,
+                env=env,
+                stdout=stdout,
+                stderr=stderr,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+    except Exception as exc:
+        failed = _status(spec["job_id"], "failed", spec, error=f"{type(exc).__name__}: {exc}")
+        _write_json(job_dir / "status.json", failed)
+        return failed
+
+    return {
+        "job_id": spec["job_id"],
+        "job_dir": str(job_dir),
+        "returncode": proc.returncode,
+    }
+
+
 def _worker_command(spec: dict[str, Any], job_dir: Path) -> list[str]:
     python = spec.get("python") or sys.executable
     parts = str(python).split()
     return parts + ["-u", "-m", "core.plugins.job_runner", "run", str(job_dir)]
+
+
+def _read_durable_status(job: dict[str, Any]) -> dict[str, Any]:
+    job_dir = Path(job["job_dir"])
+    status_path = job_dir / "status.json"
+    if not status_path.exists():
+        return {
+            **job,
+            "status": "unknown",
+            "error": f"Missing status file: {status_path}",
+        }
+    status = _read_json(status_path)
+    result_path = job_dir / "result.json"
+    if result_path.exists():
+        status["result_path"] = str(result_path)
+    status["stdout_path"] = str(job_dir / "stdout.log")
+    status["stderr_path"] = str(job_dir / "stderr.log")
+    return status
+
+
+def _ensure_ray(cfg: Any) -> Any:
+    ray = importlib.import_module("ray")
+    if ray.is_initialized():
+        return ray
+
+    init_kwargs: dict[str, Any] = {"ignore_reinit_error": True}
+    if getattr(cfg, "ray_namespace", None):
+        init_kwargs["namespace"] = cfg.ray_namespace
+    if getattr(cfg, "ray_mode", "local") == "remote":
+        init_kwargs["address"] = getattr(cfg, "ray_address", "auto") or "auto"
+
+    ray.init(**init_kwargs)
+    return ray
+
+
+def _ray_runtime_env(spec: dict[str, Any], cfg: Any) -> dict[str, Any]:
+    runtime_env: dict[str, Any] = {}
+    env = spec.get("env") or {}
+    if env:
+        env_vars = {str(k): str(v) for k, v in env.items() if v is not None}
+        if getattr(cfg, "ray_mode", "local") != "local":
+            env_vars.pop("PYTHONPATH", None)
+        if env_vars:
+            runtime_env["env_vars"] = env_vars
+    return runtime_env
 
 
 def _status(

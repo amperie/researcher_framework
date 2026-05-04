@@ -422,6 +422,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                 continue
             try:
                 implementation = impl_by_name.get(proposal_name)
+                _require_async_implementation(proposal_name, implementation)
                 payload = self._build_proposal_branch_payload(profile, state, proposal, implementation)
                 job = runner.submit(
                     self._job_spec(
@@ -1009,6 +1010,12 @@ class NeuralSignalPlugin(ResearchAdapter):
         optimization_metric = (profile.get("evaluation") or {}).get("primary_metric", "test_auc")
         dataset_path = artifact.get("dataset_path") or artifact.get("file_path", "")
         dataset_filename = Path(str(dataset_path)).name if dataset_path else ""
+        feature_set_class_path = str(dataset_cfg.get("feature_set_class_path") or "")
+        feature_set_class_name = str(dataset_cfg.get("feature_set_class_name") or "")
+        if not feature_set_class_path or not feature_set_class_name:
+            raise RuntimeError(
+                f"Proposal {proposal_name!r} is missing implementation metadata for model execution"
+            )
 
         return {
             "application_name": dataset_cfg.get("application_name", ""),
@@ -1027,8 +1034,8 @@ class NeuralSignalPlugin(ResearchAdapter):
             # get_name_from_template(..., file_safe=True). Pass only the dataset
             # filename here and run the task from the dataset directory.
             "file_out": dataset_filename,
-            "feature_set_class_path": dataset_cfg.get("feature_set_class_path", ""),
-            "feature_set_class_name": dataset_cfg.get("feature_set_class_name", ""),
+            "feature_set_class_path": feature_set_class_path,
+            "feature_set_class_name": feature_set_class_name,
             "feature_set_configs": None,
             "ffn_layer_patterns": dataset_cfg.get("ffn_layer_patterns", []),
             "attn_layer_patterns": dataset_cfg.get("attn_layer_patterns", []),
@@ -1268,6 +1275,21 @@ def _implementation_summary(implementation: dict[str, Any] | None) -> dict[str, 
         "stored_artifact_id": implementation.get("stored_artifact_id"),
         "stored_artifact_uri": implementation.get("stored_artifact_uri"),
     }
+
+
+def _require_async_implementation(proposal_name: str, implementation: dict[str, Any] | None) -> None:
+    if not implementation:
+        raise RuntimeError(f"proposal {proposal_name!r} has no generated implementation")
+    script_path = str(implementation.get("script_path") or "").strip()
+    class_name = str(implementation.get("class_name") or "").strip()
+    if not script_path or not class_name:
+        raise RuntimeError(
+            f"proposal {proposal_name!r} is missing implementation script_path/class_name"
+        )
+    if not Path(script_path).exists():
+        raise RuntimeError(
+            f"proposal {proposal_name!r} implementation script does not exist: {script_path}"
+        )
 
 
 def _proposal_analysis_from_evaluation(proposal_name: str, evaluation_summary: dict[str, Any]) -> dict[str, Any]:

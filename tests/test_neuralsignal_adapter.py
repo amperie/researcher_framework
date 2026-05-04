@@ -784,6 +784,53 @@ def test_submit_experiment_jobs_submits_proposal_branch_job(tmp_path):
     assert delta["experiment_jobs"][0]["status"] == "submitted"
 
 
+def test_submit_experiment_jobs_reports_missing_implementation(tmp_path):
+    adapter = NeuralSignalPlugin()
+    state = {"proposals": [_proposal()], "implementations": []}
+    runner = MagicMock()
+
+    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.neuralsignal.adapter.get_runner", return_value=runner):
+            delta = adapter.submit_experiment_jobs(
+                {**_profile(), "execution": {"runner": "ray", "max_parallel_jobs": 1}},
+                state,
+            )
+
+    runner.submit.assert_not_called()
+    assert delta["experiment_jobs"] == []
+    assert any("has no generated implementation" in error for error in delta["errors"])
+
+
+def test_build_model_config_requires_implementation_metadata(tmp_path):
+    adapter = NeuralSignalPlugin()
+    artifact = {
+        "artifact_id": "activation_sparsity_dataset_0",
+        "artifact_type": "dataset",
+        "status": "ready",
+        "proposal_name": "activation_sparsity",
+        "dataset_path": str(tmp_path / "features.csv"),
+        "dataset": "HaluBench",
+        "detector": "hallucination",
+        "dataset_config": {
+            "dataset": "HaluBench",
+            "application_name": "HaluBench",
+            "sub_application_name": "GranularAttention",
+            "detector_names": ["hallucination"],
+            "zone_size": 512,
+            "feature_set_class_path": "",
+            "feature_set_class_name": "",
+        },
+    }
+
+    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+        try:
+            adapter._build_model_config(_profile(), artifact, "exp-123")
+        except RuntimeError as exc:
+            assert "missing implementation metadata" in str(exc)
+        else:
+            raise AssertionError("Expected _build_model_config to reject empty feature set metadata")
+
+
 def test_check_experiment_jobs_collects_completed_proposal_branch(tmp_path):
     csv_path = tmp_path / "features.csv"
     csv_path.write_text("a,b\n1,2\n", encoding="utf-8")

@@ -339,9 +339,13 @@ def test_build_research_kg_update_distills_experiment_record():
 
     node_types = {node["node_type"] for node in update["nodes"]}
     relation_types = {relation["relation_type"] for relation in update["relations"]}
+    display_names = {node["node_type"]: node["display_name"] for node in update["nodes"]}
 
     assert {"Question", "Hypothesis", "Method", "Evidence", "Dataset", "Metric", "Finding", "PerformanceBand"} <= node_types
     assert {"HAS_HYPOTHESIS", "TESTED_BY", "SUPPORTED_BY", "USES_METHOD", "ON_DATASET", "MEASURED_BY", "PRODUCED_FINDING", "IN_PERFORMANCE_BAND"} <= relation_types
+    assert display_names["Question"] == "Find Useful Probes"
+    assert display_names["Hypothesis"] == "Model Features improves Hallucination"
+    assert display_names["Evidence"].startswith("Activation Sparsity test_auc=0.910")
 
 
 def test_neo4j_graph_store_upserts_projection_and_decodes_query_metadata():

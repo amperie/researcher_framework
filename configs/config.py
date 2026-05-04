@@ -132,9 +132,17 @@ def get_config() -> SimpleNamespace:
         "s3_secret_access_key",
         "s3_bucket",
         "s3_prefix",
+        "ray_namespace",
     ):
         if not data.get(opt_key):
             data[opt_key] = None
+
+    ray_mode = str(data.get("ray_mode") or "local").strip().lower()
+    if ray_mode not in {"local", "remote"}:
+        raise ValueError(f"Invalid ray_mode {ray_mode!r}; expected 'local' or 'remote'")
+    data["ray_mode"] = ray_mode
+    if not data.get("ray_address"):
+        data["ray_address"] = "auto"
 
     return SimpleNamespace(**data)
 

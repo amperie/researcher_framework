@@ -94,6 +94,8 @@ class TestGetConfig:
         assert hasattr(cfg, "mongo_url")
         assert hasattr(cfg, "chroma_host")
         assert hasattr(cfg, "chroma_port")
+        assert hasattr(cfg, "ray_mode")
+        assert hasattr(cfg, "ray_address")
 
     def test_chroma_port_is_int(self):
         cfg = get_config()
@@ -114,6 +116,10 @@ class TestGetConfig:
         for key in ("llm_model", "anthropic_api_key", "openai_api_key", "chroma_auth_token"):
             val = getattr(cfg, key, "MISSING")
             assert val is None or isinstance(val, str), f"{key} has unexpected type {type(val)}"
+
+    def test_ray_mode_is_normalized(self):
+        cfg = get_config()
+        assert cfg.ray_mode in {"local", "remote"}
 
 
 # ---------------------------------------------------------------------------
