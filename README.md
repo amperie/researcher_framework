@@ -1,214 +1,76 @@
 # researcher_framework
 
-A configuration-driven, plug-and-play agentic research pipeline built on LangGraph. The system automates the full research loop — from literature review through implementation, validation, experimentation, and result storage — for any research domain described by a **profile YAML file**.
+`researcher_framework` is a configuration-driven, plug-and-play research automation system built on LangGraph. It takes a research direction, runs an end-to-end agentic loop around it, and persists both the reasoning trail and the experimental outputs. The graph stays generic while domain behavior lives in profile YAML and plugin adapters.
 
-Experiments can run locally or be spun off to a Ray cluster through the same adapter/job architecture, without changing the graph or profile shape.
+The intent is extensibility without graph rewrites. New domains are mostly described through configuration: prompts, research tools, datasets, base classes, evaluation thresholds, storage targets, and adapter wiring. The same graph can drive local execution, async subprocess jobs, or Ray-backed runners without changing the overall profile shape.
 
-![Architecture overview with async runner model](docs/architecture_async_runner.png)
-
-Current profiles:
-- `neuralsignal` - LLM internals probing and hallucination detection
-- `trading` - algorithmic trading strategy research and backtest automation scaffold
-
----
+![Architecture overview](docs/architecture_overview_v2.png)
 
 ## What It Does
 
-Given a research direction like `"attention head specialization"`, the pipeline:
+Given a direction like `"attention head specialization"` or a seed from a prior run, the pipeline can:
 
-1. Runs profile-configured research tools, scores every artifact, and synthesises a research summary
-2. Proposes novel experiment ideas grounded in the highest-scored artifacts
-3. Refines ideas for feasibility against available data and base class APIs
-4. Specifies concrete experiments with datasets, hyperparameters, and success criteria
-5. Writes implementation plans, then generates Python classes (always subclassing a declared base class)
-6. Validates the generated code with deterministic contracts and pytest, then optionally feeds failures back to the LLM for fixes (up to N retries)
-7. Submits or executes domain experiments through the profile plugin
-8. Evaluates results against configured thresholds and produces an analysis
-9. Persists everything to MLflow, ChromaDB, and MongoDB
-10. Proposes 3 high-value follow-up research directions
+1. run profile-configured research tools and score returned artifacts
+2. synthesise a research summary and generate experiment ideas
+3. refine ideas against available datasets, constraints, and base-class APIs
+4. propose concrete experiments with datasets, hyperparameters, and success criteria
+5. generate implementation plans and Python subclasses from declared base classes
+6. validate generated code with deterministic contracts and pytest, with optional fix retries
+7. execute or submit domain experiments through the configured adapter and runner
+8. evaluate outcomes against profile thresholds and produce structured analysis
+9. persist results and artifacts to MLflow, MongoDB, ChromaDB, Neo4j-backed memory, and the run inspector
+10. propose follow-up directions for the next research loop
 
----
+## Current Profiles
 
-## Quick Start
+Profiles live under `configs/profiles/` and are the single source of truth for a research domain.
 
-### Prerequisites
+- `neuralsignal`: LLM internals probing and hallucination-detection research. Generates `FeatureSetBase` subclasses, creates datasets from scan snapshots, trains detector models, and evaluates metrics such as `test_auc`.
+- `trading`: algorithmic trading research scaffold. Uses the same graph and profile model to generate strategy code, apply validation and risk constraints, and delegate execution to a trading adapter.
 
-- Python 3.11+ with [uv](https://github.com/astral-sh/uv)
-- Running MongoDB, ChromaDB, and MLflow instances (for storage steps)
-- Anthropic API key
+A profile controls the step list, prompts, research tools, datasets, base classes, execution mode, evaluation thresholds, and storage targets. In practice, most domain customization belongs in the profile rather than in graph code.
 
-### Install
+## Adding A New Research Domain
 
-```bash
-uv sync
-```
+To add a new domain, copy an existing profile such as `configs/profiles/neuralsignal.yaml`, update the domain prompts, datasets, tools, base classes, and thresholds, then point `experiment_adapter` at a new `plugins/<domain>/adapter.py`. If the adapter implements the same small prepare/execute or async submit/check interface, the existing graph can run the new domain without structural changes.
 
-### Configure
+## Example Prior Run
 
-All settings live in `configs/config.yaml`. Secrets use `${ENV_VAR}` syntax and are
-resolved from environment variables or an optional `configs/.env` file.
-The generated-work tree is rooted at `dev_root` there; by default it is `dev/`.
-The runtime also performs a periodic best-effort cleanup of disposable files
-under `dev_root` using `maintenance.dev_cleanup` in `configs/config.yaml`.
+The current stored `neuralsignal` runs include a strong prior result for `per_projection_residual_entropy`:
 
-Minimum: set your API key and backend URLs, either as env vars or in `configs/.env`:
+- `test_auc`: `0.8787`
+- `test_f1`: `0.8023`
+- dataset size: `500` rows
+- feature count: `1009`
+- MLflow run id: `05e5f6d617614a3bacd5e38fc5ac68d6`
 
-```ini
-ANTHROPIC_API_KEY=sk-ant-...
-MONGO_URL=mongodb://localhost:27017
-CHROMA_HOST=localhost
-CHROMA_PORT=8000
-```
+That run produced more than a metric. It also generated an implementation, experiment metadata, evaluation analysis, and follow-up directions. The stored analysis concluded that per-head claim-ratio features carried the strongest hallucination signal, while the paired weaker proposal in the same batch overfit badly and did not generalize. That is the intended output shape of the framework: code, experiments, evaluation, storage, and next-step recommendations rather than a single isolated score.
 
-Everything else (timeouts, paths, logging) is edited directly in `configs/config.yaml`.
+## Architecture Overview
 
-### Run
+The architecture is split into a few stable layers:
 
-```bash
-# Full pipeline
-uv run python main.py --profile neuralsignal --direction "sparse autoencoders in MLP layers"
+- `configs/profiles/<name>.yaml`: domain definition for prompts, tools, datasets, base classes, execution, and thresholds
+- `core/graph/nodes/<step>.py`: reusable graph nodes that read the profile and return state deltas
+- `core.plugins.<domain>.adapter`: domain-specific execution logic for dataset creation, training, backtests, or other heavy operations
+- runner layer: local subprocesses or Ray jobs behind the same async job interface
+- storage and memory: MLflow, MongoDB, ChromaDB, Neo4j, and the run inspector UI
 
-# Auto-loop: use the top proposed next step as the next direction
-uv run python main.py --profile neuralsignal --direction "attention head specialization" --loop
+Key design rules:
 
-# List available profiles
-uv run python main.py --list-profiles
-```
+- nodes do not hardcode domain prompts or dataset names
+- generated code must subclass a base class declared by the active profile
+- adapters own domain-specific execution details
+- runners are swappable without changing graph semantics
+- all durable outputs are written back into structured state and persisted
 
-### Run Inspector
-
-```bash
-uv run python -m web
-```
-
-Open `http://127.0.0.1:8090` to inspect aggregated experiment runs across
-Mongo memory records, Chroma projections, Neo4j graph data, MLflow runs, and
-artifact references.
-
-The run inspector summary view includes:
-
-- a direct MLflow run link in the top metadata strip
-- collapsible text panels for the main run narrative, such as research direction,
-  research summary, ideas, refined ideas, proposal, run goal, implementation
-  plan, generated code, validation details, and evaluation summary when those
-  records are available
-- admin controls for scanning and deleting orphaned backend state
-
----
-
-## Running Individual Steps
-
-`run_node.py` lets you run a single pipeline step against a saved state snapshot — useful for development and debugging:
-
-```bash
-# Run the research step
-uv run python run_node.py research --profile neuralsignal \
-    --direction "sparse autoencoders"
-
-# Resume from a saved state (e.g., after research has already run)
-uv run python run_node.py implement --profile neuralsignal \
-    --state-file <dev_root>/state/after_plan_implementation.json
-
-# List available steps
-uv run python run_node.py --list
-
-# Interactive mode (prompts for step and state file)
-uv run python run_node.py
-```
-
-State snapshots are saved automatically to `<dev_root>/state/after_<step>.json` after each run.
-Old snapshots, paper digests, generated tests, and terminal job directories are
-pruned periodically according to the configured retention windows.
-
----
-
-## Research Profiles
-
-A **profile** is a YAML file in `configs/profiles/` that fully describes a research domain. It is the single source of truth — no domain knowledge lives anywhere else in the codebase.
-
-### What a profile controls
-
-| Section | What it specifies |
-|---|---|
-| `pipeline.steps` | Which steps run and in what order (omit any step to skip it) |
-| `llm` | Default model + optional per-step overrides |
-| `research.tools` | Dotted research tool functions, limits, and scoring thresholds |
-| `research.domain_context` | Injected into research collection/scoring prompts |
-| `base_classes` | Base class name, import path, and interface — injected into the code-gen prompt |
-| `validate` | Whether to auto-run deterministic contract tests / pytest, retry limit, test runner command |
-| `datasets` / domain data config | Dataset or data-source definitions for the domain |
-| `experiment_adapter` | Dotted module path to the plugin that prepares and executes domain experiments |
-| `execution` | Optional async job execution settings: runner, parallelism, polling, timeouts |
-| `evaluation` | Primary metric, all tracked metrics, minimum acceptable thresholds |
-| `storage` | MLflow experiment name, MongoDB DB, ChromaDB collection |
-| `prompts` | **Every LLM system prompt** for every step in this domain |
-
-Full reference: [`configs/profiles/neuralsignal.yaml`](configs/profiles/neuralsignal.yaml)
-
-### Pipeline steps
-
-| Step | What it does |
-|---|---|
-| `research` | arxiv search → score → digest papers → synthesise summary |
-| `ideate` | Propose novel ideas from research context |
-| `refine` | Filter ideas for feasibility, improve with implementation guidance |
-| `propose_experiments` | Specify dataset, detector, hyperparameters, success criteria per idea |
-| `plan_implementation` | Write structured JSON plan per proposal (no code yet) |
-| `implement` | Generate Python class subclassing the declared base class |
-| `validate` | Run deterministic contract tests or generated pytest tests, auto-run, LLM-fix loop up to N retries |
-| `prepare_experiment` | Prepare domain artifacts via the plugin adapter |
-| `execute_experiment` | Execute the experiment via the plugin adapter |
-| `submit_experiment_jobs` | Submit long-running experiment jobs and return immediately |
-| `check_experiment_jobs` | Poll durable jobs, collect completed outputs, and submit next-stage jobs |
-| `evaluate` | LLM analysis of metrics vs thresholds; per-proposal assessment |
-| `store_results` | Log to MLflow, upsert to ChromaDB, insert to MongoDB |
-| `propose_next_steps` | Suggest 3 follow-up research directions based on results |
-
----
-
-## Adding a New Research Domain
-
-1. **Create a profile**: Copy `configs/profiles/neuralsignal.yaml` to `configs/profiles/<domain>.yaml` and fill in every section — especially `prompts` (domain-specific LLM instructions for each step) and `base_classes`.
-
-2. **Choose research tools**: Add `research.tools` entries. Each tool is a dotted function path and can set its own limits and `relevance_score_threshold`.
-   ```yaml
-   research:
-     tools:
-       - name: arxiv
-         tool: tools.research_tools.collect_arxiv
-         max_results: 20
-         relevance_score_threshold: 6
-       - name: prior_experiments
-         tool: tools.research_tools.collect_prior_experiments
-         n_results: 8
-         relevance_score_threshold: 7
-   ```
-
-3. **Add a plugin adapter**: Create `plugins/<domain>/adapter.py` with `get_adapter()` returning an object that implements:
-   ```python
-   def validate_environment(profile, state) -> dict: ...
-   def build_context(profile, state) -> dict: ...
-   def prepare_experiment(profile, state) -> dict: ...
-   def execute_experiment(profile, state) -> dict: ...
-   def summarize_result(profile, state) -> dict: ...
-   ```
-
-   For long-running work, adapters can also implement the async job API:
-   ```python
-   def submit_experiment_jobs(profile, state) -> dict: ...
-   def check_experiment_jobs(profile, state) -> dict: ...
-   ```
-
-   The synchronous `execute_experiment` method can remain as a fallback while the
-   profile uses `submit_experiment_jobs` / `check_experiment_jobs` for async runs.
-
-4. **Done** - no changes to `graph/`, `utils/`, `tools/`, or `llm/` are needed unless the domain needs a new reusable research tool.
+The run inspector reads those stored records back into a single view so prior directions, generated code, metrics, artifacts, and follow-up seeds can be inspected together.
 
 ---
 
 ## Research Tools
 
-The `research` node is modular. Profiles declare which tools to run, and each tool returns structured artifacts. The node then asks the LLM to score every artifact with `prompts.research.artifact_score_system`, filters by the tool's threshold, and writes the selected artifacts to `state['research_artifacts']`.
+The `research` node is modular. Profiles declare which tools to run, and each tool returns structured artifacts. The node then asks the LLM to score each artifact with `prompts.research.artifact_score_system`, filters by the tool's threshold, and writes the selected artifacts to `state['research_artifacts']`.
 
 Built-in tools:
 
@@ -216,9 +78,10 @@ Built-in tools:
 |---|---|
 | `tools.research_tools.collect_arxiv` | Search arXiv and return paper artifacts |
 | `tools.research_tools.collect_prior_experiments` | Retrieve similar past experiments from ChromaDB |
-| `tools.research_tools.collect_adapter_context` | Ask the active domain adapter for environment/platform context |
+| `tools.research_tools.collect_adapter_context` | Ask the active domain adapter for environment or platform context |
 | `tools.research_tools.collect_profile_context` | Expose selected profile sections as scoreable artifacts |
-| `tools.research_tools.collect_strategy_library` | Inspect a local trading platform tree for strategy/backtest/risk files |
+| `tools.research_tools.collect_strategy_library` | Inspect a local trading platform tree for strategy, backtest, and risk files |
+| `core.tools.research_tools.collect_memory` | Retrieve profile-scoped prior memory records for reuse and grounding |
 
 Custom tools should implement:
 
@@ -241,23 +104,19 @@ The project includes a canonical memory layer under `core/memory/` for:
 
 Core ideas:
 
-- `MemoryRecord` is the generic envelope persisted by the system.
-- Adapters own profile-specific memory construction via `build_memory_records(...)`.
-- `research` reads memory through `collect_memory(...)`.
-- `store_results` persists memory through `MemoryService`.
+- `MemoryRecord` is the generic envelope persisted by the system
+- adapters own profile-specific memory construction via `build_memory_records(...)`
+- `research` reads memory through retrieval tools
+- `store_results` persists memory through `MemoryService`
 
 The memory envelope distinguishes:
 
-- `kind`: retrieval/use-case class
+- `kind`: retrieval or use-case class
 - `object_type`: canonical object class such as `dataset`, `featureset`, `model`, `experiment_result`, `algorithm`, `portfolio`, `backtest`
 - `object_key`: stable object identity
 - `object_role`: how the object is being remembered, such as `artifact`, `implementation`, or `result`
 
-For deterministic reuse, adapters can also persist exact-match fingerprints in
-record metadata. The current `neuralsignal` adapter stores
-`dataset_config_fingerprint` and checks memory before creating a dataset. If an
-identical ready dataset already exists and its referenced file still exists, it
-reuses that dataset instead of recomputing it.
+For deterministic reuse, adapters can persist exact-match fingerprints in record metadata. The current `neuralsignal` adapter stores `dataset_config_fingerprint` and checks memory before creating a dataset. If an identical ready dataset already exists and its referenced file still exists, it reuses that dataset instead of recomputing it.
 
 Full documentation:
 
@@ -265,125 +124,44 @@ Full documentation:
 
 ---
 
-## Architecture Overview
-
-```
-configs/profiles/<name>.yaml   ← domain knowledge (prompts, datasets, base classes, etc.)
-        │
-        ▼
-graph/builder.py               ← compiles a LangGraph from profile.pipeline.steps
-        │
-        ▼
-graph/nodes/<step>.py          ← one node per step; reads profile, calls LLM, returns state delta
-        │
-        ├── llm/factory.py     ← get_llm(step_name, profile) — resolves model per step
-        ├── tools/             ← arxiv_tool, chroma_tool (reusable, domain-agnostic)
-        └── plugins/<domain>/  ← adapter for heavy domain ops (dataset creation, training)
-```
-
-Key rules:
-- Nodes never hardcode prompt strings — read via `get_prompt(profile, step, key)` from `utils/profile_loader.py`
-- Nodes never hardcode data source names — all via `profile['datasets']`
-- Nodes never instantiate LLM clients directly — always use `get_llm(step_name, profile)`
-- Generated code always subclasses a class in `profile['base_classes']`
-- LLM-generated Python is syntax-checked before it is written, and cached implementations are revalidated before reuse
-- Nodes return partial state dicts; never mutate state in place
-- Non-fatal errors go into `state['errors']`; pipeline continues
-- Long-running jobs go into `state['experiment_jobs']` and write durable files under `dev/experiments/<profile>/jobs/`
-
----
-
 ## Async Experiment Jobs
 
-Long-running experiments can run asynchronously so the graph does not block on a
-single synchronous process. Profiles opt in by using these pipeline steps:
+Long-running experiments can run asynchronously so the graph does not block on a single synchronous process. Profiles opt into this by using `submit_experiment_jobs` and `check_experiment_jobs` in the step list and by defining execution settings in the profile.
 
-```yaml
-pipeline:
-  steps:
-    - ...
-    - submit_experiment_jobs
-    - check_experiment_jobs
-    - evaluate
-```
+The runner interface is intentionally small so the same graph can target different execution backends. The implemented runners are `local_process` and `ray`. They launch the same dotted task callables used by the synchronous path, and additional runners can plug in with the same `submit` and `check` behavior.
 
-Execution is configured in the profile:
-
-```yaml
-execution:
-  mode: async
-  runner: local_process
-  max_parallel_jobs: 2
-  auto_submit_next_stage: true
-  poll_interval_seconds: 30
-  job_timeout_seconds: 7200
-  # optional per-stage overrides:
-  # dataset_timeout_seconds: 14400
-  # model_timeout_seconds: 7200
-```
-
-The runner interface is intentionally small so the same graph can target
-different execution backends. The only runner currently implemented is
-`local_process`. It launches detached Python workers using the same dotted task
-callables used by the synchronous path. Additional runners can plug in with the
-same `submit` / `check` behavior, for example Ray, Kubernetes, Slurm, or a
-remote worker service.
-
-Synchronous adapter calls use the same timeout policy as the async job path:
-per-stage `execution.<stage>_timeout_seconds` if present, otherwise
-`execution.job_timeout_seconds`, then finally `configs/config.yaml`
-`experiment_timeout_seconds`.
-
-Each job is durable on disk:
+Each async job is durable on disk under `dev/experiments/<profile>/jobs/<job_id>/` and typically includes:
 
 ```text
-dev/experiments/<profile>/jobs/<job_id>/
-  job.json
-  payload.json
-  status.json
-  result.json
-  stdout.log
-  stderr.log
+job.json
+payload.json
+status.json
+result.json
+stdout.log
+stderr.log
 ```
 
-The graph state stores lightweight job metadata in `state['experiment_jobs']`.
-`submit_experiment_jobs` submits work up to `execution.max_parallel_jobs`.
-`check_experiment_jobs` polls existing jobs, collects completed `result.json`
-files into `experiment_artifacts`, `experiment_results`, and `models`, and can
-submit the next stage automatically when `auto_submit_next_stage` is true.
-
-For development, `run_node.py` is useful for polling without rerunning earlier
-steps:
-
-```bash
-uv run python run_node.py check_experiment_jobs --profile neuralsignal \
-    --state-file dev/state/after_submit_experiment_jobs.json
-```
-
-If jobs are still running, run the same check step again later with the latest
-saved state snapshot.
+The graph state stores lightweight job metadata in `state['experiment_jobs']`. `submit_experiment_jobs` submits work up to `execution.max_parallel_jobs`. `check_experiment_jobs` polls existing jobs, collects completed results into `experiment_artifacts`, `experiment_results`, and `models`, and can submit the next stage automatically when `auto_submit_next_stage` is enabled.
 
 ---
 
 ## neuralsignal Plugin
 
-The neuralsignal plugin generates `FeatureSetBase` subclasses and runs NeuralSignal automation through isolated subprocess tasks. It supports both the synchronous adapter methods and the async job-node flow used by the `neuralsignal` profile.
+The `neuralsignal` plugin generates `FeatureSetBase` subclasses and runs NeuralSignal automation through isolated subprocess tasks. It supports both synchronous adapter methods and the async job-node flow used by the `neuralsignal` profile.
 
-**Data flow:**
-1. `implement` generates a Python class → cached at `dev/experiments/neuralsignal/implementations/<ClassName>.py`
-2. `validate` runs deterministic `FeatureSetBase` contract tests, rejects non-Python / prose responses, and can auto-fix failures
-3. `submit_experiment_jobs` submits NeuralSignal dataset-creation jobs
-4. `check_experiment_jobs` collects completed dataset CSVs from `dev/experiments/neuralsignal/datasets/` into `experiment_artifacts`
-5. `check_experiment_jobs` can then submit S1 model-training jobs automatically
-6. later checks collect model metrics, params, and feature importance into `experiment_results` and `models`
+The current NeuralSignal integration adds several safety and compatibility layers:
 
-**Subprocess tasks**: Heavy NeuralSignal calls live in `plugins/neuralsignal/tasks.py`. Synchronous calls use `plugins/task_runner.py`; async jobs use `plugins/job_runner.py`, which invokes the same task callables and writes durable job files. `plugins/neuralsignal/bridge.py` remains as a generic compatibility wrapper around subprocess task execution.
+- generated feature sets are wrapped so common real scan-shape variants still work when code assumes `outputs[0][layer_id]`
+- empty feature outputs fail loudly instead of silently producing target-only CSVs
+- balanced dataset pulls are supported through profile config
+- long-running Mongo scan iteration uses `no_cursor_timeout=True` to reduce `CursorNotFound` failures during dataset builds
+- model tasks run from the dataset directory so NeuralSignal's current `file_out` handling resolves the real CSV correctly
 
 The async NeuralSignal task chain is:
 
 ```text
 submit_experiment_jobs
-  -> plugins.job_runner.LocalProcessRunner
+  -> plugins.job_runner.LocalProcessRunner or Ray runner
     -> plugins.neuralsignal.tasks.create_dataset
       -> neuralsignal.automation.create_dataset
 
@@ -394,29 +172,7 @@ check_experiment_jobs
       -> neuralsignal.automation.create_s1_model
 ```
 
-The task wrapper merges the agent payload over NeuralSignal's packaged automation
-defaults with `neuralsignal.automation.get_config()`, then injects the generated
-feature set via a real NeuralSignal `FeatureProcessor`.
-
-The current NeuralSignal integration also adds a few compatibility and safety layers:
-- generated feature sets are wrapped so common real scan-shape variants still work when code assumes `outputs[0][layer_id]`
-- empty feature outputs fail loudly instead of silently producing target-only CSVs
-- balanced dataset pulls are supported through profile config (`balanced_target`)
-- long-running Mongo scan iteration uses `no_cursor_timeout=True` to avoid `CursorNotFound` during slow dataset builds
-- model tasks run from the dataset directory so NeuralSignal's current `file_out` handling resolves the real CSV correctly
-
-Configure the neuralsignal paths in `.env`:
-```ini
-NEURALSIGNAL_PYTHON=uv run python          # or: /path/to/neuralsignal/venv/python
-NEURALSIGNAL_SRC_PATH=../neuralsignal/neuralsignal
-```
-
-The `neuralsignal` profile prompt and base-class docs also describe the real scan
-shape used by current datasets:
-- `outputs: dict[str, Tensor]` — activations coming out of each layer
-- `inputs: dict[str, Tensor]` — activations going into each layer
-- `layer_order: list[str]` — ordered layer ids
-- `layer_id_to_name: dict[str, str]` — layer id to layer name mapping
+The task wrapper merges the agent payload over NeuralSignal's packaged automation defaults, then injects the generated feature set through a real NeuralSignal `FeatureProcessor`.
 
 ---
 
@@ -424,7 +180,7 @@ shape used by current datasets:
 
 The `trading` profile is wired into the same graph and research-tool infrastructure. It currently provides prompts, risk constraints, research tools, and a plugin scaffold in `plugins/trading/adapter.py`.
 
-To run trading experiments end to end, implement `TradingAdapter.execute_experiment()` against your trading platform's backtest engine. That method should load the generated strategy class, run a leakage-safe backtest with configured costs/slippage, and return normalized metrics such as `sharpe_ratio`, `max_drawdown`, `annual_return`, `turnover`, and `win_rate`.
+To run trading experiments end to end, the adapter is expected to load the generated strategy class, run a leakage-safe backtest with configured costs and slippage, and return normalized metrics such as `sharpe_ratio`, `max_drawdown`, `annual_return`, `turnover`, and `win_rate`.
 
 ---
 
@@ -432,43 +188,36 @@ To run trading experiments end to end, implement `TradingAdapter.execute_experim
 
 | File | Purpose |
 |---|---|
-| `configs/config.yaml` | All runtime settings: backends, timeouts, paths, logging. Secrets via `${ENV_VAR}` |
-| `configs/.env` | Optional local overrides (API keys, URLs). Not committed. |
-| `configs/profiles/*.yaml` | Per-domain research profiles (steps, prompts, datasets, etc.) |
+| `configs/config.yaml` | Global runtime settings: backends, timeouts, paths, logging, and execution defaults |
+| `configs/.env` | Optional local secret and environment overrides |
+| `configs/profiles/*.yaml` | Per-domain research profiles: steps, prompts, datasets, tools, thresholds, and storage |
 
-Logging writes the main application stream to `logs/research.log`. Plugin-specific
-adapter and bridge-process logs can also be routed to plugin-named files such as
-`logs/research.neuralsignal.log` to keep subprocess-heavy domains separate from
-the main pipeline log.
+The generated-work tree is rooted at `dev_root`, which defaults to `dev/`. The runtime also performs a periodic best-effort cleanup of disposable files under that root using `maintenance.dev_cleanup` in `configs/config.yaml`.
+
+Logging writes the main application stream to `logs/research.log`. Plugin-specific adapter and subprocess logs can also be routed to plugin-named files such as `logs/research.neuralsignal.log` to keep subprocess-heavy domains separate from the main pipeline log.
 
 ---
 
 ## Tests
 
-```bash
-uv run pytest
-```
-
-Generated validation tests are written to `dev/experiments/<profile>/tests/` and are run automatically during the pipeline.
-
-Pytest is configured to keep its cache and temp files under `.tmp/pytest/` instead
-of scattering `.pytest_*` directories across the project root.
+The repository test suite runs under `pytest`. Generated validation tests are written to `dev/experiments/<profile>/tests/` and can be executed automatically during the pipeline. Pytest is configured to keep its cache and temp files under `.tmp/pytest/` instead of scattering `.pytest_*` directories across the project root.
 
 ---
 
 ## Dev Artifacts
 
-All generated artifacts are local and gitignored under `dev/`. Async experiment
-jobs are stored under `dev/experiments/<profile>/jobs/<job_id>/` with payloads,
-status, results, stdout, and stderr logs:
+All generated artifacts are local and gitignored under `dev/`. Async experiment jobs are stored under `dev/experiments/<profile>/jobs/<job_id>/` with payloads, status, results, stdout, and stderr logs.
 
-```
+Typical generated structure:
+
+```text
 dev/
-├── state/                  # JSON state snapshots from run_node.py
-├── experiments/
-│   └── <profile>/
-│       ├── implementations/  # cached LLM-generated subclass scripts
-│       ├── datasets/         # created feature CSVs (.csv)
-│       └── tests/            # generated pytest files
-└── papers/                 # arxiv digest cache
++-- state/                  # JSON state snapshots
++-- experiments/
+|   +-- <profile>/
+|       +-- implementations/  # cached LLM-generated subclass scripts
+|       +-- datasets/         # created feature CSVs
+|       +-- jobs/             # async job payloads and results
+|       +-- tests/            # generated pytest files
++-- papers/                 # arXiv digest cache
 ```
