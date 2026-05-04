@@ -31,6 +31,8 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
     models = state.get("models") or []
     evaluation_summary = state.get("evaluation_summary") or {}
     direction = state.get("research_direction", "")
+    root_run_family_id = str(state.get("root_run_family_id") or "")
+    root_research_direction = str(state.get("root_research_direction") or direction or "")
 
     if not experiment_results:
         log.warning("store_results_node | Nothing to store")
@@ -93,6 +95,8 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
                 "proposal_name": proposal_name,
                 "profile": profile.get("name", ""),
                 "research_direction": direction,
+                "root_run_family_id": root_run_family_id,
+                "root_research_direction": root_research_direction,
                 "metrics": metrics,
                 "model": model_by_exp.get(experiment_id),
                 "evaluation_summary": evaluation_summary,

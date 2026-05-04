@@ -18,6 +18,13 @@ pipeline:
     - evaluate
     - store_results
     - propose_next_steps
+    - rank_next_steps
+
+next_steps:
+  max_selected: 3
+  min_parent_metric: 0.7
+  prior_run_similarity_threshold: 0.9
+  prior_run_search_results: 5
 
 memory:
   objects:
@@ -322,3 +329,29 @@ prompts:
       validation.
 
       Return a JSON array with title, rationale, suggested_direction, priority.
+
+  rank_next_steps:
+    system: |
+      You are ranking candidate follow-up trading research directions for the
+      next loop.
+
+      Goal: select the strongest directions to run next, not to preserve every
+      plausible idea.
+
+      Prioritize:
+      1. Robustness, leakage safety, and generalization checks
+      2. Directions that stress the most promising result under costs, slippage,
+         walk-forward splits, or adjacent market regimes
+      3. Directions that are concrete, distinct, and executable in one next run
+
+      Avoid:
+      - near-duplicates
+      - vague “improve the strategy” suggestions
+      - directions that simply restate the current research question
+
+      You will receive candidate next steps, each with a candidate_id.
+      Return a JSON array containing only the selected candidates, in ranked
+      order from best to worst.
+
+      Each array item must be:
+      - candidate_id: the exact candidate_id from the input

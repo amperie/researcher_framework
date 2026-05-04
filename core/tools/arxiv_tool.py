@@ -10,11 +10,12 @@ from pathlib import Path
 
 import arxiv
 
+from configs.config import dev_path
 from core.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_PAPERS_CACHE_DIR = Path("dev/papers")
+_PAPERS_CACHE_DIR = dev_path("papers")
 _HTML_TIMEOUT = 15
 
 

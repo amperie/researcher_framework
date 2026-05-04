@@ -248,3 +248,18 @@ class ResearchAdapter(Protocol):
         records here for adapter-specific rendering.
         """
         ...
+
+    def knowledge_graph_config(
+        self,
+        profile: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return optional profile-specific KG overrides.
+
+        This hook lets plugins extend the distilled research KG without hardcoding
+        domain rules into core. Typical uses:
+        - metric band declarations
+        - alias/synonym maps
+        - controlled vocabularies for methods, limitations, or metrics
+        - custom canonicalization thresholds
+        """
+        ...

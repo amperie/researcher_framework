@@ -6,7 +6,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from web.service import delete_orphans, diagnostics, get_run_bundle, list_run_summaries, scan_orphans
+from web.service import create_proposal_seed, create_run_handoff, delete_orphans, diagnostics, get_run_bundle, list_run_summaries, scan_orphans
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -35,6 +35,30 @@ def api_run_detail(profile_name: str, record_id: str) -> dict:
         return get_run_bundle(profile_name, record_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/runs/{profile_name}/{record_id}/handoffs")
+def api_run_handoff(profile_name: str, record_id: str, payload: dict | None = Body(default=None)) -> dict:
+    try:
+        return create_run_handoff(profile_name, record_id, payload or {})
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/runs/{profile_name}/{record_id}/proposal-seeds")
+def api_proposal_seed(profile_name: str, record_id: str, payload: dict | None = Body(default=None)) -> dict:
+    try:
+        return create_proposal_seed(profile_name, record_id, payload or {})
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

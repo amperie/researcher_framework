@@ -25,7 +25,7 @@ from uuid import uuid4
 
 import mlflow
 
-from configs.config import get_config
+from configs.config import dev_path, get_config
 from core.artifacts import get_artifact_store
 from core.memory import (
     MemoryService,
@@ -98,6 +98,45 @@ class NeuralSignalPlugin(ResearchAdapter):
             "base_classes": profile.get("base_classes") or [],
             "evaluation": profile.get("evaluation") or {},
             "bridge": self.validate_environment(profile, state),
+        }
+
+    def knowledge_graph_config(self, profile: dict[str, Any]) -> dict[str, Any]:
+        """Return NeuralSignal-specific KG defaults while staying profile-driven."""
+        evaluation = profile.get("evaluation") or {}
+        primary_metric = str(evaluation.get("primary_metric") or "test_auc")
+        return {
+            "metrics": {
+                primary_metric: {"direction": "higher_is_better"},
+            },
+            "metric_bands": [
+                {
+                    "metric_name": primary_metric,
+                    "operator": ">=",
+                    "threshold": 0.95,
+                    "display_name": f"{primary_metric} >= 0.95",
+                    "band_key": f"{primary_metric}_gte_0_95",
+                },
+                {
+                    "metric_name": primary_metric,
+                    "operator": ">=",
+                    "threshold": 0.90,
+                    "display_name": f"{primary_metric} >= 0.90",
+                    "band_key": f"{primary_metric}_gte_0_90",
+                },
+                {
+                    "metric_name": primary_metric,
+                    "operator": ">=",
+                    "threshold": 0.75,
+                    "display_name": f"{primary_metric} >= 0.75",
+                    "band_key": f"{primary_metric}_gte_0_75",
+                },
+            ],
+            "methods": {
+                "aliases": {
+                    "mlp activation sparsity": "activation sparsity",
+                    "activation_sparsity": "activation sparsity",
+                }
+            },
         }
 
     def prepare_experiment(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
@@ -660,6 +699,8 @@ class NeuralSignalPlugin(ResearchAdapter):
         records: list[dict[str, Any]] = []
         emitted_dataset_keys: set[str] = set()
         emitted_featureset_keys: set[str] = set()
+        root_run_family_id = str(state.get("root_run_family_id") or "")
+        root_research_direction = str(state.get("root_research_direction") or direction or "")
         source_next_step_record_id = str(state.get("source_next_step_record_id") or "")
         source_next_step_title = str(state.get("source_next_step_title") or "")
 
@@ -780,6 +821,8 @@ class NeuralSignalPlugin(ResearchAdapter):
                     },
                     "implementation": _implementation_summary(implementations_by_name.get(proposal_name)),
                     "evaluation_summary": evaluation_summary,
+                    "root_run_family_id": root_run_family_id,
+                    "root_research_direction": root_research_direction,
                 },
                 "metadata": {
                     "profile": profile.get("name", "neuralsignal"),
@@ -796,6 +839,8 @@ class NeuralSignalPlugin(ResearchAdapter):
                     "assessment": assessment,
                     "hypothesis_supported": hypothesis_supported,
                     "lessons": lessons,
+                    "root_run_family_id": root_run_family_id,
+                    "root_research_direction": root_research_direction,
                     "mlflow_run_id": result.get("mlflow_run_id") or model.get("mlflow_run_id") or "",
                     "mlflow_tracking_uri": str(getattr(get_config(), "mlflow_uri", "") or ""),
                     "mlflow_experiment": str((profile.get("storage") or {}).get("mlflow_experiment", "researcher_experiments")),
@@ -2303,7 +2348,7 @@ def _write_incremental_state_snapshot(step_name: str, state: dict[str, Any], del
             continue
         serializable[key] = value
 
-    out_path = Path("dev/state") / f"after_{step_name}.json"
+    out_path = dev_path("state", f"after_{step_name}.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(serializable, indent=2, default=str), encoding="utf-8")
 

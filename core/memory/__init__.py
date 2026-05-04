@@ -24,6 +24,7 @@ from .defaults import (
 )
 from .fingerprints import fingerprint_json
 from .models import (
+    CanonicalizationResult,
     MemoryBlobRef,
     MemoryEntity,
     MemoryLineage,
@@ -35,11 +36,16 @@ from .models import (
     MemoryReuseResult,
     MemorySearchHit,
     MemoryValidity,
+    ResearchKGNode,
+    ResearchKGRelation,
+    ResearchKGUpdate,
 )
+from .research_kg import build_research_kg_update, canonicalize_concept, knowledge_graph_config
 from .service import MemoryService
 
 __all__ = [
     "ChromaMemoryVectorStore",
+    "CanonicalizationResult",
     "MemoryBlobRef",
     "MemoryEntity",
     "MemoryLineage",
@@ -56,8 +62,10 @@ __all__ = [
     "Neo4jMemoryGraphStore",
     "NoopMemoryGraphStore",
     "build_memory_record",
+    "build_research_kg_update",
     "build_core_memory_records",
     "build_experiment_memory_records",
+    "canonicalize_concept",
     "dedupe_memory_records",
     "default_memory_projection",
     "default_memory_record_to_artifact",
@@ -69,5 +77,9 @@ __all__ = [
     "get_memory_vector_store",
     "memory_object_spec",
     "memory_object_specs",
+    "ResearchKGNode",
+    "ResearchKGRelation",
+    "ResearchKGUpdate",
+    "knowledge_graph_config",
     "record_from_vector_hit",
 ]

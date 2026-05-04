@@ -26,6 +26,7 @@ log = get_logger(__name__)
 
 def plan_implementation_node(state: ResearchState, profile: dict) -> dict:
     proposals = state.get("proposals") or []
+    proposal_seed_notes = str(state.get("proposal_seed_planning_notes") or "").strip()
 
     if not proposals:
         log.warning("plan_implementation_node | No proposals in state")
@@ -58,6 +59,7 @@ def plan_implementation_node(state: ResearchState, profile: dict) -> dict:
     user_content = (
         f"Available base classes:\n{base_class_docs}\n\n"
         f"Scan field constraints:{scan_constraints}\n"
+        f"{f'Operator proposal-seed notes:\n{proposal_seed_notes}\n\n' if proposal_seed_notes else ''}"
         f"Proposals to plan:\n{json.dumps(proposals, indent=2)}"
     )
 

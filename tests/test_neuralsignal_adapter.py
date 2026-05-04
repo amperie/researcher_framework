@@ -20,6 +20,7 @@ def _cfg(tmp_path):
     ns_src = tmp_path / "neuralsignal_src"
     ns_src.mkdir()
     return SimpleNamespace(
+        dev_root="dev",
         neuralsignal_src_path=str(ns_src),
         neuralsignal_python="python",
         experiment_timeout_seconds=30,

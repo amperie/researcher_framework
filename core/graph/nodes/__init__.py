@@ -16,6 +16,7 @@ from core.graph.nodes.create_model import create_model_node
 from core.graph.nodes.evaluate import evaluate_node
 from core.graph.nodes.store_results import store_results_node
 from core.graph.nodes.propose_next_steps import propose_next_steps_node
+from core.graph.nodes.rank_next_steps import rank_next_steps_node
 
 __all__ = [
     "research_node",
@@ -35,6 +36,7 @@ __all__ = [
     "evaluate_node",
     "store_results_node",
     "propose_next_steps_node",
+    "rank_next_steps_node",
 ]
 
 # Map step names (as declared in profile pipeline.steps) to node functions
@@ -56,4 +58,5 @@ STEP_REGISTRY: dict[str, object] = {
     "evaluate": evaluate_node,
     "store_results": store_results_node,
     "propose_next_steps": propose_next_steps_node,
+    "rank_next_steps": rank_next_steps_node,
 }

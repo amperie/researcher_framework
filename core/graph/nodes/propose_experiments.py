@@ -23,6 +23,22 @@ log = get_logger(__name__)
 
 
 def propose_experiments_node(state: ResearchState, profile: dict) -> dict:
+    seeded_proposals = state.get("proposals") or []
+    proposal_seed_record_id = str(state.get("source_proposal_seed_record_id") or "")
+    if proposal_seed_record_id and seeded_proposals:
+        log.info(
+            "propose_experiments_node | Using saved proposal seed record=%r proposals=%d",
+            proposal_seed_record_id,
+            len(seeded_proposals),
+        )
+        delta = {"proposals": seeded_proposals}
+        try:
+            persist_memory_records_for_state(profile, {**state, **delta})
+        except Exception as exc:
+            log.warning("propose_experiments_node | Memory persistence failed for proposal seed: %s", exc)
+            delta["errors"] = (state.get("errors") or []) + [f"propose_experiments: memory persistence failed: {exc}"]
+        return delta
+
     refined_ideas = state.get("refined_ideas") or []
     direction = state.get("research_direction", "")
 

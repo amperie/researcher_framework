@@ -47,6 +47,9 @@ uv sync
 
 All settings live in `configs/config.yaml`. Secrets use `${ENV_VAR}` syntax and are
 resolved from environment variables or an optional `configs/.env` file.
+The generated-work tree is rooted at `dev_root` there; by default it is `dev/`.
+The runtime also performs a periodic best-effort cleanup of disposable files
+under `dev_root` using `maintenance.dev_cleanup` in `configs/config.yaml`.
 
 Minimum: set your API key and backend URLs, either as env vars or in `configs/.env`:
 
@@ -104,7 +107,7 @@ uv run python run_node.py research --profile neuralsignal \
 
 # Resume from a saved state (e.g., after research has already run)
 uv run python run_node.py implement --profile neuralsignal \
-    --state-file dev/state/after_plan_implementation.json
+    --state-file <dev_root>/state/after_plan_implementation.json
 
 # List available steps
 uv run python run_node.py --list
@@ -113,7 +116,9 @@ uv run python run_node.py --list
 uv run python run_node.py
 ```
 
-State snapshots are saved automatically to `dev/state/after_<step>.json` after each run.
+State snapshots are saved automatically to `<dev_root>/state/after_<step>.json` after each run.
+Old snapshots, paper digests, generated tests, and terminal job directories are
+pruned periodically according to the configured retention windows.
 
 ---
 

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from configs.config import get_config
+from configs.config import get_config, resolve_dev_path
 from core.graph.nodes.artifact_refs import (
     register_implementation_artifact,
     register_validation_result_artifact,
@@ -44,7 +44,9 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
     llm_generate_tests: bool = validate_cfg.get("llm_generate_tests", not bool(contract_test))
     max_retries: int = validate_cfg.get("max_fix_retries", 3)
     test_runner: str = validate_cfg.get("test_runner", "uv run pytest")
-    test_output_dir = Path(validate_cfg.get("test_output_dir", "dev/experiments/tests"))
+    test_output_dir = resolve_dev_path(
+        validate_cfg.get("test_output_dir", "dev/experiments/tests")
+    )
     test_output_dir.mkdir(parents=True, exist_ok=True)
 
     cfg = get_config()

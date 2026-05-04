@@ -2,7 +2,7 @@
 
 Usage:
     uv run python run_node.py research --profile neuralsignal --direction "sparse autoencoders"
-    uv run python run_node.py implement --profile neuralsignal --state-file dev/state/after_plan.json
+    uv run python run_node.py implement --profile neuralsignal --state-file <dev_root>/state/after_plan.json
     uv run python run_node.py --list
     uv run python run_node.py           # interactive mode
 """
@@ -13,6 +13,8 @@ import json
 import sys
 from pathlib import Path
 
+from configs.config import dev_path, get_config
+from core.maintenance.dev_cleanup import run_periodic_dev_cleanup
 from core.utils.logger import setup_logging, get_logger
 from core.utils import fmt_value
 
@@ -38,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--direction", metavar="TEXT",
                         help="Override state['research_direction'].")
     parser.add_argument("--out", metavar="PATH",
-                        help="Where to save merged state (default: dev/state/after_<step>.json).")
+                        help="Where to save merged state (default: <dev_root>/state/after_<step>.json).")
     parser.add_argument("--no-save", action="store_true",
                         help="Print output but do not write state file.")
     parser.add_argument("--list", action="store_true",
@@ -61,7 +63,6 @@ def _load_profile(profile_name: str | None, state: dict) -> dict:
 
 def _add_plugin_to_path(profile: dict) -> None:
     from pathlib import Path
-    from configs.config import get_config
     cfg = get_config()
     if profile.get("name") == "neuralsignal":
         ns_path = Path(cfg.neuralsignal_src_path).resolve()
@@ -134,13 +135,21 @@ def _run_once(step_name: str, args: argparse.Namespace) -> None:
         except Exception:
             log.debug("run_node | Skipping non-serialisable key %r", k)
 
-    out_path = Path(args.out) if args.out else Path("dev/state") / f"after_{step_name}.json"
+    out_path = Path(args.out) if args.out else dev_path("state", f"after_{step_name}.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(serialisable, indent=2, default=str), encoding="utf-8")
     print(f"[run_node] State saved → {out_path}\n")
 
 
 def main() -> None:
+    cleanup = run_periodic_dev_cleanup()
+    if not cleanup.skipped and (cleanup.deleted_files or cleanup.deleted_dirs or cleanup.errors):
+        log.info(
+            "dev_cleanup | files=%d dirs=%d errors=%d",
+            len(cleanup.deleted_files),
+            len(cleanup.deleted_dirs),
+            len(cleanup.errors),
+        )
     args = parse_args()
 
     if args.list:
@@ -173,7 +182,7 @@ def main() -> None:
         print(f"  Invalid: {raw!r}")
 
     if not args.state_file:
-        dev_dir = Path("dev/state")
+        dev_dir = dev_path("state")
         fixtures = sorted(dev_dir.glob("after_*.json")) if dev_dir.exists() else []
         if fixtures:
             print("\nAvailable state files:")

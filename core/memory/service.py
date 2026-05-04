@@ -20,6 +20,7 @@ from core.memory.defaults import (
     memory_object_spec,
     record_from_vector_hit,
 )
+from core.memory.research_kg import build_research_kg_update
 from core.memory.models import (
     MemoryObjectSpec,
     MemoryProjection,
@@ -42,10 +43,12 @@ class MemoryService:
         document_store: MemoryDocumentStore,
         vector_store: MemoryVectorStore,
         graph_store: MemoryGraphStore | None = None,
+        profile: dict[str, Any] | None = None,
     ) -> None:
         self.document_store = document_store
         self.vector_store = vector_store
         self.graph_store = graph_store
+        self.profile = dict(profile or {})
 
     @classmethod
     def for_profile(cls, profile: dict[str, Any]) -> "MemoryService":
@@ -61,6 +64,7 @@ class MemoryService:
             document_store=get_memory_document_store(profile),
             vector_store=get_memory_vector_store(profile),
             graph_store=get_memory_graph_store(profile),
+            profile=profile,
         )
 
     def persist_record(
@@ -101,24 +105,25 @@ class MemoryService:
             sorted((plan.get("vector_metadata") or {}).keys()),
         )
         if self.graph_store is not None:
-            nodes = list(plan.get("graph_nodes") or [])
-            edges = list(plan.get("graph_edges") or [])
-            self.graph_store.upsert(
-                record,
-                nodes=nodes,
-                edges=edges,
+            kg_update = dict(plan.get("kg_update") or {})
+            if not (kg_update.get("nodes") or kg_update.get("relations")):
+                kg_update = build_research_kg_update(
+                    record,
+                    profile=self.profile,
+                    canonical_lookup=self.graph_store,
+                )
+            self.graph_store.upsert(record, kg_update=kg_update)
+            log.debug(
+                "memory.service | Graph projection upserted id=%r nodes=%d relations=%d",
+                record_id,
+                len(kg_update.get("nodes") or []),
+                len(kg_update.get("relations") or []),
             )
             log.debug(
-                "memory.service | Graph projection upserted id=%r nodes=%d edges=%d",
+                "memory.service | Graph payload id=%r node_types=%s relation_types=%s",
                 record_id,
-                len(nodes),
-                len(edges),
-            )
-            log.debug(
-                "memory.service | Graph payload id=%r node_types=%s edge_types=%s",
-                record_id,
-                [str(node.get("node_type") or "") for node in nodes],
-                [str(edge.get("edge_type") or "") for edge in edges],
+                [str(node.get("node_type") or "") for node in (kg_update.get("nodes") or [])],
+                [str(edge.get("relation_type") or "") for edge in (kg_update.get("relations") or [])],
             )
 
     def persist_records(
@@ -413,6 +418,46 @@ class MemoryService:
         for record in records:
             self.persist_record(record)
         log.info("memory.service | Repaired %d memory projection(s)", len(records))
+        return len(records)
+
+    def rebuild_graph_from_documents(
+        self,
+        filters: dict[str, Any] | None = None,
+        *,
+        limit: int = 1000,
+        reset_first: bool = True,
+    ) -> int:
+        """Reset Neo4j graph content and rebuild it from canonical Mongo records."""
+        if self.graph_store is None:
+            log.warning("memory.service | Graph rebuild skipped; graph store not configured")
+            return 0
+        active_filters = dict(filters or {})
+        domain = str(active_filters.get("domain") or self.profile.get("name") or "")
+        log.info(
+            "memory.service | Rebuilding graph from documents filters=%s limit=%d reset_first=%s",
+            active_filters,
+            limit,
+            reset_first,
+        )
+        if reset_first:
+            try:
+                self.graph_store.reset(domain=domain or None)
+            except Exception as exc:
+                log.error("memory.service | Graph reset failed domain=%r: %s", domain, exc)
+                raise
+        records = self.find_records(active_filters, limit=limit)
+        for record in records:
+            kg_update = build_research_kg_update(
+                record,
+                profile=self.profile,
+                canonical_lookup=self.graph_store,
+            )
+            self.graph_store.upsert(record, kg_update=kg_update)
+        try:
+            self.graph_store.prune_orphan_entities()
+        except Exception as exc:
+            log.warning("memory.service | Graph prune after rebuild failed: %s", exc)
+        log.info("memory.service | Rebuilt graph from %d record(s)", len(records))
         return len(records)
 
     def graph_query(

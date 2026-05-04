@@ -8,7 +8,7 @@ from typing import Any
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.memory import MemoryService, Neo4jMemoryGraphStore, default_memory_projection, fingerprint_for_spec, memory_object_specs
+from core.memory import MemoryService, Neo4jMemoryGraphStore, build_research_kg_update, default_memory_projection, fingerprint_for_spec, memory_object_specs
 from core.memory.backends import get_memory_graph_store
 
 
@@ -48,12 +48,23 @@ class InMemoryVectorStore:
 class InMemoryGraphStore:
     def __init__(self) -> None:
         self.records: list[dict[str, Any]] = []
+        self.reset_calls: list[str | None] = []
 
-    def upsert(self, record: dict[str, Any], *, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
-        self.records.append({"record_id": record["record_id"], "nodes": nodes, "edges": edges})
+    def upsert(self, record: dict[str, Any], *, kg_update: dict[str, Any]) -> None:
+        self.records.append({"record_id": record["record_id"], "kg_update": kg_update})
 
     def query(self, *, node_type=None, node_key=None, edge_type=None, limit=50):
         return self.records[:limit]
+
+    def list_candidates(self, *, domain: str, node_type: str, limit: int = 25):
+        return []
+
+    def prune_orphan_entities(self) -> None:
+        return None
+
+    def reset(self, *, domain: str | None = None) -> None:
+        self.reset_calls.append(domain)
+        self.records.clear()
 
 
 PROFILE = {
@@ -214,6 +225,50 @@ def test_repair_projections_reindexes_canonical_records():
     assert vector_store.get_by_id("r1") is not None
 
 
+def test_rebuild_graph_from_documents_resets_and_replays_records():
+    document_store = InMemoryDocumentStore()
+    vector_store = InMemoryVectorStore()
+    graph_store = InMemoryGraphStore()
+    service = MemoryService(
+        document_store=document_store,
+        vector_store=vector_store,
+        graph_store=graph_store,
+        profile={
+            "name": "demo",
+            "evaluation": {"primary_metric": "test_auc", "thresholds": {"test_auc": 0.65}},
+            "knowledge_graph": {"canonicalization": {"llm_enabled": False}},
+        },
+    )
+    document_store.upsert({
+        "record_id": "exp-1",
+        "domain": "demo",
+        "kind": "demo_experiment",
+        "object_type": "experiment_result",
+        "object_key": "exp-1",
+        "title": "activation_sparsity",
+        "summary": "Sparse activations reached AUC 0.91 on DemoBench.",
+        "content": {
+            "proposal_name": "activation_sparsity",
+            "proposal": {"dataset": "DemoBench", "description": "Sparse activations improve AUC"},
+            "metrics": {"test_auc": 0.91},
+            "research_direction": "find useful probes",
+        },
+        "metadata": {
+            "dataset": "DemoBench",
+            "feature_set_class_name": "ActivationSparsity",
+            "assessment": "strong",
+        },
+        "tags": ["demo"],
+    })
+
+    rebuilt = service.rebuild_graph_from_documents({"domain": "demo"})
+
+    assert rebuilt == 1
+    assert graph_store.reset_calls == ["demo"]
+    assert len(graph_store.records) == 1
+    assert any(node["node_type"] == "Evidence" for node in graph_store.records[0]["kg_update"]["nodes"])
+
+
 def test_default_memory_projection_flattens_list_metadata_for_vectors():
     projection = default_memory_projection({
         "record_id": "r1",
@@ -234,16 +289,70 @@ def test_default_memory_projection_flattens_list_metadata_for_vectors():
     assert projection["vector_metadata"]["tags"] == "demo|note"
     assert projection["vector_metadata"]["lessons"] == "first | second"
     assert projection["vector_metadata"]["feature_importance_keys"] == "a | b"
+    assert projection["kg_update"]["nodes"] == []
+    assert projection["kg_update"]["relations"] == []
+
+
+def test_build_research_kg_update_distills_experiment_record():
+    profile = {
+        "name": "demo",
+        "evaluation": {
+            "primary_metric": "test_auc",
+            "thresholds": {"test_auc": 0.65},
+        },
+        "knowledge_graph": {
+            "canonicalization": {"llm_enabled": False},
+            "metric_bands": [
+                {
+                    "metric_name": "test_auc",
+                    "operator": ">=",
+                    "threshold": 0.9,
+                    "display_name": "test_auc >= 0.90",
+                    "band_key": "test_auc_gte_0_90",
+                }
+            ],
+        },
+    }
+
+    update = build_research_kg_update(
+        {
+            "record_id": "exp-1",
+            "domain": "demo",
+            "kind": "demo_experiment",
+            "object_type": "experiment_result",
+            "title": "activation_sparsity",
+            "summary": "Sparse activations reached AUC 0.91 on DemoBench.",
+            "content": {
+                "proposal_name": "activation_sparsity",
+                "proposal": {"dataset": "DemoBench", "description": "Sparse activations improve AUC"},
+                "metrics": {"test_auc": 0.91},
+                "research_direction": "find useful probes",
+            },
+            "metadata": {
+                "dataset": "DemoBench",
+                "feature_set_class_name": "ActivationSparsity",
+                "assessment": "strong",
+            },
+        },
+        profile=profile,
+    )
+
+    node_types = {node["node_type"] for node in update["nodes"]}
+    relation_types = {relation["relation_type"] for relation in update["relations"]}
+
+    assert {"Question", "Hypothesis", "Method", "Evidence", "Dataset", "Metric", "Finding", "PerformanceBand"} <= node_types
+    assert {"HAS_HYPOTHESIS", "TESTED_BY", "SUPPORTED_BY", "USES_METHOD", "ON_DATASET", "MEASURED_BY", "PRODUCED_FINDING", "IN_PERFORMANCE_BAND"} <= relation_types
 
 
 def test_neo4j_graph_store_upserts_projection_and_decodes_query_metadata():
     driver = FakeNeo4jDriver(query_rows=[
         {
             "item": {
-                "node_type": "dataset",
-                "node_key": "abc",
-                "name": "Dataset ABC",
-                "metadata_json": '{"domain": "demo", "rows": 2}',
+                "node_type": "Dataset",
+                "canonical_id": "demo:dataset:abc",
+                "display_name": "Dataset ABC",
+                "aliases": ["Dataset ABC"],
+                "metadata_json": '{"rows": 2}',
                 "record_ids": ["record-1"],
             }
         }
@@ -268,28 +377,77 @@ def test_neo4j_graph_store_upserts_projection_and_decodes_query_metadata():
             "metadata": {"nested": {"ok": True}},
             "tags": ["demo"],
         },
-        nodes=[{"node_type": "dataset", "node_key": "abc", "name": "Dataset ABC", "metadata": {"rows": 2}}],
-        edges=[{
-            "edge_type": "created_by",
-            "source_type": "dataset",
-            "source_key": "abc",
-            "target_type": "proposal",
-            "target_key": "proposal-1",
-            "metadata": {"score": 0.5},
-        }],
+        kg_update={
+            "record_id": "record-1",
+            "domain": "demo",
+            "nodes": [{
+                "node_type": "Dataset",
+                "canonical_id": "demo:dataset:abc",
+                "display_name": "Dataset ABC",
+                "aliases": ["Dataset ABC"],
+                "properties": {"rows": 2},
+            }],
+            "relations": [{
+                "relation_type": "ON_DATASET",
+                "source_id": "demo:evidence:e1",
+                "target_id": "demo:dataset:abc",
+                "properties": {"score": 0.5},
+            }],
+        },
     )
-    rows = store.query(node_type="dataset", node_key="abc")
+    rows = store.query(node_type="Dataset", node_key="demo:dataset:abc")
 
     assert rows == [{
-        "node_type": "dataset",
-        "node_key": "abc",
-        "name": "Dataset ABC",
+        "node_type": "Dataset",
+        "canonical_id": "demo:dataset:abc",
+        "display_name": "Dataset ABC",
+        "aliases": ["Dataset ABC"],
         "record_ids": ["record-1"],
-        "metadata": {"domain": "demo", "rows": 2},
+        "metadata": {"rows": 2},
     }]
-    assert any("MERGE (record:MemoryRecord" in call["query"] for call in driver.write_calls)
-    assert any("MEMORY_RELATION" in call["query"] for call in driver.write_calls)
+    assert any("MERGE (record:ResearchKGRecord" in call["query"] for call in driver.write_calls)
+    assert any("KG_RELATION" in call["query"] for call in driver.write_calls)
     assert driver.session_databases == ["neo4j", "neo4j"]
+
+
+def test_neo4j_graph_store_upsert_accepts_relation_metadata_domain_without_duplicate_kwarg():
+    driver = FakeNeo4jDriver()
+    store = Neo4jMemoryGraphStore(
+        uri="bolt://localhost:7687",
+        username="neo4j",
+        password="password",
+        database="neo4j",
+        driver=driver,
+    )
+
+    store.upsert(
+        {
+            "record_id": "record-1",
+            "domain": "demo",
+            "kind": "demo_dataset",
+            "object_type": "dataset",
+            "object_key": "abc",
+            "title": "Dataset ABC",
+            "summary": "ready",
+            "metadata": {},
+            "tags": ["demo"],
+        },
+        kg_update={
+            "record_id": "record-1",
+            "domain": "demo",
+            "nodes": [],
+            "relations": [{
+                "relation_type": "ON_DATASET",
+                "source_id": "edge-domain:evidence:e1",
+                "target_id": "edge-domain:dataset:abc",
+                "properties": {"domain": "edge-domain", "score": 0.5},
+            }],
+        },
+    )
+
+    relation_calls = [call for call in driver.write_calls if "MERGE (source)-[rel:KG_RELATION" in call["query"]]
+    assert len(relation_calls) == 1
+    assert relation_calls[0]["params"]["domain"] == "edge-domain"
 
 
 def test_get_memory_graph_store_uses_profile_storage_database_override():

@@ -1,13 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import mlflow
+import pymongo
 from mlflow.tracking import MlflowClient
 
 from configs.config import get_config
 from core.artifacts.store import MongoArtifactMetadataStore
+from core.handoffs import (
+    build_handoff_cli_command,
+    build_handoff_draft,
+    build_next_step_cli_command,
+    build_handoff_prompt_preview,
+    build_proposal_seed_cli_command,
+    build_proposal_seed_draft,
+    build_proposal_seed_preview,
+    handoff_record_to_summary,
+    list_proposal_seeds,
+    list_run_handoffs,
+    proposal_seed_record_to_summary,
+    save_proposal_seed,
+    save_run_handoff,
+)
 from core.maintenance import delete_profile_orphans, scan_profiles
 from core.memory import MemoryService
 from core.memory.backends import get_memory_document_store
@@ -44,28 +61,41 @@ def list_run_summaries(*, profile_name: str | None = None, limit: int = 100) -> 
     for ctx in load_profile_contexts():
         if profile_name and ctx.name != profile_name:
             continue
+        seen_ids: set[str] = set()
         try:
             records = ctx.memory_service.find_records({"object_type": "experiment_result"}, limit=limit)
         except Exception:
             continue
         for record in records:
             metadata = dict(record.get("metadata") or {})
+            record_id = str(record.get("record_id") or "")
+            experiment_id = str(metadata.get("experiment_id") or "")
+            if record_id:
+                seen_ids.add(record_id)
+            if experiment_id:
+                seen_ids.add(experiment_id)
             mlflow_bundle = _mlflow_bundle(ctx.profile, metadata)
             runs.append({
                 "profile_name": ctx.name,
-                "record_id": str(record.get("record_id") or ""),
+                "record_id": record_id,
                 "title": str(record.get("title") or ""),
                 "created_at": str(record.get("created_at") or ""),
-                "experiment_id": str(metadata.get("experiment_id") or ""),
+                "experiment_id": experiment_id,
                 "proposal_name": str(metadata.get("proposal_name") or ""),
                 "dataset": str(metadata.get("dataset") or ""),
                 "detector": str(metadata.get("detector") or ""),
                 "assessment": str(metadata.get("assessment") or ""),
                 "mlflow_run_id": str(metadata.get("mlflow_run_id") or ""),
                 "mlflow_ui_url": str(mlflow_bundle.get("ui_url") or ""),
+                "root_run_family_id": str(metadata.get("root_run_family_id") or ""),
+                "root_research_direction": str(metadata.get("root_research_direction") or metadata.get("research_direction") or ""),
+                "source_next_step_title": str(metadata.get("source_next_step_title") or ""),
                 "primary_metric_name": _primary_metric_name(ctx.profile, metadata),
                 "primary_metric_value": metadata.get(_primary_metric_name(ctx.profile, metadata), None),
+                "source": "memory",
             })
+        for raw_run in _raw_result_summaries(ctx.profile, limit=limit, seen_ids=seen_ids):
+            runs.append({"profile_name": ctx.name, **raw_run})
     runs.sort(key=lambda item: item.get("created_at", ""), reverse=True)
     return runs[:limit]
 
@@ -123,9 +153,51 @@ def delete_orphans(*, profile_name: str | None = None) -> dict[str, Any]:
     return delete_profile_orphans(_load_profiles(profile_name))
 
 
+def create_run_handoff(profile_name: str, record_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    ctx = _load_context(profile_name)
+    record = ctx.memory_service.document_store.get(record_id)
+    if not record:
+        record = _raw_result_record(ctx.profile, record_id)
+    if not record:
+        raise KeyError(f"Run record not found: profile={profile_name} record_id={record_id}")
+
+    saved = save_run_handoff(ctx.profile, record, payload)
+    saved_records = list_run_handoffs(ctx.profile, source_experiment_record_id=str(record.get("record_id") or ""), limit=20)
+    saved_summaries = [handoff_record_to_summary(profile_name, item) for item in saved_records]
+    return {
+        "handoff": handoff_record_to_summary(profile_name, saved),
+        "saved_handoffs": saved_summaries,
+    }
+
+
+def create_proposal_seed(profile_name: str, record_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    ctx = _load_context(profile_name)
+    record = ctx.memory_service.document_store.get(record_id)
+    if not record:
+        record = _raw_result_record(ctx.profile, record_id)
+    if not record:
+        raise KeyError(f"Run record not found: profile={profile_name} record_id={record_id}")
+
+    related_records = _related_records(ctx, record)
+    saved = save_proposal_seed(ctx.profile, record, payload)
+    saved_records = list_proposal_seeds(ctx.profile, source_experiment_record_id=str(record.get("record_id") or ""), limit=20)
+    saved_summaries = [proposal_seed_record_to_summary(profile_name, item) for item in saved_records]
+    draft = build_proposal_seed_draft(profile_name, record, related_records, _run_text_panels(record, related_records))
+    return {
+        "proposal_seed": proposal_seed_record_to_summary(profile_name, saved),
+        "saved_proposal_seeds": saved_summaries,
+        "draft": {
+            **draft,
+            "prompt_preview": build_proposal_seed_preview(draft),
+        },
+    }
+
+
 def get_run_bundle(profile_name: str, record_id: str) -> dict[str, Any]:
     ctx = _load_context(profile_name)
     record = ctx.memory_service.document_store.get(record_id)
+    if not record:
+        record = _raw_result_record(ctx.profile, record_id)
     if not record:
         raise KeyError(f"Run record not found: profile={profile_name} record_id={record_id}")
 
@@ -137,7 +209,19 @@ def get_run_bundle(profile_name: str, record_id: str) -> dict[str, Any]:
     related_records = _related_records(ctx, record)
     artifacts = _artifact_records(ctx.profile, record, metadata)
     graph = _graph_bundle(ctx, record)
+    family = _family_bundle(ctx, record)
     mlflow_bundle = _mlflow_bundle(ctx.profile, metadata)
+    text_panels = _run_text_panels(record, related_records)
+    handoff_draft = build_handoff_draft(profile_name, record, text_panels)
+    proposal_seed_draft = build_proposal_seed_draft(profile_name, record, related_records, text_panels)
+    saved_handoffs = [
+        handoff_record_to_summary(profile_name, item)
+        for item in list_run_handoffs(ctx.profile, source_experiment_record_id=str(record.get("record_id") or ""), limit=20)
+    ]
+    saved_proposal_seeds = [
+        proposal_seed_record_to_summary(profile_name, item)
+        for item in list_proposal_seeds(ctx.profile, source_experiment_record_id=str(record.get("record_id") or ""), limit=20)
+    ]
 
     return {
         "profile_name": profile_name,
@@ -154,10 +238,41 @@ def get_run_bundle(profile_name: str, record_id: str) -> dict[str, Any]:
                 "created_at": str(record.get("created_at") or ""),
                 "mlflow_run_id": str(metadata.get("mlflow_run_id") or ""),
                 "mlflow_ui_url": str(mlflow_bundle.get("ui_url") or ""),
+                "root_run_family_id": str(metadata.get("root_run_family_id") or ""),
+                "root_research_direction": str(metadata.get("root_research_direction") or metadata.get("research_direction") or ""),
+                "source_next_step_title": str(metadata.get("source_next_step_title") or ""),
                 "primary_metric_name": _primary_metric_name(ctx.profile, metadata),
                 "primary_metric_value": metadata.get(_primary_metric_name(ctx.profile, metadata), None),
             },
-            "text_panels": _run_text_panels(record, related_records),
+            "text_panels": text_panels,
+            "next_steps": _next_step_summaries(profile_name, related_records),
+            "family": family,
+            "handoff": {
+                "draft": {
+                    **handoff_draft,
+                    "prompt_preview": build_handoff_prompt_preview(handoff_draft),
+                    "copy_command": "",
+                },
+                "saved": saved_handoffs,
+                "copy_command_template": build_handoff_cli_command(
+                    profile_name,
+                    source_experiment_record_id=str(record.get("record_id") or ""),
+                    handoff_record_id="<handoff-record-id>",
+                ),
+            },
+            "proposal_seed": {
+                "draft": {
+                    **proposal_seed_draft,
+                    "prompt_preview": build_proposal_seed_preview(proposal_seed_draft),
+                    "copy_command": "",
+                },
+                "saved": saved_proposal_seeds,
+                "copy_command_template": build_proposal_seed_cli_command(
+                    profile_name,
+                    source_experiment_record_id=str(record.get("record_id") or ""),
+                    proposal_seed_record_id="<proposal-seed-record-id>",
+                ),
+            },
         },
         "backend": {
             "mongo": {
@@ -190,6 +305,131 @@ def _load_profiles(profile_name: str | None = None) -> dict[str, dict[str, Any]]
             continue
         profiles[name] = load_profile(name)
     return profiles
+
+
+def _results_store(profile: dict[str, Any]) -> tuple[Any, str, str]:
+    cfg = get_config()
+    storage_cfg = profile.get("storage") or {}
+    client = pymongo.MongoClient(cfg.mongo_url)
+    db_name = storage_cfg.get("mongodb_results_db", "researcher_results")
+    collection_name = storage_cfg.get("mongodb_results_collection", "experiments")
+    return client, str(db_name), str(collection_name)
+
+
+def _raw_result_summaries(profile: dict[str, Any], *, limit: int, seen_ids: set[str]) -> list[dict[str, Any]]:
+    client, db_name, collection_name = _results_store(profile)
+    try:
+        docs = list(
+            client[db_name][collection_name]
+            .find({}, {"_id": 0})
+            .sort("inserted_at", -1)
+            .limit(limit)
+        )
+    except Exception:
+        return []
+    finally:
+        client.close()
+
+    output: list[dict[str, Any]] = []
+    primary_metric_name = _primary_metric_name(profile, {})
+    for doc in docs:
+        experiment_id = str(doc.get("experiment_id") or "")
+        record_id = experiment_id or str(doc.get("proposal_name") or "")
+        if not record_id or record_id in seen_ids:
+            continue
+        metrics = dict(doc.get("metrics") or {})
+        model = dict(doc.get("model") or {})
+        mlflow_run_id = str(doc.get("mlflow_run_id") or model.get("mlflow_run_id") or "")
+        mlflow_bundle = _mlflow_bundle(profile, {"mlflow_run_id": mlflow_run_id, **metrics})
+        output.append({
+            "record_id": record_id,
+            "title": str(doc.get("proposal_name") or record_id),
+            "created_at": str(doc.get("inserted_at") or ""),
+            "experiment_id": experiment_id,
+            "proposal_name": str(doc.get("proposal_name") or ""),
+            "dataset": str((doc.get("proposal") or {}).get("dataset") or ""),
+            "detector": str((doc.get("proposal") or {}).get("detector") or ""),
+            "assessment": str(((doc.get("evaluation_summary") or {}).get("per_proposal_analysis") or {}).get(str(doc.get("proposal_name") or ""), {}).get("assessment") or ""),
+            "mlflow_run_id": mlflow_run_id,
+            "mlflow_ui_url": str(mlflow_bundle.get("ui_url") or ""),
+            "root_run_family_id": str(doc.get("root_run_family_id") or ""),
+            "root_research_direction": str(doc.get("root_research_direction") or doc.get("research_direction") or ""),
+            "source_next_step_title": str(doc.get("source_next_step_title") or ""),
+            "primary_metric_name": primary_metric_name,
+            "primary_metric_value": metrics.get(primary_metric_name),
+            "source": "results_mongo",
+        })
+    return output
+
+
+def _raw_result_record(profile: dict[str, Any], record_id: str) -> dict[str, Any] | None:
+    client, db_name, collection_name = _results_store(profile)
+    try:
+        doc = client[db_name][collection_name].find_one(
+            {"$or": [{"experiment_id": record_id}, {"proposal_name": record_id}]},
+            {"_id": 0},
+        )
+    except Exception:
+        return None
+    finally:
+        client.close()
+    if not doc:
+        return None
+    return _synthetic_memory_record_from_result(profile, doc)
+
+
+def _synthetic_memory_record_from_result(profile: dict[str, Any], doc: dict[str, Any]) -> dict[str, Any]:
+    experiment_id = str(doc.get("experiment_id") or "")
+    proposal_name = str(doc.get("proposal_name") or "unknown")
+    metrics = dict(doc.get("metrics") or {})
+    evaluation_summary = dict(doc.get("evaluation_summary") or {})
+    proposal_analysis = dict((evaluation_summary.get("per_proposal_analysis") or {}).get(proposal_name) or {})
+    artifact_refs = list(((doc.get("model") or {}).get("stored_figure_artifacts") or []))
+    return {
+        "record_id": experiment_id or proposal_name,
+        "domain": str(profile.get("name") or ""),
+        "kind": "prior_experiment",
+        "object_type": "experiment_result",
+        "object_key": experiment_id or proposal_name,
+        "object_role": "result",
+        "schema_version": "1",
+        "title": proposal_name,
+        "summary": str(proposal_analysis.get("assessment") or ""),
+        "content": {
+            "experiment_id": experiment_id,
+            "proposal_name": proposal_name,
+            "metrics": metrics,
+            "model": doc.get("model") or {},
+            "evaluation_summary": evaluation_summary,
+            "research_direction": str(doc.get("research_direction") or ""),
+        },
+        "metadata": {
+            "experiment_id": experiment_id,
+            "proposal_name": proposal_name,
+            "profile": str(doc.get("profile") or profile.get("name") or ""),
+            "research_direction": str(doc.get("research_direction") or ""),
+            "root_run_family_id": str(doc.get("root_run_family_id") or ""),
+            "root_research_direction": str(doc.get("root_research_direction") or doc.get("research_direction") or ""),
+            "source_next_step_title": str(doc.get("source_next_step_title") or ""),
+            "assessment": str(proposal_analysis.get("assessment") or ""),
+            "hypothesis_supported": proposal_analysis.get("hypothesis_supported"),
+            "lessons": proposal_analysis.get("lessons") or [],
+            "mlflow_run_id": str(doc.get("mlflow_run_id") or ""),
+            **{k: float(v) for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
+        },
+        "created_at": str(doc.get("inserted_at") or ""),
+        "blob_refs": [
+            {
+                "artifact_id": ref.get("artifact_id"),
+                "name": ref.get("name"),
+                "uri": ref.get("uri"),
+            }
+            for ref in artifact_refs
+            if isinstance(ref, dict)
+        ],
+        "entities": [],
+        "relations": [],
+    }
 
 
 def _primary_metric_name(profile: dict[str, Any], metadata: dict[str, Any]) -> str:
@@ -317,6 +557,86 @@ def _graph_bundle(ctx: ProfileContext, run_record: dict[str, Any]) -> dict[str, 
     }
 
 
+def _family_bundle(ctx: ProfileContext, run_record: dict[str, Any]) -> dict[str, Any]:
+    metadata = dict(run_record.get("metadata") or {})
+    family_id = str(metadata.get("root_run_family_id") or "")
+    root_direction = str(metadata.get("root_research_direction") or metadata.get("research_direction") or "")
+    if not family_id:
+        return {
+            "family_id": "",
+            "root_research_direction": root_direction,
+            "runs": [],
+            "graph": {
+                "nodes": [],
+                "edges": [],
+            },
+        }
+
+    records: list[dict[str, Any]] = []
+    try:
+        records = list(ctx.memory_service.find_records({"metadata.root_run_family_id": family_id}, limit=500))
+    except Exception:
+        records = []
+    records = [record for record in records if str(record.get("object_type") or "") == "experiment_result"]
+
+    if not records:
+        records = _raw_family_records(ctx.profile, family_id)
+
+    records.sort(key=lambda item: str(item.get("created_at") or ""))
+    return {
+        "family_id": family_id,
+        "root_research_direction": root_direction,
+        "runs": [_family_run_summary(ctx.profile, record) for record in records],
+        "graph": _family_graph_bundle(records),
+    }
+
+
+def _raw_family_records(profile: dict[str, Any], family_id: str) -> list[dict[str, Any]]:
+    client, db_name, collection_name = _results_store(profile)
+    try:
+        docs = list(
+            client[db_name][collection_name]
+            .find({"root_run_family_id": family_id}, {"_id": 0})
+            .sort("inserted_at", 1)
+        )
+    except Exception:
+        return []
+    finally:
+        client.close()
+    return [_synthetic_memory_record_from_result(profile, doc) for doc in docs]
+
+
+def _family_run_summary(profile: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    metadata = dict(record.get("metadata") or {})
+    mlflow_bundle = _mlflow_bundle(profile, metadata)
+    return {
+        "record_id": str(record.get("record_id") or ""),
+        "title": str(record.get("title") or ""),
+        "created_at": str(record.get("created_at") or ""),
+        "experiment_id": str(metadata.get("experiment_id") or ""),
+        "proposal_name": str(metadata.get("proposal_name") or ""),
+        "research_direction": str(metadata.get("research_direction") or ""),
+        "source_next_step_title": str(metadata.get("source_next_step_title") or ""),
+        "assessment": str(metadata.get("assessment") or ""),
+        "mlflow_run_id": str(metadata.get("mlflow_run_id") or ""),
+        "mlflow_ui_url": str(mlflow_bundle.get("ui_url") or ""),
+        "primary_metric_name": _primary_metric_name(profile, metadata),
+        "primary_metric_value": metadata.get(_primary_metric_name(profile, metadata), None),
+    }
+
+
+def _family_graph_bundle(records: list[dict[str, Any]]) -> dict[str, Any]:
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    for record in records:
+        nodes.extend(list(record.get("entities") or []))
+        edges.extend(list(record.get("relations") or []))
+    return {
+        "nodes": _dedupe_dicts(nodes, ("entity_type", "key")),
+        "edges": _dedupe_dicts(edges, ("relation_type", "source_type", "source_key", "target_type", "target_key")),
+    }
+
+
 def _mlflow_bundle(profile: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
     cfg = get_config()
     run_id = str(metadata.get("mlflow_run_id") or "")
@@ -434,6 +754,7 @@ def _run_text_panels(run_record: dict[str, Any], related_records: list[dict[str,
 
     evaluation_record = _find_related_record(related_records, "evaluation_summary")
     add_panel("Evaluation Summary", _record_text(evaluation_record))
+    add_panel("Proposed Next Steps", _next_steps_text(related_records))
     return panels
 
 
@@ -494,6 +815,57 @@ def _record_content_value(record: dict[str, Any] | None, key: str) -> str:
         return ""
     value = content.get(key)
     return str(value or "")
+
+
+def _next_steps_text(records: list[dict[str, Any]]) -> str:
+    next_step_records = _next_step_records(records)
+    if not next_step_records:
+        return ""
+    next_step_records.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    blocks: list[str] = []
+    for index, record in enumerate(next_step_records, 1):
+        content = record.get("content") if isinstance(record.get("content"), dict) else {}
+        title = str(record.get("title") or content.get("title") or content.get("suggested_direction") or f"next_step_{index}").strip()
+        priority = content.get("priority")
+        suggested_direction = str(content.get("suggested_direction") or "").strip()
+        rationale = str(content.get("rationale") or "").strip()
+        lines = [f"{index}. {title}"]
+        if priority not in (None, ""):
+            lines.append(f"Priority: {priority}")
+        if suggested_direction:
+            lines.append(f"Suggested Direction: {suggested_direction}")
+        if rationale:
+            lines.append(f"Rationale: {rationale}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks).strip()
+
+
+def _next_step_summaries(profile_name: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for record in _next_step_records(records):
+        content = record.get("content") if isinstance(record.get("content"), dict) else {}
+        metadata = dict(record.get("metadata") or {})
+        record_id = str(record.get("record_id") or "")
+        title = str(record.get("title") or content.get("title") or content.get("suggested_direction") or "").strip()
+        summaries.append({
+            "record_id": record_id,
+            "title": title,
+            "priority": content.get("priority"),
+            "suggested_direction": str(content.get("suggested_direction") or "").strip(),
+            "rationale": str(content.get("rationale") or "").strip(),
+            "created_at": str(record.get("created_at") or ""),
+            "research_direction": str(metadata.get("research_direction") or ""),
+            "copy_command": build_next_step_cli_command(profile_name, next_step_record_id=record_id) if record_id else "",
+        })
+    summaries.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return summaries
+
+
+def _next_step_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        record for record in records
+        if str(record.get("kind") or record.get("object_type") or "") == "next_step"
+    ]
 
 
 def _mapping_text(value: dict[str, Any], fields: list[tuple[str, str]]) -> str:

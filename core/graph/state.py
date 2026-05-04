@@ -30,6 +30,18 @@ class ResearchState(TypedDict, total=False):
     source_next_step_title: str
     """Human-readable next_step title carried forward for graph lineage."""
 
+    source_proposal_seed_record_id: str
+    """Optional lineage pointer to a saved proposal-stage seed that initiated this run."""
+
+    source_proposal_seed_title: str
+    """Human-readable proposal-seed title carried forward for lineage and UI."""
+
+    root_run_family_id: str
+    """Stable lineage id shared by the initial direction and all descendant runs."""
+
+    root_research_direction: str
+    """The initial research direction that seeded the current run family."""
+
     # -------------------------------------------------------------------------
     # research step
     # -------------------------------------------------------------------------
@@ -47,7 +59,7 @@ class ResearchState(TypedDict, total=False):
     paper_digests: list[dict]
     """Structured digests from full-text of top-scored papers.
     Each dict: {arxiv_id, title, published, abstract, digest}.
-    Cached to dev/papers/<arxiv_id>.digest."""
+    Cached under the configured dev root at papers/<arxiv_id>.digest."""
 
     # -------------------------------------------------------------------------
     # ideate step
@@ -69,6 +81,9 @@ class ResearchState(TypedDict, total=False):
     """Fully-specified experiment proposals including hyperparameters.
     Each dict: {name, description, dataset, detector, hyperparameters,
                 expected_outputs, success_criterion, ...}"""
+
+    proposal_seed_planning_notes: str
+    """Optional operator-authored notes attached to a saved proposal seed."""
 
     # -------------------------------------------------------------------------
     # plan_implementation step
@@ -143,7 +158,12 @@ class ResearchState(TypedDict, total=False):
     # -------------------------------------------------------------------------
     next_steps: list[dict]
     """Proposed follow-up research directions.
+    After ranking, this is the selected ordered subset used for loop execution.
     Each dict: {title, rationale, suggested_direction, priority}."""
+
+    next_step_selection: dict
+    """Diagnostics for next-step ranking and pruning.
+    Shape: {selected: [...], dropped: [...], ranking_mode: str}."""
 
     # -------------------------------------------------------------------------
     # Accumulated non-fatal errors

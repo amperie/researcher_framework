@@ -26,6 +26,7 @@ pipeline:
     - evaluate
     - store_results
     - propose_next_steps
+    - rank_next_steps
 
 execution:
   mode: async
@@ -33,6 +34,12 @@ execution:
   max_parallel_jobs: 2
   auto_submit_next_stage: true
   poll_interval_seconds: 30
+
+next_steps:
+  max_selected: 3
+  min_parent_metric: 0.7
+  prior_run_similarity_threshold: 0.9
+  prior_run_search_results: 5
   job_timeout_seconds: 72000
 
 memory:
@@ -55,6 +62,29 @@ memory:
     - object_type: experiment_result
       kind: neuralsignal_experiment
       reusable: false
+
+knowledge_graph:
+  enabled: true
+  canonicalization:
+    llm_enabled: true
+    min_llm_confidence: 0.84
+    ignored_tokens: [approach, method, strategy, technique, probe]
+  metric_bands:
+    - metric_name: test_auc
+      operator: ">="
+      threshold: 0.95
+      display_name: "test_auc >= 0.95"
+      band_key: test_auc_gte_0_95
+    - metric_name: test_auc
+      operator: ">="
+      threshold: 0.90
+      display_name: "test_auc >= 0.90"
+      band_key: test_auc_gte_0_90
+    - metric_name: test_auc
+      operator: ">="
+      threshold: 0.75
+      display_name: "test_auc >= 0.75"
+      band_key: test_auc_gte_0_75
 
 # ── LLM Model Selection ────────────────────────────────────────────────────────
 llm:
@@ -185,7 +215,7 @@ datasets:
         - probe_weights
         - concept_mean_activations
         - logit_lens_projections
-    row_limit: 40                # max scans pulled when creating dataset (0 = no limit)
+    row_limit: 500                # max scans pulled when creating dataset (0 = no limit)
     overwrite_existing_dataset: false  # if true, regenerate CSV even when it already exists
     balanced_target:
       enabled: true
@@ -212,7 +242,7 @@ evaluation:
 # ── Results Storage ───────────────────────────────────────────────────────────
 storage:
   mlflow_experiment: neuralsignal_agent_experiments
-  mongodb_results_db: researcher_framework
+  mongodb_results_db: researcher
   mongodb_results_collection: neuralsignal_experiments
   chroma_collection: agent_experiments
   memory_mongodb_db: researcher
@@ -483,3 +513,28 @@ prompts:
       - priority: 1 (highest) to 3 (lowest)
 
       Return a JSON array of 3 next step proposals.
+
+  rank_next_steps:
+    system: |
+      You are ranking candidate follow-up research directions for the next loop.
+
+      Goal: select the strongest follow-up directions to actually run next, not
+      merely restate every plausible idea.
+
+      Prioritize:
+      1. Directions that are most likely to improve or falsify the best result
+      2. Directions that test robustness, generalization, or surprising failures
+      3. Directions that are meaningfully distinct from each other
+      4. Directions that are concrete and executable in one next run
+
+      Avoid:
+      - near-duplicates
+      - vague meta-directions
+      - directions that simply restate the current research direction
+
+      You will receive candidate next steps, each with a candidate_id.
+      Return a JSON array containing only the selected candidates, in ranked
+      order from best to worst.
+
+      Each array item must be:
+      - candidate_id: the exact candidate_id from the input

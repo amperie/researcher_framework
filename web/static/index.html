@@ -67,7 +67,12 @@
       gap: 10px;
       margin-bottom: 16px;
     }
-    input, select, button {
+    .toolbar-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    input, select, button, textarea {
       width: 100%;
       padding: 10px 12px;
       border-radius: 10px;
@@ -85,6 +90,10 @@
     button.secondary {
       background: transparent;
       color: var(--accent);
+    }
+    textarea {
+      min-height: 110px;
+      resize: vertical;
     }
     .run-list { display: grid; gap: 10px; }
     .run-card {
@@ -203,6 +212,89 @@
       background: var(--accent-2);
       border-color: var(--accent-2);
     }
+    .field-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .button-row button {
+      width: auto;
+      min-width: 180px;
+    }
+    .snippet-list {
+      display: grid;
+      gap: 10px;
+    }
+    .snippet-item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 12px;
+    }
+    .snippet-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .snippet-head label {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      width: auto;
+      font-weight: 700;
+    }
+    .snippet-head input[type="checkbox"] {
+      width: auto;
+      margin: 0;
+    }
+    .saved-handoff-list {
+      display: grid;
+      gap: 10px;
+    }
+    .saved-handoff-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .saved-handoff-actions button {
+      width: auto;
+    }
+    .proposed-step-list {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border-top: 1px solid var(--line);
+      background: #fcfaf7;
+    }
+    .proposed-step {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: #fff;
+      display: grid;
+      gap: 8px;
+    }
+    .proposed-step-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .proposed-step-head strong {
+      display: block;
+    }
+    .proposed-step button {
+      width: auto;
+      min-width: 170px;
+    }
     .artifact a, .record a { color: var(--accent); }
     .graph {
       display: grid;
@@ -237,6 +329,10 @@
         <div class="toolbar">
           <input id="profileFilter" placeholder="Filter by profile">
           <input id="searchFilter" placeholder="Search proposal, dataset, detector">
+          <div class="toolbar-row">
+            <input id="minAucFilter" type="number" min="0" max="1" step="0.001" placeholder="Min AUC">
+            <input id="maxAucFilter" type="number" min="0" max="1" step="0.001" placeholder="Max AUC">
+          </div>
           <button id="refreshRuns">Refresh Runs</button>
           <button id="loadDiagnostics" class="secondary">Show Diagnostics</button>
         </div>
@@ -273,7 +369,10 @@
         <section class="panel">
           <div class="tabs">
             <button class="tab active" data-tab="summary">Summary</button>
+            <button class="tab" data-tab="handoff">Handoff</button>
+            <button class="tab" data-tab="proposal-seed">Proposal Seed</button>
             <button class="tab" data-tab="artifacts">Artifacts</button>
+            <button class="tab" data-tab="family">Family</button>
             <button class="tab" data-tab="graph">Graph</button>
             <button class="tab" data-tab="json">JSON</button>
           </div>
@@ -293,6 +392,141 @@
 
           <div id="tab-artifacts" class="tab-pane">
             <div id="artifactList" class="artifact-list"></div>
+          </div>
+
+          <div id="tab-handoff" class="tab-pane">
+            <div class="stack">
+              <div class="panel stack">
+                <div>
+                  <h3>Next Direction Handoff</h3>
+                  <p class="muted">Edit the next direction, choose which snippets to carry over, save it as a linked handoff record, then copy the exact CLI command for the next run.</p>
+                </div>
+                <div class="field-row">
+                  <div>
+                    <h3>Title</h3>
+                    <input id="handoffTitle" placeholder="Short handoff title">
+                  </div>
+                  <div>
+                    <h3>CLI Command</h3>
+                    <input id="handoffCommand" readonly>
+                  </div>
+                </div>
+                <div>
+                  <h3>Launch Direction</h3>
+                  <textarea id="handoffLaunchDirection" placeholder="The research direction to launch next"></textarea>
+                </div>
+                <div class="field-row">
+                  <div>
+                    <h3>Suggested Direction</h3>
+                    <textarea id="handoffSuggestedDirection" placeholder="Optional alternate wording or shorter label"></textarea>
+                  </div>
+                  <div>
+                    <h3>Rationale</h3>
+                    <textarea id="handoffRationale" placeholder="Why this should be the next run"></textarea>
+                  </div>
+                </div>
+                <div>
+                  <h3>User Notes</h3>
+                  <textarea id="handoffUserNotes" placeholder="Additional guidance, constraints, or edits from the operator"></textarea>
+                </div>
+                <div>
+                  <h3>Included Snippets</h3>
+                  <div id="handoffSnippetList" class="snippet-list"></div>
+                </div>
+                <div>
+                  <h3>Prompt Preview</h3>
+                  <pre id="handoffPromptPreview"></pre>
+                </div>
+                <div class="button-row">
+                  <button id="saveHandoff">Save Handoff</button>
+                  <button id="copyHandoffPrompt" class="secondary">Copy Prompt</button>
+                  <button id="copyHandoffCommand" class="secondary">Copy CLI Command</button>
+                  <button id="newHandoffDraft" class="secondary">New From Run</button>
+                </div>
+                <div id="handoffStatus" class="muted">No handoff saved yet.</div>
+              </div>
+              <div class="panel">
+                <h3>Saved Handoffs</h3>
+                <div id="savedHandoffList" class="saved-handoff-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="tab-proposal-seed" class="tab-pane">
+            <div class="stack">
+              <div class="panel stack">
+                <div>
+                  <h3>Proposal Seed</h3>
+                  <p class="muted">Author a proposal-stage seed as JSON so the next run can begin with an exact proposal template instead of relying on ideation and proposal generation.</p>
+                </div>
+                <div class="field-row">
+                  <div>
+                    <h3>Title</h3>
+                    <input id="proposalSeedTitle" placeholder="Short proposal seed title">
+                  </div>
+                  <div>
+                    <h3>CLI Command</h3>
+                    <input id="proposalSeedCommand" readonly>
+                  </div>
+                </div>
+                <div>
+                  <h3>Research Direction</h3>
+                  <textarea id="proposalSeedDirection" placeholder="Direction context to carry with the proposal seed"></textarea>
+                </div>
+                <div>
+                  <h3>Proposal Template JSON</h3>
+                  <textarea id="proposalSeedTemplate" placeholder='{"name":"...", "description":"..."}'></textarea>
+                </div>
+                <div>
+                  <h3>Planning Notes</h3>
+                  <textarea id="proposalSeedNotes" placeholder="Optional operator notes for the implementation planning step"></textarea>
+                </div>
+                <div>
+                  <h3>Included Snippets</h3>
+                  <div id="proposalSeedSnippetList" class="snippet-list"></div>
+                </div>
+                <div>
+                  <h3>Preview</h3>
+                  <pre id="proposalSeedPreview"></pre>
+                </div>
+                <div class="button-row">
+                  <button id="saveProposalSeed">Save Proposal Seed</button>
+                  <button id="copyProposalSeedCommand" class="secondary">Copy CLI Command</button>
+                  <button id="newProposalSeedDraft" class="secondary">New From Run</button>
+                </div>
+                <div id="proposalSeedStatus" class="muted">No proposal seed saved yet.</div>
+              </div>
+              <div class="panel">
+                <h3>Saved Proposal Seeds</h3>
+                <div id="savedProposalSeedList" class="saved-handoff-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="tab-family" class="tab-pane">
+            <div class="stack">
+              <div class="panel">
+                <h3>Run Family</h3>
+                <div id="familyOverview" class="meta-grid"></div>
+              </div>
+              <div class="panel">
+                <h3>Family Runs</h3>
+                <div id="familyRunList" class="record-list"></div>
+              </div>
+              <div class="panel graph">
+                <svg id="familyGraphSvg" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet"></svg>
+                <div class="meta-grid">
+                  <div class="panel">
+                    <h3>Nodes</h3>
+                    <div id="familyGraphNodes" class="kv-list"></div>
+                  </div>
+                  <div class="panel">
+                    <h3>Edges</h3>
+                    <div id="familyGraphEdges" class="kv-list"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div id="tab-graph" class="tab-pane">
@@ -341,11 +575,17 @@
       runs: [],
       selected: null,
       detail: null,
+      handoffForm: null,
+      handoffRecordId: "",
+      proposalSeedForm: null,
+      proposalSeedRecordId: "",
     };
 
     const runListEl = document.getElementById("runList");
     const profileFilterEl = document.getElementById("profileFilter");
     const searchFilterEl = document.getElementById("searchFilter");
+    const minAucFilterEl = document.getElementById("minAucFilter");
+    const maxAucFilterEl = document.getElementById("maxAucFilter");
     const emptyStateEl = document.getElementById("emptyState");
     const runViewEl = document.getElementById("runView");
     const diagnosticsPanelEl = document.getElementById("diagnosticsPanel");
@@ -353,6 +593,8 @@
     const orphanSummaryEl = document.getElementById("orphanSummary");
     const orphanJsonEl = document.getElementById("orphanJson");
     const deleteOrphansEl = document.getElementById("deleteOrphans");
+    const handoffStatusEl = document.getElementById("handoffStatus");
+    const proposalSeedStatusEl = document.getElementById("proposalSeedStatus");
 
     state.orphanScan = null;
 
@@ -403,13 +645,16 @@
     function renderRunList() {
       const profileFilter = profileFilterEl.value.trim().toLowerCase();
       const search = searchFilterEl.value.trim().toLowerCase();
+      const minAuc = parseNumericFilter(minAucFilterEl.value);
+      const maxAuc = parseNumericFilter(maxAucFilterEl.value);
       const filtered = state.runs.filter((run) => {
         const matchesProfile = !profileFilter || (run.profile_name || "").toLowerCase().includes(profileFilter);
         const haystack = [
           run.title, run.proposal_name, run.dataset, run.detector, run.assessment, run.experiment_id,
         ].join(" ").toLowerCase();
         const matchesSearch = !search || haystack.includes(search);
-        return matchesProfile && matchesSearch;
+        const matchesAuc = aucMatches(run, minAuc, maxAuc);
+        return matchesProfile && matchesSearch && matchesAuc;
       });
 
       runListEl.innerHTML = "";
@@ -437,6 +682,10 @@
 
     async function selectRun(run) {
       state.selected = run;
+      state.handoffForm = null;
+      state.handoffRecordId = "";
+      state.proposalSeedForm = null;
+      state.proposalSeedRecordId = "";
       renderRunList();
       const response = await fetch(`/api/runs/${encodeURIComponent(run.profile_name)}/${encodeURIComponent(run.record_id)}`);
       state.detail = await response.json();
@@ -470,14 +719,7 @@
         metaItem("Hypothesis Supported", String(summary.hypothesis_supported)),
         metaItem("Created At", summary.created_at || "n/a"),
       ].join("");
-      document.getElementById("textPanels").innerHTML = (state.detail.run.text_panels || []).length
-        ? state.detail.run.text_panels.map((panel) => `
-            <details class="accordion">
-              <summary>${escapeHtml(panel.title || "Details")}</summary>
-              <pre>${escapeHtml(panel.body || "")}</pre>
-            </details>
-          `).join("")
-        : "";
+      document.getElementById("textPanels").innerHTML = renderTextPanels(state.detail.run);
 
       const related = state.detail.backend.mongo.related_records || [];
       document.getElementById("relatedRecords").innerHTML = related.length
@@ -505,6 +747,7 @@
         : '<div class="muted">No artifact references found for this run.</div>';
 
       const mlflow = state.detail.backend.mlflow || {};
+      const family = state.detail.run.family || { runs: [], graph: { nodes: [], edges: [] } };
       const backendOverview = [
         metaItem("Mongo Memory Record", record.record_id || "n/a"),
         metaItem("Related Mongo Records", String((state.detail.backend.mongo.related_records || []).length)),
@@ -515,25 +758,530 @@
       ];
       document.getElementById("backendOverview").innerHTML = backendOverview.join("");
 
-      renderGraph(state.detail.backend.neo4j || { nodes: [], edges: [] });
+      document.getElementById("familyOverview").innerHTML = family.family_id
+        ? [
+            metaItem("Family ID", family.family_id),
+            metaItem("Root Direction", family.root_research_direction || "n/a"),
+            metaItem("Runs", String((family.runs || []).length)),
+          ].join("")
+        : '<div class="muted">This run does not have a persisted family id.</div>';
+      document.getElementById("familyRunList").innerHTML = (family.runs || []).length
+        ? family.runs.map((run) => `
+            <div class="record">
+              <div><strong>${escapeHtml(run.proposal_name || run.title || run.record_id)}</strong></div>
+              <div class="muted">${escapeHtml(run.created_at || "")}</div>
+              <div class="muted">${escapeHtml(run.research_direction || "")}</div>
+              <div class="chips" style="margin-top:8px">
+                ${chip(run.assessment || "unassessed")}
+                ${chip(metricText(run))}
+                ${run.source_next_step_title ? chip(`from: ${run.source_next_step_title}`) : ""}
+                ${run.record_id === record.record_id ? chip("selected") : ""}
+              </div>
+              ${run.mlflow_ui_url ? `<div style="margin-top:8px"><a href="${escapeAttr(run.mlflow_ui_url)}" target="_blank" rel="noreferrer">Open MLflow Run</a></div>` : ""}
+            </div>
+          `).join("")
+        : '<div class="muted">No family runs found.</div>';
+
+      renderGraphInto("graphSvg", "graphNodes", "graphEdges", state.detail.backend.neo4j || { nodes: [], edges: [] });
+      renderGraphInto("familyGraphSvg", "familyGraphNodes", "familyGraphEdges", family.graph || { nodes: [], edges: [] });
 
       document.getElementById("jsonRunRecord").textContent = JSON.stringify(record, null, 2);
       document.getElementById("jsonRelatedRecords").textContent = JSON.stringify(related, null, 2);
       document.getElementById("jsonChroma").textContent = JSON.stringify(state.detail.backend.chroma, null, 2);
       document.getElementById("jsonMlflow").textContent = JSON.stringify(mlflow, null, 2);
+      renderHandoffComposer();
+      renderProposalSeedComposer();
     }
 
-    function renderGraph(graph) {
+    function renderTextPanels(run) {
+      const panels = run.text_panels || [];
+      if (!panels.length) return "";
+      return panels.map((panel) => renderTextPanel(panel, run)).join("");
+    }
+
+    function renderTextPanel(panel, run) {
+      if ((panel.title || "") === "Proposed Next Steps") {
+        return renderProposedNextStepsPanel(panel, run.next_steps || []);
+      }
+      return `
+        <details class="accordion">
+          <summary>${escapeHtml(panel.title || "Details")}</summary>
+          <pre>${escapeHtml(panel.body || "")}</pre>
+        </details>
+      `;
+    }
+
+    function renderProposedNextStepsPanel(panel, nextSteps) {
+      const body = (panel.body || "").trim();
+      const content = nextSteps.length
+        ? `
+            <div class="proposed-step-list">
+              ${nextSteps.map((step, index) => `
+                <div class="proposed-step">
+                  <div class="proposed-step-head">
+                    <div>
+                      <strong>${escapeHtml(step.title || `Proposed Step ${index + 1}`)}</strong>
+                      <div class="muted">${escapeHtml(step.record_id || "")}</div>
+                    </div>
+                    ${step.copy_command ? `<button class="secondary" data-copy-next-step-command="${escapeAttr(step.record_id || "")}">Copy CLI Command</button>` : ""}
+                  </div>
+                  <div class="chips">
+                    ${step.priority ? chip(`priority: ${step.priority}`) : ""}
+                    ${step.research_direction ? chip(`from: ${step.research_direction}`) : ""}
+                  </div>
+                  ${step.suggested_direction ? `<div><strong>Suggested Direction:</strong> ${escapeHtml(step.suggested_direction)}</div>` : ""}
+                  ${step.rationale ? `<div><strong>Rationale:</strong> ${escapeHtml(step.rationale)}</div>` : ""}
+                </div>
+              `).join("")}
+            </div>
+          `
+        : `<pre>${escapeHtml(body)}</pre>`;
+      return `
+        <details class="accordion">
+          <summary>${escapeHtml(panel.title || "Details")}</summary>
+          ${content}
+        </details>
+      `;
+    }
+
+    function renderHandoffComposer() {
+      const handoff = (state.detail && state.detail.run && state.detail.run.handoff) || { draft: { snippets: [] }, saved: [] };
+      if (!state.handoffForm) {
+        state.handoffForm = normalizeHandoffForm((handoff.saved && handoff.saved[0]) || handoff.draft || {});
+        state.handoffRecordId = state.handoffForm.record_id || "";
+      }
+      const form = state.handoffForm;
+      document.getElementById("handoffTitle").value = form.title || "";
+      document.getElementById("handoffLaunchDirection").value = form.launch_direction || "";
+      document.getElementById("handoffSuggestedDirection").value = form.suggested_direction || "";
+      document.getElementById("handoffRationale").value = form.rationale || "";
+      document.getElementById("handoffUserNotes").value = form.user_notes || "";
+      document.getElementById("handoffCommand").value = form.copy_command || "";
+
+      const snippetListEl = document.getElementById("handoffSnippetList");
+      snippetListEl.innerHTML = (form.snippets || []).length
+        ? form.snippets.map((snippet, index) => `
+            <div class="snippet-item">
+              <div class="snippet-head">
+                <label>
+                  <input type="checkbox" data-snippet-checkbox="${index}" ${snippet.selected ? "checked" : ""}>
+                  <span>${escapeHtml(snippet.title || `Snippet ${index + 1}`)}</span>
+                </label>
+              </div>
+              <textarea data-snippet-body="${index}">${escapeHtml(snippet.body || "")}</textarea>
+            </div>
+          `).join("")
+        : '<div class="muted">No snippets available for this run.</div>';
+
+      document.querySelectorAll("[data-snippet-checkbox]").forEach((el) => {
+        el.addEventListener("input", updateHandoffPreview);
+      });
+      document.querySelectorAll("[data-snippet-body]").forEach((el) => {
+        el.addEventListener("input", updateHandoffPreview);
+      });
+      [
+        "handoffTitle",
+        "handoffLaunchDirection",
+        "handoffSuggestedDirection",
+        "handoffRationale",
+        "handoffUserNotes",
+      ].forEach((id) => {
+        document.getElementById(id).oninput = updateHandoffPreview;
+      });
+
+      const savedListEl = document.getElementById("savedHandoffList");
+      savedListEl.innerHTML = (handoff.saved || []).length
+        ? handoff.saved.map((item) => `
+            <div class="record">
+              <div><strong>${escapeHtml(item.title || item.record_id)}</strong></div>
+              <div class="muted">${escapeHtml(item.launch_direction || "")}</div>
+              <div class="muted">${escapeHtml(item.updated_at || "")}</div>
+              <div class="saved-handoff-actions">
+                <button class="secondary" data-load-handoff="${escapeAttr(item.record_id)}">Load</button>
+                <button class="secondary" data-copy-saved-command="${escapeAttr(item.record_id)}">Copy CLI Command</button>
+              </div>
+            </div>
+          `).join("")
+        : '<div class="muted">No saved handoffs yet.</div>';
+      document.querySelectorAll("[data-load-handoff]").forEach((el) => {
+        el.addEventListener("click", () => loadSavedHandoff(el.dataset.loadHandoff));
+      });
+      document.querySelectorAll("[data-copy-saved-command]").forEach((el) => {
+        el.addEventListener("click", async () => {
+          const item = findSavedHandoff(el.dataset.copySavedCommand);
+          if (!item || !item.copy_command) {
+            handoffStatusEl.textContent = "No saved CLI command is available for that handoff.";
+            return;
+          }
+          await copyTextToClipboard(item.copy_command);
+          handoffStatusEl.textContent = "Saved handoff CLI command copied.";
+        });
+      });
+
+      updateHandoffPreview();
+    }
+
+    function normalizeHandoffForm(value) {
+      return {
+        record_id: value.record_id || "",
+        title: value.title || "",
+        launch_direction: value.launch_direction || value.suggested_direction || "",
+        suggested_direction: value.suggested_direction || value.launch_direction || "",
+        rationale: value.rationale || "",
+        user_notes: value.user_notes || "",
+        snippets: Array.isArray(value.snippets) ? value.snippets.map((snippet) => ({
+          title: snippet.title || "",
+          body: snippet.body || "",
+          selected: snippet.selected !== false,
+        })) : [],
+        copy_command: value.copy_command || "",
+      };
+    }
+
+    function readHandoffForm() {
+      const snippets = (state.handoffForm && state.handoffForm.snippets || []).map((snippet, index) => ({
+        title: snippet.title || "",
+        body: document.querySelector(`[data-snippet-body="${index}"]`)?.value || "",
+        selected: Boolean(document.querySelector(`[data-snippet-checkbox="${index}"]`)?.checked),
+      }));
+      return {
+        record_id: state.handoffRecordId || "",
+        title: document.getElementById("handoffTitle").value.trim(),
+        launch_direction: document.getElementById("handoffLaunchDirection").value.trim(),
+        suggested_direction: document.getElementById("handoffSuggestedDirection").value.trim(),
+        rationale: document.getElementById("handoffRationale").value.trim(),
+        user_notes: document.getElementById("handoffUserNotes").value.trim(),
+        snippets,
+      };
+    }
+
+    function buildPromptPreview(form) {
+      const parts = [];
+      if (form.title) parts.push(`Title: ${form.title}`);
+      if (form.launch_direction || form.suggested_direction) {
+        parts.push(`Next direction: ${form.launch_direction || form.suggested_direction}`);
+      }
+      if (form.rationale) parts.push(`Why this is worth pursuing: ${form.rationale}`);
+      if (form.user_notes) parts.push(`User notes: ${form.user_notes}`);
+      const selected = (form.snippets || []).filter((snippet) => snippet.selected && snippet.body);
+      if (selected.length) {
+        parts.push("Source context:");
+        for (const snippet of selected) {
+          parts.push(`[${snippet.title}]\n${snippet.body}`);
+        }
+      }
+      return parts.join("\n\n").trim();
+    }
+
+    function updateHandoffPreview() {
+      const form = readHandoffForm();
+      state.handoffForm = {
+        ...form,
+        copy_command: state.handoffForm && state.handoffForm.copy_command ? state.handoffForm.copy_command : "",
+      };
+      document.getElementById("handoffPromptPreview").textContent = buildPromptPreview(form);
+      document.getElementById("handoffCommand").value = state.handoffForm.copy_command || "";
+    }
+
+    async function saveHandoff() {
+      if (!state.selected) return;
+      const payload = readHandoffForm();
+      handoffStatusEl.textContent = "Saving handoff...";
+      const response = await fetch(`/api/runs/${encodeURIComponent(state.selected.profile_name)}/${encodeURIComponent(state.selected.record_id)}/handoffs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        handoffStatusEl.textContent = data.detail || "Failed to save handoff.";
+        return;
+      }
+      state.detail.run.handoff.saved = data.saved_handoffs || [];
+      state.handoffForm = normalizeHandoffForm(data.handoff || {});
+      state.handoffRecordId = state.handoffForm.record_id || "";
+      handoffStatusEl.textContent = `Saved handoff ${state.handoffRecordId}.`;
+      renderHandoffComposer();
+    }
+
+    async function copyHandoffPrompt() {
+      const preview = document.getElementById("handoffPromptPreview").textContent || "";
+      if (!preview.trim()) {
+        handoffStatusEl.textContent = "There is no prompt text to copy.";
+        return;
+      }
+      await copyTextToClipboard(preview);
+      handoffStatusEl.textContent = "Prompt preview copied.";
+    }
+
+    async function copyHandoffCommand() {
+      const command = document.getElementById("handoffCommand").value || "";
+      if (!command.trim()) {
+        handoffStatusEl.textContent = "Save the handoff first to get a stable CLI command.";
+        return;
+      }
+      await copyTextToClipboard(command);
+      handoffStatusEl.textContent = "CLI command copied.";
+    }
+
+    function loadSavedHandoff(recordId) {
+      const item = findSavedHandoff(recordId);
+      if (!item) return;
+      state.handoffForm = normalizeHandoffForm(item);
+      state.handoffRecordId = state.handoffForm.record_id || "";
+      renderHandoffComposer();
+      handoffStatusEl.textContent = `Loaded saved handoff ${recordId}.`;
+    }
+
+    function findSavedHandoff(recordId) {
+      const saved = (((state.detail || {}).run || {}).handoff || {}).saved || [];
+      return saved.find((item) => item.record_id === recordId) || null;
+    }
+
+    function resetHandoffToDraft() {
+      const handoff = (state.detail && state.detail.run && state.detail.run.handoff) || { draft: { snippets: [] } };
+      state.handoffForm = normalizeHandoffForm(handoff.draft || {});
+      state.handoffRecordId = "";
+      renderHandoffComposer();
+      handoffStatusEl.textContent = "Loaded a fresh draft from the current run.";
+    }
+
+    function renderProposalSeedComposer() {
+      const proposalSeed = (state.detail && state.detail.run && state.detail.run.proposal_seed) || { draft: { snippets: [] }, saved: [] };
+      if (!state.proposalSeedForm) {
+        state.proposalSeedForm = normalizeProposalSeedForm((proposalSeed.saved && proposalSeed.saved[0]) || proposalSeed.draft || {});
+        state.proposalSeedRecordId = state.proposalSeedForm.record_id || "";
+      }
+      const form = state.proposalSeedForm;
+      document.getElementById("proposalSeedTitle").value = form.title || "";
+      document.getElementById("proposalSeedCommand").value = form.copy_command || "";
+      document.getElementById("proposalSeedDirection").value = form.research_direction || "";
+      document.getElementById("proposalSeedTemplate").value = form.proposal_template_text || "{}";
+      document.getElementById("proposalSeedNotes").value = form.planning_notes || "";
+
+      const snippetListEl = document.getElementById("proposalSeedSnippetList");
+      snippetListEl.innerHTML = (form.snippets || []).length
+        ? form.snippets.map((snippet, index) => `
+            <div class="snippet-item">
+              <div class="snippet-head">
+                <label>
+                  <input type="checkbox" data-proposal-snippet-checkbox="${index}" ${snippet.selected ? "checked" : ""}>
+                  <span>${escapeHtml(snippet.title || `Snippet ${index + 1}`)}</span>
+                </label>
+              </div>
+              <textarea data-proposal-snippet-body="${index}">${escapeHtml(snippet.body || "")}</textarea>
+            </div>
+          `).join("")
+        : '<div class="muted">No snippets available for this run.</div>';
+
+      document.querySelectorAll("[data-proposal-snippet-checkbox]").forEach((el) => {
+        el.addEventListener("input", updateProposalSeedPreview);
+      });
+      document.querySelectorAll("[data-proposal-snippet-body]").forEach((el) => {
+        el.addEventListener("input", updateProposalSeedPreview);
+      });
+      [
+        "proposalSeedTitle",
+        "proposalSeedDirection",
+        "proposalSeedTemplate",
+        "proposalSeedNotes",
+      ].forEach((id) => {
+        document.getElementById(id).oninput = updateProposalSeedPreview;
+      });
+
+      const savedListEl = document.getElementById("savedProposalSeedList");
+      savedListEl.innerHTML = (proposalSeed.saved || []).length
+        ? proposalSeed.saved.map((item) => `
+            <div class="record">
+              <div><strong>${escapeHtml(item.title || item.record_id)}</strong></div>
+              <div class="muted">${escapeHtml(item.research_direction || "")}</div>
+              <div class="muted">${escapeHtml(item.updated_at || "")}</div>
+              <div class="saved-handoff-actions">
+                <button class="secondary" data-load-proposal-seed="${escapeAttr(item.record_id)}">Load</button>
+                <button class="secondary" data-copy-saved-proposal-command="${escapeAttr(item.record_id)}">Copy CLI Command</button>
+              </div>
+            </div>
+          `).join("")
+        : '<div class="muted">No saved proposal seeds yet.</div>';
+      document.querySelectorAll("[data-load-proposal-seed]").forEach((el) => {
+        el.addEventListener("click", () => loadSavedProposalSeed(el.dataset.loadProposalSeed));
+      });
+      document.querySelectorAll("[data-copy-saved-proposal-command]").forEach((el) => {
+        el.addEventListener("click", async () => {
+          const item = findSavedProposalSeed(el.dataset.copySavedProposalCommand);
+          if (!item || !item.copy_command) {
+            proposalSeedStatusEl.textContent = "No saved CLI command is available for that proposal seed.";
+            return;
+          }
+          await copyTextToClipboard(item.copy_command);
+          proposalSeedStatusEl.textContent = "Saved proposal seed CLI command copied.";
+        });
+      });
+
+      updateProposalSeedPreview();
+    }
+
+    function normalizeProposalSeedForm(value) {
+      const proposalTemplate = value.proposal_template && typeof value.proposal_template === "object" ? value.proposal_template : {};
+      return {
+        record_id: value.record_id || "",
+        title: value.title || "",
+        research_direction: value.research_direction || "",
+        proposal_template: proposalTemplate,
+        proposal_template_text: JSON.stringify(proposalTemplate, null, 2),
+        planning_notes: value.planning_notes || "",
+        snippets: Array.isArray(value.snippets) ? value.snippets.map((snippet) => ({
+          title: snippet.title || "",
+          body: snippet.body || "",
+          selected: snippet.selected !== false,
+        })) : [],
+        copy_command: value.copy_command || "",
+      };
+    }
+
+    function readProposalSeedForm() {
+      const snippets = (state.proposalSeedForm && state.proposalSeedForm.snippets || []).map((snippet, index) => ({
+        title: snippet.title || "",
+        body: document.querySelector(`[data-proposal-snippet-body="${index}"]`)?.value || "",
+        selected: Boolean(document.querySelector(`[data-proposal-snippet-checkbox="${index}"]`)?.checked),
+      }));
+      const templateText = document.getElementById("proposalSeedTemplate").value.trim() || "{}";
+      return {
+        record_id: state.proposalSeedRecordId || "",
+        title: document.getElementById("proposalSeedTitle").value.trim(),
+        research_direction: document.getElementById("proposalSeedDirection").value.trim(),
+        proposal_template_text: templateText,
+        planning_notes: document.getElementById("proposalSeedNotes").value.trim(),
+        snippets,
+      };
+    }
+
+    function parseProposalTemplateOrNull(text) {
+      try {
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+        return parsed;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function buildProposalSeedPreview(form) {
+      const parts = [];
+      if (form.title) parts.push(`Title: ${form.title}`);
+      if (form.research_direction) parts.push(`Research direction: ${form.research_direction}`);
+      const template = parseProposalTemplateOrNull(form.proposal_template_text || "{}");
+      parts.push(`Proposal template:\n${template ? JSON.stringify(template, null, 2) : "[invalid JSON]"}`);
+      if (form.planning_notes) parts.push(`Planning notes: ${form.planning_notes}`);
+      const selected = (form.snippets || []).filter((snippet) => snippet.selected && snippet.body);
+      if (selected.length) {
+        parts.push("Source context:");
+        for (const snippet of selected) {
+          parts.push(`[${snippet.title}]\n${snippet.body}`);
+        }
+      }
+      return parts.join("\n\n").trim();
+    }
+
+    function updateProposalSeedPreview() {
+      const form = readProposalSeedForm();
+      state.proposalSeedForm = {
+        ...form,
+        copy_command: state.proposalSeedForm && state.proposalSeedForm.copy_command ? state.proposalSeedForm.copy_command : "",
+      };
+      document.getElementById("proposalSeedPreview").textContent = buildProposalSeedPreview(form);
+      document.getElementById("proposalSeedCommand").value = state.proposalSeedForm.copy_command || "";
+    }
+
+    async function saveProposalSeed() {
+      if (!state.selected) return;
+      const raw = readProposalSeedForm();
+      const proposalTemplate = parseProposalTemplateOrNull(raw.proposal_template_text);
+      if (!proposalTemplate) {
+        proposalSeedStatusEl.textContent = "Proposal template must be valid JSON object syntax.";
+        return;
+      }
+      proposalSeedStatusEl.textContent = "Saving proposal seed...";
+      const response = await fetch(`/api/runs/${encodeURIComponent(state.selected.profile_name)}/${encodeURIComponent(state.selected.record_id)}/proposal-seeds`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          record_id: raw.record_id,
+          title: raw.title,
+          research_direction: raw.research_direction,
+          proposal_template: proposalTemplate,
+          planning_notes: raw.planning_notes,
+          snippets: raw.snippets,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        proposalSeedStatusEl.textContent = data.detail || "Failed to save proposal seed.";
+        return;
+      }
+      state.detail.run.proposal_seed.saved = data.saved_proposal_seeds || [];
+      state.proposalSeedForm = normalizeProposalSeedForm(data.proposal_seed || {});
+      state.proposalSeedRecordId = state.proposalSeedForm.record_id || "";
+      proposalSeedStatusEl.textContent = `Saved proposal seed ${state.proposalSeedRecordId}.`;
+      renderProposalSeedComposer();
+    }
+
+    async function copyProposalSeedCommand() {
+      const command = document.getElementById("proposalSeedCommand").value || "";
+      if (!command.trim()) {
+        proposalSeedStatusEl.textContent = "Save the proposal seed first to get a stable CLI command.";
+        return;
+      }
+      await copyTextToClipboard(command);
+      proposalSeedStatusEl.textContent = "Proposal seed CLI command copied.";
+    }
+
+    function loadSavedProposalSeed(recordId) {
+      const item = findSavedProposalSeed(recordId);
+      if (!item) return;
+      state.proposalSeedForm = normalizeProposalSeedForm(item);
+      state.proposalSeedRecordId = state.proposalSeedForm.record_id || "";
+      renderProposalSeedComposer();
+      proposalSeedStatusEl.textContent = `Loaded saved proposal seed ${recordId}.`;
+    }
+
+    function findSavedProposalSeed(recordId) {
+      const saved = (((state.detail || {}).run || {}).proposal_seed || {}).saved || [];
+      return saved.find((item) => item.record_id === recordId) || null;
+    }
+
+    function resetProposalSeedToDraft() {
+      const proposalSeed = (state.detail && state.detail.run && state.detail.run.proposal_seed) || { draft: { snippets: [] } };
+      state.proposalSeedForm = normalizeProposalSeedForm(proposalSeed.draft || {});
+      state.proposalSeedRecordId = "";
+      renderProposalSeedComposer();
+      proposalSeedStatusEl.textContent = "Loaded a fresh proposal seed draft from the current run.";
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const helper = document.createElement("textarea");
+      helper.value = text;
+      document.body.appendChild(helper);
+      helper.select();
+      document.execCommand("copy");
+      document.body.removeChild(helper);
+    }
+
+    function renderGraphInto(svgId, nodesId, edgesId, graph) {
       const nodes = graph.nodes || [];
       const edges = graph.edges || [];
-      document.getElementById("graphNodes").innerHTML = nodes.length
+      document.getElementById(nodesId).innerHTML = nodes.length
         ? nodes.map((node) => `<div class="record"><strong>${escapeHtml(node.entity_type || node.node_type || "")}</strong> · ${escapeHtml(node.key || node.node_key || "")}</div>`).join("")
         : '<div class="muted">No nodes.</div>';
-      document.getElementById("graphEdges").innerHTML = edges.length
+      document.getElementById(edgesId).innerHTML = edges.length
         ? edges.map((edge) => `<div class="record">${escapeHtml(edge.relation_type || edge.edge_type || "")}: ${escapeHtml(edge.source_key || "")} → ${escapeHtml(edge.target_key || "")}</div>`).join("")
         : '<div class="muted">No edges.</div>';
 
-      const svg = document.getElementById("graphSvg");
+      const svg = document.getElementById(svgId);
       svg.innerHTML = "";
       if (!nodes.length) return;
 
@@ -598,6 +1346,24 @@
       return `${run.primary_metric_name}=${run.primary_metric_value ?? "n/a"}`;
     }
 
+    function parseNumericFilter(value) {
+      const text = String(value || "").trim();
+      if (!text) return null;
+      const parsed = Number(text);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function aucMatches(run, minAuc, maxAuc) {
+      if (minAuc === null && maxAuc === null) return true;
+      const metricName = String(run.primary_metric_name || "").toLowerCase();
+      if (!metricName.includes("auc")) return false;
+      const value = Number(run.primary_metric_value);
+      if (!Number.isFinite(value)) return false;
+      if (minAuc !== null && value < minAuc) return false;
+      if (maxAuc !== null && value > maxAuc) return false;
+      return true;
+    }
+
     function hasOrphans(totals) {
       return [
         totals.orphan_chroma_records,
@@ -633,8 +1399,25 @@
     document.getElementById("loadDiagnostics").addEventListener("click", loadDiagnostics);
     document.getElementById("scanOrphans").addEventListener("click", scanOrphans);
     deleteOrphansEl.addEventListener("click", deleteOrphans);
+    document.getElementById("saveHandoff").addEventListener("click", saveHandoff);
+    document.getElementById("copyHandoffPrompt").addEventListener("click", copyHandoffPrompt);
+    document.getElementById("copyHandoffCommand").addEventListener("click", copyHandoffCommand);
+    document.getElementById("newHandoffDraft").addEventListener("click", resetHandoffToDraft);
+    document.getElementById("saveProposalSeed").addEventListener("click", saveProposalSeed);
+    document.getElementById("copyProposalSeedCommand").addEventListener("click", copyProposalSeedCommand);
+    document.getElementById("newProposalSeedDraft").addEventListener("click", resetProposalSeedToDraft);
     profileFilterEl.addEventListener("input", renderRunList);
     searchFilterEl.addEventListener("input", renderRunList);
+    minAucFilterEl.addEventListener("input", renderRunList);
+    maxAucFilterEl.addEventListener("input", renderRunList);
+    document.getElementById("textPanels").addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-copy-next-step-command]");
+      if (!button || !state.detail || !state.detail.run) return;
+      const recordId = button.dataset.copyNextStepCommand || "";
+      const item = (state.detail.run.next_steps || []).find((step) => (step.record_id || "") === recordId);
+      if (!item || !item.copy_command) return;
+      await copyTextToClipboard(item.copy_command);
+    });
     loadRuns();
   </script>
 </body>

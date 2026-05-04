@@ -107,6 +107,7 @@ def minimal_profile() -> dict:
             "evaluate": {"system": "Evaluate results."},
             "store_results": {"system": "Store results."},
             "propose_next_steps": {"system": "Propose next steps."},
+            "rank_next_steps": {"system": "Rank next steps."},
         },
     }
 
@@ -137,6 +138,7 @@ def make_llm_response(content: str) -> MagicMock:
 @pytest.fixture
 def mock_cfg() -> SimpleNamespace:
     return SimpleNamespace(
+        dev_root="dev",
         llm_provider="anthropic",
         llm_model=None,
         anthropic_api_key="test-key",

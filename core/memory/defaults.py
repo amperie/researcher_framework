@@ -190,8 +190,12 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
     models = state.get("models") or []
     evaluation_summary = state.get("evaluation_summary") or {}
     direction = state.get("research_direction", "")
+    root_run_family_id = str(state.get("root_run_family_id") or "")
+    root_research_direction = str(state.get("root_research_direction") or direction or "")
     source_next_step_record_id = str(state.get("source_next_step_record_id") or "")
     source_next_step_title = str(state.get("source_next_step_title") or "")
+    source_proposal_seed_record_id = str(state.get("source_proposal_seed_record_id") or "")
+    source_proposal_seed_title = str(state.get("source_proposal_seed_title") or "")
     model_by_exp = {m.get("experiment_id"): m for m in models}
 
     for result in experiment_results:
@@ -233,6 +237,8 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
                 "model": model,
                 "evaluation_summary": evaluation_summary,
                 "research_direction": direction,
+                "root_run_family_id": root_run_family_id,
+                "root_research_direction": root_research_direction,
                 "artifacts": result.get("artifacts") or {},
             },
             "metadata": {
@@ -246,10 +252,14 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
                 "assessment": assessment,
                 "hypothesis_supported": hypothesis_supported,
                 "lessons": lessons,
+                "root_run_family_id": root_run_family_id,
+                "root_research_direction": root_research_direction,
                 "inserted_at": inserted_at,
                 "mlflow_run_id": result.get("mlflow_run_id") or model.get("mlflow_run_id") or "",
                 "source_next_step_record_id": source_next_step_record_id,
                 "source_next_step_title": source_next_step_title,
+                "source_proposal_seed_record_id": source_proposal_seed_record_id,
+                "source_proposal_seed_title": source_proposal_seed_title,
                 **{k: float(v) for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
             },
             "tags": [str(profile.get("name") or ""), "prior_experiment"],
@@ -439,9 +449,13 @@ def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]
     """Build generic memory records for experiment proposals."""
     proposals = state.get("proposals") or []
     direction = state.get("research_direction", "")
+    root_run_family_id = str(state.get("root_run_family_id") or "")
+    root_research_direction = str(state.get("root_research_direction") or direction or "")
     domain = str(profile.get("name") or "")
     source_next_step_record_id = str(state.get("source_next_step_record_id") or "")
     source_next_step_title = str(state.get("source_next_step_title") or "")
+    source_proposal_seed_record_id = str(state.get("source_proposal_seed_record_id") or "")
+    source_proposal_seed_title = str(state.get("source_proposal_seed_title") or "")
     records: list[MemoryRecord] = []
 
     for proposal in proposals:
@@ -470,11 +484,15 @@ def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]
             "metadata": {
                 "profile": domain,
                 "research_direction": direction,
+                "root_run_family_id": root_run_family_id,
+                "root_research_direction": root_research_direction,
                 "proposal_name": proposal_name,
                 "dataset": proposal.get("dataset", ""),
                 "detector": proposal.get("detector", ""),
                 "source_next_step_record_id": source_next_step_record_id,
                 "source_next_step_title": source_next_step_title,
+                "source_proposal_seed_record_id": source_proposal_seed_record_id,
+                "source_proposal_seed_title": source_proposal_seed_title,
             },
             "tags": [domain, "proposal"],
             "created_at": _now_iso(),
@@ -486,6 +504,8 @@ def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]
                 proposal,
                 source_next_step_record_id=source_next_step_record_id,
                 source_next_step_title=source_next_step_title,
+                source_proposal_seed_record_id=source_proposal_seed_record_id,
+                source_proposal_seed_title=source_proposal_seed_title,
             ),
         })
     return records
@@ -738,6 +758,8 @@ def build_next_step_memory_records(profile: dict[str, Any], state: dict[str, Any
     """Build generic memory records for proposed next steps."""
     next_steps = state.get("next_steps") or []
     direction = state.get("research_direction", "")
+    root_run_family_id = str(state.get("root_run_family_id") or "")
+    root_research_direction = str(state.get("root_research_direction") or direction or "")
     domain = str(profile.get("name") or "")
     records: list[MemoryRecord] = []
 
@@ -762,6 +784,8 @@ def build_next_step_memory_records(profile: dict[str, Any], state: dict[str, Any
             "metadata": {
                 "profile": domain,
                 "research_direction": direction,
+                "root_run_family_id": root_run_family_id,
+                "root_research_direction": root_research_direction,
                 "priority": step.get("priority"),
             },
             "tags": [domain, "next_step"],
@@ -836,37 +860,7 @@ def default_memory_projection(record: MemoryRecord) -> dict[str, Any]:
             **_scalar_metadata(metadata),
             "memory_summary": record.get("summary", ""),
         },
-        "graph_nodes": [
-            {
-                "node_type": entity.get("entity_type", ""),
-                "node_key": _namespaced_graph_key(domain, entity.get("entity_type", ""), entity.get("key", "")),
-                "raw_key": str(entity.get("key", "")),
-                "name": _prefixed_graph_name(domain, entity.get("name", "") or entity.get("key", "")),
-                "metadata": {
-                    "domain": domain,
-                    "profile": domain,
-                    **dict(entity.get("metadata") or {}),
-                },
-            }
-            for entity in (record.get("entities") or [])
-        ],
-        "graph_edges": [
-            {
-                "edge_type": relation.get("relation_type", ""),
-                "source_type": relation.get("source_type", ""),
-                "source_key": _namespaced_graph_key(domain, relation.get("source_type", ""), relation.get("source_key", "")),
-                "target_type": relation.get("target_type", ""),
-                "target_key": _namespaced_graph_key(domain, relation.get("target_type", ""), relation.get("target_key", "")),
-                "source_raw_key": str(relation.get("source_key", "")),
-                "target_raw_key": str(relation.get("target_key", "")),
-                "metadata": {
-                    "domain": domain,
-                    "profile": domain,
-                    **dict(relation.get("metadata") or {}),
-                },
-            }
-            for relation in (record.get("relations") or [])
-        ],
+        "kg_update": {"record_id": str(record.get("record_id") or ""), "domain": domain, "nodes": [], "relations": []},
     }
 
 
@@ -1369,8 +1363,22 @@ def _proposal_relations(
     *,
     source_next_step_record_id: str = "",
     source_next_step_title: str = "",
+    source_proposal_seed_record_id: str = "",
+    source_proposal_seed_title: str = "",
 ) -> list[MemoryRelation]:
     relations: list[MemoryRelation] = []
+    if source_proposal_seed_title:
+        relations.append({
+            "relation_type": "seeded_proposal",
+            "source_type": "proposal_seed",
+            "source_key": source_proposal_seed_title,
+            "target_type": "proposal",
+            "target_key": proposal_name,
+            "metadata": {
+                "domain": domain,
+                "source_proposal_seed_record_id": source_proposal_seed_record_id,
+            },
+        })
     if source_next_step_title:
         relations.append({
             "relation_type": "inspires_proposal",

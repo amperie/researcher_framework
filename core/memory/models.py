@@ -91,8 +91,49 @@ class MemoryProjection(TypedDict, total=False):
 
     embedding_text: str
     vector_metadata: dict[str, Any]
-    graph_nodes: list[dict[str, Any]]
-    graph_edges: list[dict[str, Any]]
+    kg_update: "ResearchKGUpdate"
+
+
+class ResearchKGNode(TypedDict, total=False):
+    """Distilled research knowledge node."""
+
+    node_type: str
+    canonical_id: str
+    display_name: str
+    aliases: list[str]
+    properties: dict[str, Any]
+
+
+class ResearchKGRelation(TypedDict, total=False):
+    """Distilled research knowledge relation."""
+
+    relation_type: str
+    source_id: str
+    target_id: str
+    properties: dict[str, Any]
+
+
+class ResearchKGUpdate(TypedDict, total=False):
+    """Graph payload derived from canonical memory records."""
+
+    record_id: str
+    domain: str
+    nodes: list[ResearchKGNode]
+    relations: list[ResearchKGRelation]
+    provenance: dict[str, Any]
+
+
+class CanonicalizationResult(TypedDict, total=False):
+    """Resolved canonical identity for a KG concept."""
+
+    canonical_id: str
+    display_name: str
+    aliases: list[str]
+    normalized_fields: dict[str, Any]
+    strategy: str
+    confidence: float
+    matched_existing_id: str | None
+    rationale: str
 
 
 class MemorySearchHit(TypedDict, total=False):

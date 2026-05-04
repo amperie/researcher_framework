@@ -1,7 +1,7 @@
 """Implement step — generate code that subclasses a profile base class.
 
 For each implementation plan, asks the LLM to generate a Python class file.
-Generated files are cached at dev/experiments/<profile>/<class_name>.py.
+Generated files are cached under the configured experiments directory.
 
 Reads:
     state['implementation_plans']

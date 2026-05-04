@@ -29,13 +29,14 @@ memory_graph_backend: ${MEMORY_GRAPH_BACKEND:neo4j}   # noop | neo4j
 memory_neo4j_uri: ${MEMORY_NEO4J_URI:neo4j://hp.lan:7687}
 memory_neo4j_username: ${MEMORY_NEO4J_USERNAME:neo4j}
 memory_neo4j_password: ${MEMORY_NEO4J_PASSWORD:password123}
-memory_neo4j_database: ${MEMORY_NEO4J_DATABASE:researcher_framework}
+memory_neo4j_database: ${MEMORY_NEO4J_DATABASE:neo4j}
 
 # ── MLflow ────────────────────────────────────────────────────────────────────
 mlflow_uri: ${MLFLOW_URI:http://hp.lan:8899}
 
 # ── Artifact storage ──────────────────────────────────────────────────────────
 artifact_store_backend: ${ARTIFACT_STORE_BACKEND:s3}
+dev_root: ${DEV_ROOT:dev}
 artifact_store_root: ${ARTIFACT_STORE_ROOT:dev/artifacts}
 s3_endpoint_url: ${S3_ENDPOINT_URL:http://hp.lan:9000}
 s3_access_key_id: ${S3_ACCESS_KEY_ID:minioadmin}
@@ -48,7 +49,7 @@ s3_secure: ${S3_SECURE:false}
 # ── Experiment execution ──────────────────────────────────────────────────────
 experiment_timeout_seconds: 18000
 validate_timeout_seconds: 120
-experiments_dir: dev/experiments
+experiments_dir: ${EXPERIMENTS_DIR:dev/experiments}
 
 # ── neuralsignal plugin ───────────────────────────────────────────────────────
 neuralsignal_python: ${NEURALSIGNAL_PYTHON:uv run python}
@@ -56,6 +57,17 @@ neuralsignal_src_path: ${NEURALSIGNAL_SRC_PATH:../neuralsignal/neuralsignal}
 
 # ── Arxiv ─────────────────────────────────────────────────────────────────────
 max_arxiv_papers: 20
+
+# ── Dev workspace maintenance ─────────────────────────────────────────────────
+maintenance:
+  dev_cleanup:
+    enabled: true
+    interval_hours: 12
+    state_keep_latest: 8
+    state_max_age_days: 14
+    papers_max_age_days: 30
+    generated_tests_max_age_days: 14
+    terminal_jobs_max_age_days: 7
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging:

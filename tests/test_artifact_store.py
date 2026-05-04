@@ -169,6 +169,7 @@ def test_get_artifact_store_uses_profile_specific_mongo_namespace():
     from unittest.mock import patch
 
     cfg = SimpleNamespace(
+        dev_root="dev",
         mongo_url="mongodb://localhost:27017",
         artifacts_db_name="researcher_artifacts",
         artifacts_collection="artifacts",

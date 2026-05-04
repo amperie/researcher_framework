@@ -82,12 +82,22 @@ def _walk(obj: object) -> object:
     return _interpolate(obj)
 
 
+def _normalise_dev_root(data: dict) -> None:
+    dev_root = str(data.get("dev_root") or "dev").strip() or "dev"
+    data["dev_root"] = dev_root
+    if data.get("artifact_store_root") in (None, "", "dev/artifacts"):
+        data["artifact_store_root"] = str(Path(dev_root) / "artifacts")
+    if data.get("experiments_dir") in (None, "", "dev/experiments"):
+        data["experiments_dir"] = str(Path(dev_root) / "experiments")
+
+
 @lru_cache(maxsize=1)
 def get_config() -> SimpleNamespace:
     """Return the singleton runtime config, loaded from configs/config.yaml."""
     _load_dotenv()
     raw = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
     data: dict = _walk(raw)
+    _normalise_dev_root(data)
 
     # The logging section is consumed only by utils/logger.py — strip it here.
     data.pop("logging", None)
@@ -127,3 +137,20 @@ def get_config() -> SimpleNamespace:
             data[opt_key] = None
 
     return SimpleNamespace(**data)
+
+
+def dev_path(*parts: str) -> Path:
+    """Return a path rooted under the configured development root."""
+    return Path(get_config().dev_root).joinpath(*parts)
+
+
+def resolve_dev_path(path: str | Path) -> Path:
+    """Resolve legacy ``dev/...`` paths against the configured development root."""
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate
+    if not candidate.parts:
+        return Path(get_config().dev_root)
+    if candidate.parts[0] == "dev":
+        return dev_path(*candidate.parts[1:])
+    return candidate

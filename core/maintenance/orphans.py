@@ -250,14 +250,22 @@ def _iter_document_records(document_store: MemoryDocumentStore) -> list[dict[str
 def _list_vector_ids(vector_store: MemoryVectorStore, *, domain: str | None = None) -> set[str]:
     list_ids = getattr(vector_store, "list_ids", None)
     if callable(list_ids):
-        return {str(item) for item in list_ids(domain=domain) if item}
+        try:
+            values = list_ids(domain=domain)
+        except TypeError:
+            values = list_ids()
+        return {str(item) for item in values if item}
     return set()
 
 
 def _list_graph_record_ids(graph_store: MemoryGraphStore, *, domain: str | None = None) -> set[str]:
     list_record_ids = getattr(graph_store, "list_record_ids", None)
     if callable(list_record_ids):
-        return {str(item) for item in list_record_ids(domain=domain) if item}
+        try:
+            values = list_record_ids(domain=domain)
+        except TypeError:
+            values = list_record_ids()
+        return {str(item) for item in values if item}
     return set()
 
 
