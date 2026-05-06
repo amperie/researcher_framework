@@ -31,7 +31,7 @@ pipeline:
 execution:
   mode: async
   runner: ray   # local_process | ray
-  max_parallel_jobs: 2
+  max_parallel_jobs: 8
   auto_submit_next_stage: true
   poll_interval_seconds: 30
 
@@ -66,7 +66,7 @@ memory:
 knowledge_graph:
   enabled: true
   canonicalization:
-    llm_enabled: true
+    llm_enabled: false
     min_llm_confidence: 0.84
     ignored_tokens: [approach, method, strategy, technique, probe]
   metric_bands:
@@ -89,21 +89,53 @@ knowledge_graph:
 # ── LLM Model Selection ────────────────────────────────────────────────────────
 llm:
   default_model: claude-sonnet-4-6
+  default_max_output_tokens: 1800
+  prompt_context:
+    ideate_max_digests: 2
+    ideate_max_artifacts: 5
   step_overrides:
-    research: claude-sonnet-4-6     # faster for scoring/summarizing many papers
-    refine: claude-sonnet-4-6
-    evaluate: claude-sonnet-4-6
+    research:
+      model: claude-sonnet-4-6
+      max_output_tokens: 1400
+    ideate:
+      model: claude-sonnet-4-6
+      max_output_tokens: 1200
+    refine:
+      model: claude-sonnet-4-6
+      max_output_tokens: 1400
+    propose_experiments:
+      model: claude-sonnet-4-6
+      max_output_tokens: 1400
+    plan_implementation:
+      model: claude-sonnet-4-6
+      max_output_tokens: 1600
+    implement:
+      model: claude-sonnet-4-6
+      max_output_tokens: 2800
+    validate:
+      model: claude-sonnet-4-6
+      max_output_tokens: 2200
+    evaluate:
+      model: claude-sonnet-4-6
+      max_output_tokens: 1400
+    propose_next_steps:
+      model: claude-sonnet-4-6
+      max_output_tokens: 1000
+    rank_next_steps:
+      model: claude-sonnet-4-6
+      max_output_tokens: 900
 
 # ── Research Sources ──────────────────────────────────────────────────────────
 research:
-  max_summary_artifacts: 12
+  max_artifacts_to_score: 8
+  max_summary_artifacts: 6
   tools:
     - name: arxiv
       tool: core.tools.research_tools.collect_arxiv
       categories: [cs.LG, cs.AI, cs.CL]
-      max_results: 20
+      max_results: 10
       relevance_score_threshold: 6
-      max_papers_to_digest: 3
+      max_papers_to_digest: 2
     - name: memory
       tool: core.tools.research_tools.collect_memory
       n_results: 5

@@ -17,8 +17,9 @@ PROFILE = {
     "name": "test",
     "llm": {
         "default_model": "claude-profile-default",
+        "default_max_output_tokens": 777,
         "step_overrides": {
-            "research": "claude-fast",
+            "research": {"model": "claude-fast", "max_output_tokens": 333},
         },
     },
 }
@@ -44,48 +45,52 @@ class TestModelResolution:
         cfg = _mock_cfg(llm_model="global-model")
         mock_anthropic = MagicMock()
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with patch("langchain_anthropic.ChatAnthropic", mock_anthropic):
                 get_llm(step_name="research", profile=PROFILE, model="explicit-model")
 
         mock_anthropic.assert_called_once()
         assert mock_anthropic.call_args.kwargs["model"] == "explicit-model"
+        assert mock_anthropic.call_args.kwargs["max_tokens"] == 333
 
     def test_step_override_wins_over_profile_default(self):
         cfg = _mock_cfg()
         mock_anthropic = MagicMock()
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with patch("langchain_anthropic.ChatAnthropic", mock_anthropic):
                 get_llm(step_name="research", profile=PROFILE)
 
         assert mock_anthropic.call_args.kwargs["model"] == "claude-fast"
+        assert mock_anthropic.call_args.kwargs["max_tokens"] == 333
 
     def test_profile_default_used_when_no_step_override(self):
         cfg = _mock_cfg()
         mock_anthropic = MagicMock()
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with patch("langchain_anthropic.ChatAnthropic", mock_anthropic):
                 get_llm(step_name="ideate", profile=PROFILE)
 
         assert mock_anthropic.call_args.kwargs["model"] == "claude-profile-default"
+        assert mock_anthropic.call_args.kwargs["max_tokens"] == 777
 
     def test_global_config_model_used_when_no_profile(self):
         cfg = _mock_cfg(llm_model="global-override")
         mock_anthropic = MagicMock()
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with patch("langchain_anthropic.ChatAnthropic", mock_anthropic):
                 get_llm()
 
         assert mock_anthropic.call_args.kwargs["model"] == "global-override"
+        assert mock_anthropic.call_args.kwargs["max_tokens"] is None
 
     def test_provider_default_used_when_all_none(self):
         cfg = _mock_cfg(llm_model=None)
         mock_anthropic = MagicMock()
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with patch("langchain_anthropic.ChatAnthropic", mock_anthropic):
                 get_llm()
 
@@ -101,7 +106,7 @@ class TestProviderDispatch:
         cfg = _mock_cfg(llm_provider="anthropic")
         mock_cls = MagicMock()
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with patch("langchain_anthropic.ChatAnthropic", mock_cls):
                 result = get_llm()
 
@@ -111,17 +116,18 @@ class TestProviderDispatch:
         cfg = _mock_cfg(llm_provider="openai", openai_api_key="sk-openai")
         mock_cls = MagicMock()
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with patch("langchain_openai.ChatOpenAI", mock_cls):
                 result = get_llm(provider="openai")
 
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["model"] == "gpt-4o"
+        assert mock_cls.call_args.kwargs["max_tokens"] is None
 
     def test_unknown_provider_raises(self):
         cfg = _mock_cfg(llm_provider="unknown_provider")
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with pytest.raises(ValueError, match="Unknown LLM provider"):
                 get_llm(provider="unknown_provider")
 
@@ -129,7 +135,7 @@ class TestProviderDispatch:
         cfg = _mock_cfg(llm_provider="anthropic")
         mock_openai = MagicMock()
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with patch("langchain_openai.ChatOpenAI", mock_openai):
                 get_llm(provider="openai")
 
@@ -139,7 +145,7 @@ class TestProviderDispatch:
         cfg = _mock_cfg(anthropic_api_key="sk-mykey")
         mock_cls = MagicMock()
 
-        with patch("llm.factory.get_config", return_value=cfg):
+        with patch("core.llm.factory.get_config", return_value=cfg):
             with patch("langchain_anthropic.ChatAnthropic", mock_cls):
                 get_llm()
 

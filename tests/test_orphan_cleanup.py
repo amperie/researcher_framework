@@ -110,12 +110,15 @@ def test_orphan_cleanup_scan_and_delete_derived_storage():
     assert scan["counts"]["orphan_chroma_records"] == 1
     assert scan["counts"]["orphan_neo4j_records"] == 1
     assert scan["counts"]["orphan_artifact_metadata_records"] == 1
-    assert scan["counts"]["orphan_artifact_storage_objects"] == 2
+    assert scan["counts"]["orphan_artifact_storage_objects"] == 1
+    assert scan["counts"]["untracked_artifact_storage_objects"] == 1
     assert scan["orphans"]["chroma_record_ids"] == ["record-2"]
     assert scan["orphans"]["neo4j_record_ids"] == ["record-3"]
     assert [item["artifact_id"] for item in scan["orphans"]["artifact_metadata_records"]] == ["artifact-2"]
     assert scan["orphans"]["artifact_storage_keys"] == [
         "neuralsignal/dataset/artifact-2/file.csv",
+    ]
+    assert scan["untracked"]["artifact_storage_keys"] == [
         "neuralsignal/dataset/dangling/file.csv",
     ]
 
@@ -125,7 +128,7 @@ def test_orphan_cleanup_scan_and_delete_derived_storage():
         "chroma_records": 1,
         "neo4j_records": 1,
         "artifact_metadata_records": 1,
-        "artifact_storage_objects": 2,
+        "artifact_storage_objects": 1,
     }
     assert deleted["errors"] == []
     assert service.vector_store.deleted == ["record-2"]
@@ -133,7 +136,6 @@ def test_orphan_cleanup_scan_and_delete_derived_storage():
     assert service.graph_store.pruned is True
     assert service.artifact_backend.deleted == [
         "neuralsignal/dataset/artifact-2/file.csv",
-        "neuralsignal/dataset/dangling/file.csv",
     ]
     assert metadata_store.get("artifact-1") is not None
     assert metadata_store.get("artifact-2") is None

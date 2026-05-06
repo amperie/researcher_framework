@@ -1,0 +1,43 @@
+profile: neuralsignal
+campaign_title: residual entropy family sweep
+
+# Use either an existing proposal seed or a source experiment record.
+# proposal_seed_record_id: proposal_seed:replace_me
+source_experiment_record_id: f83b1e69-02c9-4f9a-9fd3-efeb57aa90cd
+
+# When variants provide proposal templates, the campaign defaults to launching
+# from plan_implementation so all runs stay inside the same proposal family.
+start_node: plan_implementation
+research_direction: claim-ratio and residual-entropy feature sweep
+
+variant_defaults:
+  planning_notes: |
+    Stay inside the same hypothesis family.
+    Favor directly comparable variants over broad novelty.
+
+variants:
+  - key: q_small
+    title: Q projection, small feature budget
+    name_suffix: q_small
+    planning_notes: Focus on a compact Q-only probe.
+    proposal_patch:
+      projection_subset: q
+      hyperparameters:
+        max_features: 16
+
+  - key: k_small
+    title: K projection, small feature budget
+    name_suffix: k_small
+    planning_notes: Focus on a compact K-only probe.
+    proposal_patch:
+      projection_subset: k
+      hyperparameters:
+        max_features: 16
+
+  - key: qk_medium
+    title: Q/K projections, medium feature budget
+    name_suffix: qk_medium
+    proposal_patch:
+      projection_subset: qk
+      hyperparameters:
+        max_features: 32

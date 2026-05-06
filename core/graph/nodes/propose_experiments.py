@@ -20,6 +20,7 @@ from core.utils.logger import get_logger
 from core.utils.profile_loader import get_prompt, get_step_datasets
 
 log = get_logger(__name__)
+_RAW_RESPONSE_LOG_LIMIT = 12000
 
 
 def propose_experiments_node(state: ResearchState, profile: dict) -> dict:
@@ -78,6 +79,7 @@ def propose_experiments_node(state: ResearchState, profile: dict) -> dict:
     )
 
     log.info("propose_experiments_node | Proposing experiments for %d ideas", len(refined_ideas))
+    resp = None
     try:
         resp = llm.invoke([
             SystemMessage(content=system_prompt),
@@ -89,6 +91,11 @@ def propose_experiments_node(state: ResearchState, profile: dict) -> dict:
             log.debug("  Proposal %d: %s", i + 1, p.get("name"))
     except Exception as exc:
         log.error("propose_experiments_node | Failed: %s", exc, exc_info=True)
+        if resp is not None:
+            log.error(
+                "propose_experiments_node | Raw LLM response follows:\n%s",
+                _truncate_text(str(getattr(resp, "content", "") or ""), _RAW_RESPONSE_LOG_LIMIT),
+            )
         return {
             "proposals": [],
             "errors": (state.get("errors") or []) + [f"propose_experiments failed: {exc}"],
@@ -101,3 +108,10 @@ def propose_experiments_node(state: ResearchState, profile: dict) -> dict:
         log.warning("propose_experiments_node | Memory persistence failed: %s", exc)
         delta["errors"] = (state.get("errors") or []) + [f"propose_experiments: memory persistence failed: {exc}"]
     return delta
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."

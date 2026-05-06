@@ -411,7 +411,9 @@ class NeuralSignalPlugin(ResearchAdapter):
 
         proposals = state.get("proposals") or []
         implementations = state.get("implementations") or []
+        validation_results = state.get("validation_results") or []
         impl_by_name = _implementations_by_proposal(implementations)
+        validation_by_name = _validation_by_proposal(validation_results)
 
         submitted: list[dict[str, Any]] = []
         for proposal in proposals:
@@ -422,7 +424,8 @@ class NeuralSignalPlugin(ResearchAdapter):
                 continue
             try:
                 implementation = impl_by_name.get(proposal_name)
-                _require_async_implementation(proposal_name, implementation)
+                validation = validation_by_name.get(proposal_name)
+                _require_async_implementation(proposal_name, implementation, validation)
                 payload = self._build_proposal_branch_payload(profile, state, proposal, implementation)
                 job = runner.submit(
                     self._job_spec(
@@ -1254,6 +1257,14 @@ def _implementations_by_proposal(implementations: list[dict[str, Any]]) -> dict[
     }
 
 
+def _validation_by_proposal(validation_results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        item.get("proposal_name", ""): item
+        for item in validation_results
+        if item.get("proposal_name")
+    }
+
+
 def _dataset_for_proposal(profile: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:
     datasets = profile.get("datasets") or []
     requested = proposal.get("dataset")
@@ -1277,9 +1288,18 @@ def _implementation_summary(implementation: dict[str, Any] | None) -> dict[str, 
     }
 
 
-def _require_async_implementation(proposal_name: str, implementation: dict[str, Any] | None) -> None:
+def _require_async_implementation(
+    proposal_name: str,
+    implementation: dict[str, Any] | None,
+    validation: dict[str, Any] | None = None,
+) -> None:
     if not implementation:
         raise RuntimeError(f"proposal {proposal_name!r} has no generated implementation")
+    implementation_error = str(implementation.get("error") or "").strip()
+    if implementation_error:
+        raise RuntimeError(
+            f"proposal {proposal_name!r} implementation generation failed: {implementation_error}"
+        )
     script_path = str(implementation.get("script_path") or "").strip()
     class_name = str(implementation.get("class_name") or "").strip()
     if not script_path or not class_name:
@@ -1289,6 +1309,14 @@ def _require_async_implementation(proposal_name: str, implementation: dict[str, 
     if not Path(script_path).exists():
         raise RuntimeError(
             f"proposal {proposal_name!r} implementation script does not exist: {script_path}"
+        )
+    if validation is not None and validation.get("passed") is False:
+        summary = str(validation.get("test_output") or "").strip()
+        if len(summary) > 280:
+            summary = summary[:277] + "..."
+        raise RuntimeError(
+            f"proposal {proposal_name!r} did not pass validation"
+            + (f": {summary}" if summary else "")
         )
 
 

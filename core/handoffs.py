@@ -176,6 +176,12 @@ def save_proposal_seed(
     source_experiment_id = str(metadata.get("experiment_id") or "")
     root_run_family_id = str(metadata.get("root_run_family_id") or "")
     root_research_direction = str(metadata.get("root_research_direction") or metadata.get("research_direction") or research_direction or "")
+    campaign_id = str(payload.get("campaign_id") or metadata.get("campaign_id") or "").strip()
+    campaign_title = str(payload.get("campaign_title") or metadata.get("campaign_title") or "").strip()
+    campaign_variant_id = str(payload.get("campaign_variant_id") or "").strip()
+    campaign_variant_title = str(payload.get("campaign_variant_title") or "").strip()
+    campaign_variant_index = int(payload.get("campaign_variant_index") or 0)
+    campaign_size = int(payload.get("campaign_size") or 0)
     prompt_preview = build_proposal_seed_preview({
         "title": title,
         "research_direction": research_direction,
@@ -198,6 +204,12 @@ def save_proposal_seed(
             "source_experiment_id": source_experiment_id,
             "root_run_family_id": root_run_family_id,
             "root_research_direction": root_research_direction,
+            "campaign_id": campaign_id,
+            "campaign_title": campaign_title,
+            "campaign_variant_id": campaign_variant_id,
+            "campaign_variant_title": campaign_variant_title,
+            "campaign_variant_index": campaign_variant_index,
+            "campaign_size": campaign_size,
         },
         node="web_ui",
         kind="proposal_seed",
@@ -215,6 +227,12 @@ def save_proposal_seed(
             "updated_at": updated_at,
             "research_direction": research_direction,
             "status": "active",
+            "campaign_id": campaign_id,
+            "campaign_title": campaign_title,
+            "campaign_variant_id": campaign_variant_id,
+            "campaign_variant_title": campaign_variant_title,
+            "campaign_variant_index": campaign_variant_index,
+            "campaign_size": campaign_size,
         },
         tags=[str(profile.get("name") or ""), "proposal_seed"],
         source_record_ids=[source_record_id] if source_record_id else [],
@@ -402,7 +420,38 @@ def resolve_proposal_seed(
         "root_run_family_id": root_run_family_id,
         "root_research_direction": root_research_direction,
         "source_experiment_record_id": source_record_id,
+        "campaign_id": str(metadata.get("campaign_id") or content.get("campaign_id") or ""),
+        "campaign_title": str(metadata.get("campaign_title") or content.get("campaign_title") or ""),
+        "campaign_variant_id": str(metadata.get("campaign_variant_id") or content.get("campaign_variant_id") or ""),
+        "campaign_variant_title": str(metadata.get("campaign_variant_title") or content.get("campaign_variant_title") or ""),
+        "campaign_variant_index": int(metadata.get("campaign_variant_index") or content.get("campaign_variant_index") or 0),
+        "campaign_size": int(metadata.get("campaign_size") or content.get("campaign_size") or 0),
     }
+
+
+def load_run_record(profile: dict[str, Any], record_id: str) -> dict[str, Any] | None:
+    service = MemoryService.for_profile(profile)
+    record = service.document_store.get(record_id)
+    if record:
+        return record
+    return _raw_result_record(profile, record_id)
+
+
+def proposal_template_from_run(profile: dict[str, Any], run_record: dict[str, Any]) -> dict[str, Any]:
+    service = MemoryService.for_profile(profile)
+    metadata = dict(run_record.get("metadata") or {})
+    filters: dict[str, Any] = {"object_type": "proposal"}
+    proposal_name = str(metadata.get("proposal_name") or "")
+    family_id = str(metadata.get("root_run_family_id") or "")
+    direction = str(metadata.get("research_direction") or "")
+    if proposal_name:
+        filters["metadata.proposal_name"] = proposal_name
+    if family_id:
+        filters["metadata.root_run_family_id"] = family_id
+    elif direction:
+        filters["metadata.research_direction"] = direction
+    related_records = service.find_records(filters, limit=20)
+    return _proposal_template_from_run(run_record, related_records)
 
 
 def handoff_record_to_summary(profile_name: str, record: dict[str, Any]) -> dict[str, Any]:
@@ -549,6 +598,12 @@ def _raw_result_record(profile: dict[str, Any], record_id: str) -> dict[str, Any
             "research_direction": str(doc.get("research_direction") or ""),
             "root_run_family_id": str(doc.get("root_run_family_id") or ""),
             "root_research_direction": str(doc.get("root_research_direction") or doc.get("research_direction") or ""),
+            "campaign_id": str(doc.get("campaign_id") or ""),
+            "campaign_title": str(doc.get("campaign_title") or ""),
+            "campaign_variant_id": str(doc.get("campaign_variant_id") or ""),
+            "campaign_variant_title": str(doc.get("campaign_variant_title") or ""),
+            "campaign_variant_index": int(doc.get("campaign_variant_index") or 0),
+            "campaign_size": int(doc.get("campaign_size") or 0),
             "assessment": str((((doc.get("evaluation_summary") or {}).get("per_proposal_analysis") or {}).get(str(doc.get("proposal_name") or ""), {}) or {}).get("assessment") or ""),
         },
     }

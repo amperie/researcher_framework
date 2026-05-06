@@ -178,19 +178,20 @@ def _score_artifacts(
 
 
 def _score_request(direction: str, artifact: dict[str, Any]) -> str:
+    metadata_text = json.dumps(artifact.get("metadata") or {}, default=str)
     payload = {
         "research_direction": direction,
         "artifact": {
             "source": artifact.get("source"),
             "source_type": artifact.get("source_type"),
             "title": artifact.get("title"),
-            "summary": artifact.get("summary"),
-            "metadata": artifact.get("metadata"),
+            "summary": _truncate_text(artifact.get("summary", ""), 2500),
+            "metadata": _truncate_text(metadata_text, 1200),
             "url": artifact.get("url"),
             "published": artifact.get("published"),
         },
     }
-    return json.dumps(payload, indent=2, default=str)[:10000]
+    return json.dumps(payload, indent=2, default=str)[:5000]
 
 def _summarize_artifacts(direction: str, profile: dict, artifacts: list[dict[str, Any]], llm) -> str:
     if not artifacts:
@@ -202,8 +203,8 @@ def _summarize_artifacts(direction: str, profile: dict, artifacts: list[dict[str
         (
             f"[{a.get('source_type')} | {a.get('source')} | score {a.get('relevance_score')}]\n"
             f"Title: {a.get('title')}\n"
-            f"Reason: {a.get('relevance_reason', '')}\n"
-            f"Summary: {a.get('summary', '')}"
+            f"Reason: {_truncate_text(a.get('relevance_reason', ''), 300)}\n"
+            f"Summary: {_truncate_text(a.get('summary', ''), 1200)}"
         )
         for a in artifacts[:max_summary_items]
     )
@@ -244,7 +245,7 @@ def _digest_top_papers(profile: dict, artifacts: list[dict[str, Any]], tool_cfgs
         try:
             resp = llm.invoke([
                 SystemMessage(content=digest_prompt),
-                HumanMessage(content=f"Paper: {artifact.get('title')}\n\n{text[:8000]}"),
+                HumanMessage(content=f"Paper: {artifact.get('title')}\n\n{text[:5000]}"),
             ])
             record = {
                 "arxiv_id": arxiv_id,
@@ -280,3 +281,10 @@ def _paper_compat(artifact: dict[str, Any]) -> dict:
         "relevance_score": artifact.get("relevance_score", 0),
         "relevance_reason": artifact.get("relevance_reason", ""),
     }
+
+
+def _truncate_text(value: Any, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."

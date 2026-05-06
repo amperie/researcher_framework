@@ -1,4 +1,4 @@
-"""Propose next steps — suggest follow-up research directions based on results.
+"""Propose next steps - suggest follow-up research directions based on results.
 
 Reads:
     state['evaluation_summary']
@@ -31,18 +31,17 @@ def propose_next_steps_node(state: ResearchState, profile: dict) -> dict:
     system_prompt = get_prompt(profile, "propose_next_steps")
     llm = get_llm("propose_next_steps", profile)
 
-    # Build compact results summary for the LLM
     results_summary = [
         {
-            "proposal_name": r.get("proposal_name"),
-            "metrics": r.get("metrics", {}),
+            "proposal_name": result.get("proposal_name"),
+            "metrics": result.get("metrics", {}),
         }
-        for r in experiment_results
+        for result in experiment_results
     ]
 
     user_content = (
         f"Research direction: {direction}\n\n"
-        f"Evaluation summary:\n{json.dumps(evaluation_summary, indent=2, default=str)}\n\n"
+        f"Evaluation summary:\n{_truncate_text(json.dumps(evaluation_summary, indent=2, default=str), 2500)}\n\n"
         f"Experiment results overview:\n{json.dumps(results_summary, indent=2, default=str)}"
     )
 
@@ -54,8 +53,8 @@ def propose_next_steps_node(state: ResearchState, profile: dict) -> dict:
         ])
         next_steps = extract_json_array(resp.content)
         log.info("propose_next_steps_node | Generated %d next steps", len(next_steps))
-        for i, s in enumerate(next_steps):
-            log.debug("  Step %d: %s", i + 1, s.get("title"))
+        for i, step in enumerate(next_steps):
+            log.debug("  Step %d: %s", i + 1, step.get("title"))
     except Exception as exc:
         log.error("propose_next_steps_node | Failed: %s", exc, exc_info=True)
         return {
@@ -64,3 +63,10 @@ def propose_next_steps_node(state: ResearchState, profile: dict) -> dict:
         }
 
     return {"next_steps": next_steps}
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."

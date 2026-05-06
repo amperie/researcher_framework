@@ -1,4 +1,4 @@
-"""Implement step — generate code that subclasses a profile base class.
+"""Implement step - generate code that subclasses a profile base class.
 
 For each implementation plan, asks the LLM to generate a Python class file.
 Generated files are cached under the configured experiments directory.
@@ -8,7 +8,7 @@ Reads:
     state['profile_name']
 
 Writes:
-    state['implementations']  — {script_path, class_name, proposal_name, plan}
+    state['implementations']  - {script_path, class_name, proposal_name, plan}
 """
 from __future__ import annotations
 
@@ -45,29 +45,8 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
     system_prompt = get_prompt(profile, "implement")
     llm = get_llm("implement", profile)
 
-    # Build full base class context for the code-gen prompt
-    base_classes = profile.get("base_classes") or []
-    base_class_docs = "\n\n".join(
-        f"Base class: {bc['name']}\nModule: {bc.get('module', 'n/a')}\n"
-        f"Key interface:\n{bc.get('key_interface', '')}"
-        for bc in base_classes
-    )
-
-    # Build scan constraints block
-    datasets = profile.get("datasets") or []
-    scan_constraints_parts = []
-    for ds in datasets:
-        asf = ds.get("available_scan_fields") or {}
-        layer_patterns = ds.get("layer_name_patterns") or {}
-        scan_constraints_parts.append(
-            f"Dataset '{ds['name']}':\n"
-            f"  Guaranteed: {asf.get('guaranteed', [])}\n"
-            f"  Optional: {asf.get('optional', [])}\n"
-            f"  NOT available (do not access): {asf.get('not_available', [])}\n"
-            f"  FFN layer patterns (injected via cfg): {layer_patterns.get('ffn', [])}\n"
-            f"  Attn layer patterns (injected via cfg): {layer_patterns.get('attn', [])}"
-        )
-    scan_constraints = "\n".join(scan_constraints_parts)
+    base_class_docs = _base_class_context(profile)
+    scan_constraints = _scan_constraints_context(profile)
     implementation_examples = _load_implementation_examples(profile)
 
     cache_dir = _script_cache_dir(profile_name)
@@ -76,7 +55,12 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
     implementations: list[dict] = []
     errors = list(state.get("errors") or [])
 
-    for plan in plans:
+    for idx, plan in enumerate(plans):
+        if not isinstance(plan, dict):
+            errors.append(
+                f"implement: skipped malformed implementation plan at index {idx}: expected object, got {type(plan).__name__}"
+            )
+            continue
         class_name = plan.get("class_name") or plan.get("proposal_name", "UnknownClass")
         proposal_name = plan.get("proposal_name", class_name)
         cache_path = cache_dir / f"{class_name}.py"
@@ -111,6 +95,7 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
         )
 
         log.info("implement_node | Generating code for %r", class_name)
+        resp = None
         try:
             resp = llm.invoke([
                 SystemMessage(content=system_prompt),
@@ -120,7 +105,7 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
             validate_python_source(code, expected_class_name=class_name)
 
             cache_path.write_text(code, encoding="utf-8")
-            log.info("implement_node | Saved %d lines → %s", len(code.splitlines()), cache_path)
+            log.info("implement_node | Saved %d lines -> %s", len(code.splitlines()), cache_path)
             implementation = {
                 "script_path": str(cache_path),
                 "class_name": class_name,
@@ -132,6 +117,12 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
             implementations.append(implementation)
         except Exception as exc:
             log.error("implement_node | Code generation failed for %r: %s", class_name, exc, exc_info=True)
+            if resp is not None:
+                log.error(
+                    "implement_node | Raw LLM response for %r follows:\n%s",
+                    class_name,
+                    _truncate_text(str(getattr(resp, "content", "") or ""), 12000),
+                )
             implementations.append({
                 "script_path": "",
                 "class_name": class_name,
@@ -175,10 +166,47 @@ def _load_implementation_examples(profile: dict) -> str:
         except Exception as exc:
             rendered.append(f"[unreadable example: {path}] {exc}")
             continue
+        excerpt = _truncate_text(code, 3500)
         rendered.append(
             f"Example path: {path}\n"
             f"Purpose: {purpose}\n"
             "Use this as API/style reference only; do not copy feature logic unless explicitly requested.\n"
-            f"```python\n{code}\n```"
+            f"```python\n{excerpt}\n```"
         )
     return "\n\n".join(rendered)
+
+
+def _base_class_context(profile: dict) -> str:
+    base_classes = profile.get("base_classes") or []
+    rendered: list[str] = []
+    for bc in base_classes:
+        rendered.append(
+            f"Base class: {bc['name']}\n"
+            f"Module: {bc.get('module', 'n/a')}\n"
+            f"Description: {bc.get('description', '')}\n"
+            f"Key interface excerpt:\n{_truncate_text(bc.get('key_interface', ''), 2600)}"
+        )
+    return "\n\n".join(rendered)
+
+
+def _scan_constraints_context(profile: dict) -> str:
+    datasets = profile.get("datasets") or []
+    parts: list[str] = []
+    for ds in datasets:
+        asf = ds.get("available_scan_fields") or {}
+        layer_patterns = ds.get("layer_name_patterns") or {}
+        parts.append(
+            f"Dataset '{ds['name']}':\n"
+            f"  Guaranteed: {asf.get('guaranteed', [])}\n"
+            f"  NOT available: {asf.get('not_available', [])}\n"
+            f"  FFN patterns: {layer_patterns.get('ffn', [])[:6]}\n"
+            f"  Attn patterns: {layer_patterns.get('attn', [])[:6]}"
+        )
+    return "\n".join(parts)
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."

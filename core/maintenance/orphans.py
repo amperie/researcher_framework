@@ -83,13 +83,16 @@ class OrphanCleanupService:
         orphan_storage_keys = sorted(
             {
                 key
-                for key in storage_keys
-                if key not in set(artifact_keys_by_id.values())
-            }.union(
-                key
                 for artifact_id, key in artifact_keys_by_id.items()
                 if artifact_id in orphan_artifact_ids and key
-            )
+            }
+        )
+        untracked_storage_keys = sorted(
+            {
+                key
+                for key in storage_keys
+                if key not in set(artifact_keys_by_id.values())
+            }
         )
 
         return {
@@ -105,12 +108,16 @@ class OrphanCleanupService:
                 "orphan_neo4j_records": len(orphan_neo4j_ids),
                 "orphan_artifact_metadata_records": len(orphan_artifact_docs),
                 "orphan_artifact_storage_objects": len(orphan_storage_keys),
+                "untracked_artifact_storage_objects": len(untracked_storage_keys),
             },
             "orphans": {
                 "chroma_record_ids": orphan_chroma_ids,
                 "neo4j_record_ids": orphan_neo4j_ids,
                 "artifact_metadata_records": orphan_artifact_docs,
                 "artifact_storage_keys": orphan_storage_keys,
+            },
+            "untracked": {
+                "artifact_storage_keys": untracked_storage_keys,
             },
             "errors": list(self.backend_errors),
         }
@@ -191,6 +198,7 @@ def _aggregate_results(results: list[dict[str, Any]], *, mode: str) -> dict[str,
         "orphan_neo4j_records": 0,
         "orphan_artifact_metadata_records": 0,
         "orphan_artifact_storage_objects": 0,
+        "untracked_artifact_storage_objects": 0,
     }
     deleted = {
         "chroma_records": 0,

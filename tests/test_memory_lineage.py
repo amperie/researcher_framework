@@ -29,6 +29,10 @@ def test_proposal_records_include_next_step_lineage(minimal_profile):
         "research_direction": "new direction",
         "source_next_step_record_id": "next_step:abc",
         "source_next_step_title": "Try the residual path idea",
+        "campaign_id": "campaign-1",
+        "campaign_title": "Residual entropy sweep",
+        "campaign_variant_id": "variant-a",
+        "campaign_variant_title": "Variant A",
         "proposals": [{
             "name": "proposal_a",
             "dataset": "test_dataset",
@@ -48,6 +52,12 @@ def test_proposal_records_include_next_step_lineage(minimal_profile):
         and relation["target_key"] == "proposal_a"
         for relation in record["relations"]
     )
+    assert any(
+        relation["relation_type"] == "campaign_includes"
+        and relation["source_type"] == "campaign"
+        and relation["target_key"] == "proposal_a"
+        for relation in record["relations"]
+    )
 
 
 def test_experiment_records_include_proposal_and_next_step_lineage(minimal_profile):
@@ -55,6 +65,10 @@ def test_experiment_records_include_proposal_and_next_step_lineage(minimal_profi
         "research_direction": "new direction",
         "source_next_step_record_id": "next_step:abc",
         "source_next_step_title": "Try the residual path idea",
+        "campaign_id": "campaign-1",
+        "campaign_title": "Residual entropy sweep",
+        "campaign_variant_id": "variant-a",
+        "campaign_variant_title": "Variant A",
         "experiment_results": [{
             "experiment_id": "exp-123",
             "proposal_name": "proposal_a",
@@ -85,3 +99,10 @@ def test_experiment_records_include_proposal_and_next_step_lineage(minimal_profi
         and relation["target_key"] == "proposal_a"
         for relation in record["relations"]
     )
+    assert any(
+        relation["relation_type"] == "campaign_runs"
+        and relation["source_type"] == "campaign"
+        and relation["target_key"] == "exp-123"
+        for relation in record["relations"]
+    )
+    assert record["metadata"]["campaign_id"] == "campaign-1"

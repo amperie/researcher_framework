@@ -778,7 +778,7 @@ def test_submit_experiment_jobs_submits_proposal_branch_job(tmp_path):
     runner.submit.assert_called_once()
     spec = runner.submit.call_args.args[0]
     assert spec["stage"] == "proposal_branch"
-    assert spec["task_path"] == "plugins.neuralsignal.tasks.run_proposal_branch"
+    assert spec["task_path"] == "core.plugins.neuralsignal.tasks.run_proposal_branch"
     assert spec["payload"]["dataset_config"]["dataset"] == "HaluBench"
     assert spec["payload"]["model_config_base"]["dataset"] == "HaluBench"
     assert delta["experiment_jobs"][0]["status"] == "submitted"
@@ -799,6 +799,31 @@ def test_submit_experiment_jobs_reports_missing_implementation(tmp_path):
     runner.submit.assert_not_called()
     assert delta["experiment_jobs"] == []
     assert any("has no generated implementation" in error for error in delta["errors"])
+
+
+def test_submit_experiment_jobs_reports_generation_failure_before_submit(tmp_path):
+    adapter = NeuralSignalPlugin()
+    state = {
+        "proposals": [_proposal()],
+        "implementations": [{
+            "proposal_name": "activation_sparsity",
+            "class_name": "ActivationSparsity",
+            "script_path": "",
+            "error": "LLM returned prose instead of Python",
+        }],
+    }
+    runner = MagicMock()
+
+    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.neuralsignal.adapter.get_runner", return_value=runner):
+            delta = adapter.submit_experiment_jobs(
+                {**_profile(), "execution": {"runner": "ray", "max_parallel_jobs": 1}},
+                state,
+            )
+
+    runner.submit.assert_not_called()
+    assert delta["experiment_jobs"] == []
+    assert any("implementation generation failed" in error for error in delta["errors"])
 
 
 def test_build_model_config_requires_implementation_metadata(tmp_path):

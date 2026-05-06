@@ -196,6 +196,12 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
     source_next_step_title = str(state.get("source_next_step_title") or "")
     source_proposal_seed_record_id = str(state.get("source_proposal_seed_record_id") or "")
     source_proposal_seed_title = str(state.get("source_proposal_seed_title") or "")
+    campaign_id = str(state.get("campaign_id") or "")
+    campaign_title = str(state.get("campaign_title") or "")
+    campaign_variant_id = str(state.get("campaign_variant_id") or "")
+    campaign_variant_title = str(state.get("campaign_variant_title") or "")
+    campaign_variant_index = int(state.get("campaign_variant_index") or 0)
+    campaign_size = int(state.get("campaign_size") or 0)
     model_by_exp = {m.get("experiment_id"): m for m in models}
 
     for result in experiment_results:
@@ -239,6 +245,12 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
                 "research_direction": direction,
                 "root_run_family_id": root_run_family_id,
                 "root_research_direction": root_research_direction,
+                "campaign_id": campaign_id,
+                "campaign_title": campaign_title,
+                "campaign_variant_id": campaign_variant_id,
+                "campaign_variant_title": campaign_variant_title,
+                "campaign_variant_index": campaign_variant_index,
+                "campaign_size": campaign_size,
                 "artifacts": result.get("artifacts") or {},
             },
             "metadata": {
@@ -260,6 +272,12 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
                 "source_next_step_title": source_next_step_title,
                 "source_proposal_seed_record_id": source_proposal_seed_record_id,
                 "source_proposal_seed_title": source_proposal_seed_title,
+                "campaign_id": campaign_id,
+                "campaign_title": campaign_title,
+                "campaign_variant_id": campaign_variant_id,
+                "campaign_variant_title": campaign_variant_title,
+                "campaign_variant_index": campaign_variant_index,
+                "campaign_size": campaign_size,
                 **{k: float(v) for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
             },
             "tags": [str(profile.get("name") or ""), "prior_experiment"],
@@ -273,6 +291,10 @@ def build_experiment_memory_records(profile: dict[str, Any], state: dict[str, An
                 experiment_id or proposal_name,
                 source_next_step_record_id=source_next_step_record_id,
                 source_next_step_title=source_next_step_title,
+                campaign_id=campaign_id,
+                campaign_title=campaign_title,
+                campaign_variant_id=campaign_variant_id,
+                campaign_variant_title=campaign_variant_title,
             ),
         }
         records.append(record)
@@ -456,6 +478,12 @@ def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]
     source_next_step_title = str(state.get("source_next_step_title") or "")
     source_proposal_seed_record_id = str(state.get("source_proposal_seed_record_id") or "")
     source_proposal_seed_title = str(state.get("source_proposal_seed_title") or "")
+    campaign_id = str(state.get("campaign_id") or "")
+    campaign_title = str(state.get("campaign_title") or "")
+    campaign_variant_id = str(state.get("campaign_variant_id") or "")
+    campaign_variant_title = str(state.get("campaign_variant_title") or "")
+    campaign_variant_index = int(state.get("campaign_variant_index") or 0)
+    campaign_size = int(state.get("campaign_size") or 0)
     records: list[MemoryRecord] = []
 
     for proposal in proposals:
@@ -493,6 +521,12 @@ def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]
                 "source_next_step_title": source_next_step_title,
                 "source_proposal_seed_record_id": source_proposal_seed_record_id,
                 "source_proposal_seed_title": source_proposal_seed_title,
+                "campaign_id": campaign_id,
+                "campaign_title": campaign_title,
+                "campaign_variant_id": campaign_variant_id,
+                "campaign_variant_title": campaign_variant_title,
+                "campaign_variant_index": campaign_variant_index,
+                "campaign_size": campaign_size,
             },
             "tags": [domain, "proposal"],
             "created_at": _now_iso(),
@@ -506,6 +540,10 @@ def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]
                 source_next_step_title=source_next_step_title,
                 source_proposal_seed_record_id=source_proposal_seed_record_id,
                 source_proposal_seed_title=source_proposal_seed_title,
+                campaign_id=campaign_id,
+                campaign_title=campaign_title,
+                campaign_variant_id=campaign_variant_id,
+                campaign_variant_title=campaign_variant_title,
             ),
         })
     return records
@@ -518,6 +556,8 @@ def build_implementation_plan_memory_records(profile: dict[str, Any], state: dic
     records: list[MemoryRecord] = []
 
     for plan in plans:
+        if not isinstance(plan, dict):
+            continue
         proposal_name = str(plan.get("proposal_name") or plan.get("class_name") or "plan")
         class_name = str(plan.get("class_name") or proposal_name)
         plan_fingerprint = fingerprint_json({
@@ -1046,8 +1086,26 @@ def _experiment_relations(
     *,
     source_next_step_record_id: str = "",
     source_next_step_title: str = "",
+    campaign_id: str = "",
+    campaign_title: str = "",
+    campaign_variant_id: str = "",
+    campaign_variant_title: str = "",
 ) -> list[MemoryRelation]:
     relations: list[MemoryRelation] = []
+    if campaign_id:
+        relations.append({
+            "relation_type": "campaign_runs",
+            "source_type": "campaign",
+            "source_key": campaign_title or campaign_id,
+            "target_type": "experiment_result",
+            "target_key": experiment_key,
+            "metadata": {
+                "domain": profile.get("name", ""),
+                "campaign_id": campaign_id,
+                "campaign_variant_id": campaign_variant_id,
+                "campaign_variant_title": campaign_variant_title,
+            },
+        })
     if experiment_key:
         relations.append({
             "relation_type": "executed_as",
@@ -1365,8 +1423,26 @@ def _proposal_relations(
     source_next_step_title: str = "",
     source_proposal_seed_record_id: str = "",
     source_proposal_seed_title: str = "",
+    campaign_id: str = "",
+    campaign_title: str = "",
+    campaign_variant_id: str = "",
+    campaign_variant_title: str = "",
 ) -> list[MemoryRelation]:
     relations: list[MemoryRelation] = []
+    if campaign_id:
+        relations.append({
+            "relation_type": "campaign_includes",
+            "source_type": "campaign",
+            "source_key": campaign_title or campaign_id,
+            "target_type": "proposal",
+            "target_key": proposal_name,
+            "metadata": {
+                "domain": domain,
+                "campaign_id": campaign_id,
+                "campaign_variant_id": campaign_variant_id,
+                "campaign_variant_title": campaign_variant_title,
+            },
+        })
     if source_proposal_seed_title:
         relations.append({
             "relation_type": "seeded_proposal",

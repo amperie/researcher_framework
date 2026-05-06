@@ -18,6 +18,7 @@ from core.utils.profile_loader import get_prompt
 log = get_logger(__name__)
 
 _DEFAULT_SELECTION_LIMIT = 3
+_RAW_RESPONSE_LOG_LIMIT = 12000
 
 
 def rank_next_steps_node(state: ResearchState, profile: dict) -> dict:
@@ -83,6 +84,7 @@ def rank_next_steps_node(state: ResearchState, profile: dict) -> dict:
         for result in experiment_results
     ]
 
+    response = None
     try:
         system_prompt = get_prompt(profile, "rank_next_steps")
         llm = get_llm("rank_next_steps", profile)
@@ -119,6 +121,11 @@ def rank_next_steps_node(state: ResearchState, profile: dict) -> dict:
             delta["errors"] = (state.get("errors") or []) + novelty_errors
     except Exception as exc:
         log.warning("rank_next_steps_node | Ranking failed, using fallback ordering: %s", exc)
+        if response is not None:
+            log.warning(
+                "rank_next_steps_node | Raw LLM response follows:\n%s",
+                _truncate_text(str(getattr(response, "content", "") or ""), _RAW_RESPONSE_LOG_LIMIT),
+            )
         selected_candidates, extra_dropped = _fallback_ranked_candidates(candidates, selection_limit)
         delta = {
             "next_steps": [candidate["step"] for candidate in selected_candidates],
@@ -443,3 +450,10 @@ def _persist_ranked_next_steps(profile: dict[str, Any], state: ResearchState, de
         delta["errors"] = (delta.get("errors") or state.get("errors") or []) + [
             f"rank_next_steps: memory persistence failed: {exc}"
         ]
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."

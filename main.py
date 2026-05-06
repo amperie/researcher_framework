@@ -67,6 +67,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Pipeline node to start from, then continue through all remaining nodes.",
     )
+    parser.add_argument("--campaign-id", type=str, default=None, help="Optional campaign id for grouped runs.")
+    parser.add_argument("--campaign-title", type=str, default=None, help="Optional campaign title for grouped runs.")
+    parser.add_argument("--campaign-variant-id", type=str, default=None, help="Optional campaign variant id.")
+    parser.add_argument("--campaign-variant-title", type=str, default=None, help="Optional campaign variant title.")
+    parser.add_argument("--campaign-variant-index", type=int, default=0, help="1-based campaign variant index.")
+    parser.add_argument("--campaign-size", type=int, default=0, help="Planned campaign size.")
     parser.add_argument("--loop", action="store_true", default=False,
                         help="Auto-loop: use top next_step as the next direction.")
     parser.add_argument(
@@ -113,6 +119,73 @@ def _add_plugin_to_path(profile: dict) -> None:
             log.debug("Added neuralsignal to sys.path: %s", ns_path)
         elif not ns_path.exists():
             log.warning("neuralsignal_src_path not found: %s", ns_path)
+
+
+def build_initial_state(
+    profile_name: str,
+    direction: str,
+    seed: dict[str, Any],
+    *,
+    continue_loop: bool,
+    extra_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    root_run_family_id = str(seed.get("root_run_family_id") or f"{profile_name}:{uuid4()}")
+    root_research_direction = str(seed.get("root_research_direction") or direction)
+    initial_state: dict[str, Any] = {
+        "profile_name": profile_name,
+        "research_direction": direction,
+        "continue_loop": continue_loop,
+        "root_run_family_id": root_run_family_id,
+        "root_research_direction": root_research_direction,
+        "errors": [],
+    }
+    for key in (
+        "source_next_step_record_id",
+        "source_next_step_title",
+        "source_proposal_seed_record_id",
+        "source_proposal_seed_title",
+        "proposal_seed_planning_notes",
+        "campaign_id",
+        "campaign_title",
+        "campaign_variant_id",
+        "campaign_variant_title",
+        "campaign_variant_index",
+        "campaign_size",
+    ):
+        if seed.get(key) not in (None, "", 0):
+            initial_state[key] = seed[key]
+    if seed.get("proposals"):
+        initial_state["proposals"] = list(seed["proposals"])
+    if extra_state:
+        for key, value in extra_state.items():
+            if value not in (None, "", 0):
+                initial_state[key] = value
+    return initial_state
+
+
+def run_pipeline_graph(
+    profile_name: str,
+    profile: dict[str, Any],
+    *,
+    initial_state: dict[str, Any],
+    start_node: str,
+    print_results: bool = True,
+) -> dict[str, Any]:
+    from core.graph.builder import build_graph
+
+    graph = build_graph(profile, start_node=start_node)
+    log.info(
+        "Invoking pipeline graph profile=%r start_node=%r direction=%r family=%r campaign=%r",
+        profile_name,
+        start_node,
+        initial_state.get("research_direction"),
+        initial_state.get("root_run_family_id"),
+        initial_state.get("campaign_id"),
+    )
+    final_state = graph.invoke(initial_state)
+    if print_results:
+        _print_results(final_state, profile_name)
+    return final_state
 
 
 def main() -> None:
@@ -214,9 +287,6 @@ def main() -> None:
 
     log.info("Starting pipeline — profile=%r, direction=%r mode=%s", profile_name, direction, run_mode)
 
-    from core.graph.builder import build_graph
-    graph = build_graph(profile, start_node=start_node)
-
     seen_directions: set[str] = set()
     current_direction = direction
     pending_next_step_runs: list[dict[str, str]] = []
@@ -225,26 +295,23 @@ def main() -> None:
     completed_runs = 0
     root_run_family_id = str(seed.get("root_run_family_id") or f"{profile_name}:{uuid4()}")
     root_research_direction = str(seed.get("root_research_direction") or direction)
-    initial_state: dict[str, Any] = {
-        "profile_name": profile_name,
-        "research_direction": current_direction,
-        "continue_loop": run_mode == "loop",
-        "root_run_family_id": root_run_family_id,
-        "root_research_direction": root_research_direction,
-        "errors": [],
+    seed["root_run_family_id"] = root_run_family_id
+    seed["root_research_direction"] = root_research_direction
+    campaign_state = {
+        "campaign_id": str(args.campaign_id or seed.get("campaign_id") or ""),
+        "campaign_title": str(args.campaign_title or seed.get("campaign_title") or ""),
+        "campaign_variant_id": str(args.campaign_variant_id or seed.get("campaign_variant_id") or ""),
+        "campaign_variant_title": str(args.campaign_variant_title or seed.get("campaign_variant_title") or ""),
+        "campaign_variant_index": int(args.campaign_variant_index or seed.get("campaign_variant_index") or 0),
+        "campaign_size": int(args.campaign_size or seed.get("campaign_size") or 0),
     }
-    if seed.get("source_next_step_record_id"):
-        initial_state["source_next_step_record_id"] = seed["source_next_step_record_id"]
-    if seed.get("source_next_step_title"):
-        initial_state["source_next_step_title"] = seed["source_next_step_title"]
-    if seed.get("source_proposal_seed_record_id"):
-        initial_state["source_proposal_seed_record_id"] = seed["source_proposal_seed_record_id"]
-    if seed.get("source_proposal_seed_title"):
-        initial_state["source_proposal_seed_title"] = seed["source_proposal_seed_title"]
-    if seed.get("proposal_seed_planning_notes"):
-        initial_state["proposal_seed_planning_notes"] = seed["proposal_seed_planning_notes"]
-    if seed.get("proposals"):
-        initial_state["proposals"] = list(seed["proposals"])
+    initial_state = build_initial_state(
+        profile_name,
+        current_direction,
+        seed,
+        continue_loop=(run_mode == "loop"),
+        extra_state=campaign_state,
+    )
 
     while True:
         current_run_number = completed_runs + 1
@@ -267,7 +334,13 @@ def main() -> None:
             print(f"\n[{profile_name}] Top-level run {current_run_number}")
         print(f"\n[{profile_name}] Researching: {current_direction!r}\n")
         try:
-            final_state = graph.invoke(initial_state)
+            final_state = run_pipeline_graph(
+                profile_name,
+                profile,
+                initial_state=initial_state,
+                start_node=start_node,
+                print_results=False,
+            )
         except Exception:
             log.critical("Pipeline raised an unhandled exception", exc_info=True)
             raise
@@ -312,16 +385,20 @@ def main() -> None:
                 len(pending_next_step_runs),
             )
             current_direction = next_direction
-            initial_state = {
-                "profile_name": profile_name,
+            next_run_seed = {
                 "research_direction": current_direction,
-                "continue_loop": False,
                 "root_run_family_id": root_run_family_id,
                 "root_research_direction": root_research_direction,
-                "errors": [],
                 "source_next_step_record_id": next_seed["source_next_step_record_id"],
                 "source_next_step_title": next_seed["source_next_step_title"],
+                **campaign_state,
             }
+            initial_state = build_initial_state(
+                profile_name,
+                current_direction,
+                next_run_seed,
+                continue_loop=False,
+            )
             continue
 
         next_seed = _next_loop_seed(profile_name, current_direction, final_state)
@@ -337,16 +414,20 @@ def main() -> None:
             next_direction,
         )
         current_direction = next_direction
-        initial_state = {
-            "profile_name": profile_name,
+        next_run_seed = {
             "research_direction": current_direction,
-            "continue_loop": True,
             "root_run_family_id": root_run_family_id,
             "root_research_direction": root_research_direction,
-            "errors": [],
             "source_next_step_record_id": next_seed["source_next_step_record_id"],
             "source_next_step_title": next_seed["source_next_step_title"],
+            **campaign_state,
         }
+        initial_state = build_initial_state(
+            profile_name,
+            current_direction,
+            next_run_seed,
+            continue_loop=True,
+        )
 
 
 def _print_results(state: dict, profile_name: str) -> None:

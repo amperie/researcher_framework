@@ -21,6 +21,7 @@ from core.utils.logger import get_logger
 from core.utils.profile_loader import get_prompt, get_step_datasets
 
 log = get_logger(__name__)
+_RAW_RESPONSE_LOG_LIMIT = 12000
 
 
 def refine_node(state: ResearchState, profile: dict) -> dict:
@@ -63,6 +64,7 @@ def refine_node(state: ResearchState, profile: dict) -> dict:
     )
 
     log.info("refine_node | Refining %d ideas", len(ideas))
+    resp = None
     try:
         resp = llm.invoke([
             SystemMessage(content=system_prompt),
@@ -72,6 +74,11 @@ def refine_node(state: ResearchState, profile: dict) -> dict:
         log.info("refine_node | %d ideas remain after refinement", len(refined))
     except Exception as exc:
         log.error("refine_node | Failed: %s", exc, exc_info=True)
+        if resp is not None:
+            log.error(
+                "refine_node | Raw LLM response follows:\n%s",
+                _truncate_text(str(getattr(resp, "content", "") or ""), _RAW_RESPONSE_LOG_LIMIT),
+            )
         return {
             "refined_ideas": ideas,  # fall back to unrefined
             "errors": (state.get("errors") or []) + [f"refine failed: {exc}"],
@@ -85,3 +92,10 @@ def refine_node(state: ResearchState, profile: dict) -> dict:
         log.warning("refine_node | Memory persistence failed: %s", exc)
         delta["errors"] = (state.get("errors") or []) + [f"refine: memory persistence failed: {exc}"]
     return delta
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."

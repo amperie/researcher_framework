@@ -1,0 +1,319 @@
+profile: neuralsignal
+
+campaign_title: per_projection_residual_entropy family sweep
+campaign_id: campaign:per_projection_residual_entropy_family
+
+# The stored source run does not currently expose a root_run_family_id, so this
+# config pins the family to the anchor experiment id itself. That keeps every
+# descendant run grouped under one stable lineage key.
+source_experiment_record_id: f83b1e69-02c9-4f9a-9fd3-efeb57aa90cd
+root_run_family_id: f83b1e69-02c9-4f9a-9fd3-efeb57aa90cd
+root_research_direction: >
+  Extract per-head entropy and claim_fraction features for every (layer, head)
+  pair at the yes/no output token position. Use a feature selection wrapper:
+  within each CV fold, rank all (layer, head) pairs by univariate AUC on the
+  training split, select the top 5 heads, and fit a logistic regression on only
+  those 5 features. Report which heads are consistently selected across folds
+  (stable head identity) versus variable (unstable). Combine the top-3 most
+  consistently selected head features with norm_growth_rate_early in a final
+  model. This tests whether individual attention heads generalize better than
+  layer-aggregate entropy while keeping dimensionality low enough to avoid
+  overfitting on 500 samples.
+
+# Keep all variants inside the same proposal family and skip re-ideation.
+start_node: plan_implementation
+research_direction: >
+  Run targeted variants of per_projection_residual_entropy that preserve the
+  same core hypothesis: per-head projection-level claim-ratio and entropy
+  signals can generalize for hallucination detection, especially when paired
+  with stable head selection and a small supporting norm-growth feature set.
+
+variant_defaults:
+  planning_notes: |
+    Stay inside the same proposal family as per_projection_residual_entropy.
+    Do not invent a new mechanism family.
+    Keep the experiment comparable to the anchor run.
+    Favor small, interpretable differences in head selection, projection subset,
+    feature budget, and regularization.
+
+variants:
+  - key: q_top8
+    title: Q projection, top 8 features
+    name_suffix: q_top8
+    planning_notes: Restrict to Q projection features only.
+    proposal_patch:
+      projection_subset: q
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 8
+
+  - key: k_top8
+    title: K projection, top 8 features
+    name_suffix: k_top8
+    planning_notes: Restrict to K projection features only.
+    proposal_patch:
+      projection_subset: k
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 8
+
+  - key: v_top8
+    title: V projection, top 8 features
+    name_suffix: v_top8
+    planning_notes: Restrict to V projection features only.
+    proposal_patch:
+      projection_subset: v
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 8
+
+  - key: o_top8
+    title: O projection, top 8 features
+    name_suffix: o_top8
+    planning_notes: Restrict to O projection features only.
+    proposal_patch:
+      projection_subset: o
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 8
+
+  - key: qk_top10
+    title: Q/K projections, top 10 features
+    name_suffix: qk_top10
+    planning_notes: Test whether query-key routing signal is dominant.
+    proposal_patch:
+      projection_subset: qk
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 10
+
+  - key: kv_top10
+    title: K/V projections, top 10 features
+    name_suffix: kv_top10
+    planning_notes: Test key-value pairings while keeping budget small.
+    proposal_patch:
+      projection_subset: kv
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 10
+
+  - key: qkv_top12
+    title: Q/K/V projections, top 12 features
+    name_suffix: qkv_top12
+    planning_notes: Broaden slightly without using all projection outputs.
+    proposal_patch:
+      projection_subset: qkv
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 12
+
+  - key: all_top12
+    title: All projections, top 12 features
+    name_suffix: all_top12
+    planning_notes: Closest compact variant to the original family.
+    proposal_patch:
+      projection_subset: all
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 12
+
+  - key: qk_no_norm
+    title: Q/K projections without norm growth feature
+    name_suffix: qk_no_norm
+    planning_notes: Ablate the supporting norm_growth_rate_early feature.
+    proposal_patch:
+      projection_subset: qk
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: false
+      hyperparameters:
+        max_features: 10
+
+  - key: all_no_norm
+    title: All projections without norm growth feature
+    name_suffix: all_no_norm
+    planning_notes: Pure projection-level entropy and claim-ratio ablation.
+    proposal_patch:
+      projection_subset: all
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: false
+      hyperparameters:
+        max_features: 12
+
+  - key: qk_strong_l2
+    title: Q/K projections with stronger regularization
+    name_suffix: qk_strong_l2
+    planning_notes: Hold feature family fixed and push harder on regularization.
+    proposal_patch:
+      projection_subset: qk
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      regularization_profile: strong_l2
+      hyperparameters:
+        max_features: 10
+
+  - key: all_strong_l2
+    title: All projections with stronger regularization
+    name_suffix: all_strong_l2
+    planning_notes: Test whether stronger shrinkage stabilizes the broader set.
+    proposal_patch:
+      projection_subset: all
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      regularization_profile: strong_l2
+      hyperparameters:
+        max_features: 12
+
+  - key: stable_heads_only
+    title: Stable-head-only variant
+    name_suffix: stable_heads_only
+    planning_notes: Bias selection toward heads repeatedly chosen across folds.
+    proposal_patch:
+      projection_subset: all
+      head_selector: stable_head_priority
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 8
+
+  - key: stable_heads_plus_norm
+    title: Stable-head-only plus norm support
+    name_suffix: stable_heads_plus_norm
+    planning_notes: Keep only recurrent heads and explicitly preserve norm support.
+    proposal_patch:
+      projection_subset: all
+      head_selector: stable_head_priority
+      combine_norm_growth_early: true
+      norm_feature_budget: 1
+      hyperparameters:
+        max_features: 10
+
+  - key: entropy_only_qk
+    title: Q/K entropy-only variant
+    name_suffix: entropy_only_qk
+    planning_notes: Ablate claim-ratio and keep only entropy-style features.
+    proposal_patch:
+      projection_subset: qk
+      feature_family: entropy_only
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 10
+
+  - key: claim_ratio_only_qk
+    title: Q/K claim-ratio-only variant
+    name_suffix: claim_ratio_only_qk
+    planning_notes: Test whether claim-ratio alone carries most of the signal.
+    proposal_patch:
+      projection_subset: qk
+      feature_family: claim_ratio_only
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 10
+
+  - key: entropy_only_all
+    title: All-projection entropy-only variant
+    name_suffix: entropy_only_all
+    planning_notes: Broader entropy-only ablation.
+    proposal_patch:
+      projection_subset: all
+      feature_family: entropy_only
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 12
+
+  - key: claim_ratio_only_all
+    title: All-projection claim-ratio-only variant
+    name_suffix: claim_ratio_only_all
+    planning_notes: Broader claim-ratio-only ablation.
+    proposal_patch:
+      projection_subset: all
+      feature_family: claim_ratio_only
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 12
+
+  - key: late_layers_qk
+    title: Q/K late-layer emphasis
+    name_suffix: late_layers_qk
+    planning_notes: Bias selection toward late layers only.
+    proposal_patch:
+      projection_subset: qk
+      layer_band: late
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 10
+
+  - key: mid_late_qk
+    title: Q/K mid-to-late layer emphasis
+    name_suffix: mid_late_qk
+    planning_notes: Constrain search to the middle and late network range.
+    proposal_patch:
+      projection_subset: qk
+      layer_band: mid_late
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 10
+
+  - key: late_layers_all
+    title: All projections, late-layer emphasis
+    name_suffix: late_layers_all
+    planning_notes: Broader late-layer-only comparison.
+    proposal_patch:
+      projection_subset: all
+      layer_band: late
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 12
+
+  - key: mid_late_all
+    title: All projections, mid-to-late emphasis
+    name_suffix: mid_late_all
+    planning_notes: Broader mid-to-late comparison.
+    proposal_patch:
+      projection_subset: all
+      layer_band: mid_late
+      combine_norm_growth_early: true
+      hyperparameters:
+        max_features: 12
+
+  - key: top5_heads_exact
+    title: Exact top-5-head recreation
+    name_suffix: top5_heads_exact
+    planning_notes: Closest direct reproduction of the top-5-head family logic.
+    proposal_patch:
+      projection_subset: all
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        top_k_heads: 5
+        max_features: 8
+
+  - key: top8_heads_exact
+    title: Exact top-8-head recreation
+    name_suffix: top8_heads_exact
+    planning_notes: Increase the retained head budget slightly.
+    proposal_patch:
+      projection_subset: all
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        top_k_heads: 8
+        max_features: 12
+
+  - key: top12_heads_exact
+    title: Exact top-12-head recreation
+    name_suffix: top12_heads_exact
+    planning_notes: Probe whether a larger retained head set overfits or improves.
+    proposal_patch:
+      projection_subset: all
+      head_selector: univariate_auc_top_k
+      combine_norm_growth_early: true
+      hyperparameters:
+        top_k_heads: 12
+        max_features: 16

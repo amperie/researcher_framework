@@ -33,6 +33,12 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
     direction = state.get("research_direction", "")
     root_run_family_id = str(state.get("root_run_family_id") or "")
     root_research_direction = str(state.get("root_research_direction") or direction or "")
+    campaign_id = str(state.get("campaign_id") or "")
+    campaign_title = str(state.get("campaign_title") or "")
+    campaign_variant_id = str(state.get("campaign_variant_id") or "")
+    campaign_variant_title = str(state.get("campaign_variant_title") or "")
+    campaign_variant_index = int(state.get("campaign_variant_index") or 0)
+    campaign_size = int(state.get("campaign_size") or 0)
 
     if not experiment_results:
         log.warning("store_results_node | Nothing to store")
@@ -97,6 +103,12 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
                 "research_direction": direction,
                 "root_run_family_id": root_run_family_id,
                 "root_research_direction": root_research_direction,
+                "campaign_id": campaign_id,
+                "campaign_title": campaign_title,
+                "campaign_variant_id": campaign_variant_id,
+                "campaign_variant_title": campaign_variant_title,
+                "campaign_variant_index": campaign_variant_index,
+                "campaign_size": campaign_size,
                 "metrics": metrics,
                 "model": model_by_exp.get(experiment_id),
                 "evaluation_summary": evaluation_summary,

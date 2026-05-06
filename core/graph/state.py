@@ -42,6 +42,24 @@ class ResearchState(TypedDict, total=False):
     root_research_direction: str
     """The initial research direction that seeded the current run family."""
 
+    campaign_id: str
+    """Optional campaign identifier for batched runs launched together."""
+
+    campaign_title: str
+    """Human-readable campaign title carried through lineage and UI."""
+
+    campaign_variant_id: str
+    """Stable identifier for the specific variant within a campaign."""
+
+    campaign_variant_title: str
+    """Human-readable title for the specific campaign variant."""
+
+    campaign_variant_index: int
+    """1-based ordinal of the variant inside the campaign."""
+
+    campaign_size: int
+    """Planned number of variants in the campaign."""
+
     # -------------------------------------------------------------------------
     # research step
     # -------------------------------------------------------------------------
