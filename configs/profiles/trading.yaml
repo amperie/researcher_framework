@@ -1,8 +1,9 @@
 name: trading
 description: >
   Research and experiment automation for algorithmic trading strategies.
-  Generates strategy/signal classes, validates them for leakage-safe behavior,
-  and delegates backtesting to the trading platform adapter.
+  Generates Algorithm subclasses for the local trading platform, validates them
+  against the platform contract, and delegates backtesting or walk-forward
+  execution to the trading adapter.
 
 pipeline:
   steps:
@@ -58,29 +59,67 @@ llm:
 
 platform:
   package: trading
-  source_path: ../algorithmic-trading-platform
+  source_path: ../trading_guy
 
 research:
-  max_summary_artifacts: 14
+  max_summary_artifacts: 20
   tools:
     - name: arxiv
-      tool: tools.research_tools.collect_arxiv
+      tool: core.tools.research_tools.collect_arxiv
       categories: [q-fin.TR, q-fin.PM, q-fin.ST, cs.LG]
-      max_results: 20
+      max_results: 8
       relevance_score_threshold: 6
-      max_papers_to_digest: 3
+      max_papers_to_digest: 2
+    - name: ssrn_finance
+      tool: core.tools.research_tools.collect_ssrn_finance
+      max_results: 6
+      relevance_score_threshold: 7
+    - name: nber_asset_pricing
+      tool: core.tools.research_tools.collect_nber_asset_pricing
+      max_results: 5
+      relevance_score_threshold: 6
+    - name: repec_finance
+      tool: core.tools.research_tools.collect_repec_finance
+      max_results: 5
+      relevance_score_threshold: 6
+    - name: quantpedia_strategies
+      tool: core.tools.research_tools.collect_quantpedia_strategies
+      max_results: 6
+      relevance_score_threshold: 8
+    - name: quantconnect_strategies
+      tool: core.tools.research_tools.collect_quantconnect_strategies
+      max_results: 5
+      relevance_score_threshold: 7
+    - name: reddit_trading
+      tool: core.tools.research_tools.collect_reddit_trading
+      max_results: 5
+      default_terms: algorithmic trading strategies
+      relevance_score_threshold: 5
+    - name: aqr_research
+      tool: core.tools.research_tools.collect_aqr_research
+      max_results: 5
+      relevance_score_threshold: 6
+    - name: fred_series_context
+      tool: core.tools.research_tools.collect_fred_series_context
+      relevance_score_threshold: 5
+    - name: cftc_cot
+      tool: core.tools.research_tools.collect_cftc_cot
+      relevance_score_threshold: 5
+    - name: sec_filings_signals
+      tool: core.tools.research_tools.collect_sec_filings_signals
+      relevance_score_threshold: 5
     - name: prior_experiments
-      tool: tools.research_tools.collect_prior_experiments
+      tool: core.tools.research_tools.collect_prior_experiments
       n_results: 8
       relevance_score_threshold: 7
     - name: adapter_context
-      tool: tools.research_tools.collect_adapter_context
+      tool: core.tools.research_tools.collect_adapter_context
       relevance_score_threshold: 5
     - name: profile_context
-      tool: tools.research_tools.collect_profile_context
+      tool: core.tools.research_tools.collect_profile_context
       relevance_score_threshold: 5
     - name: strategy_library
-      tool: tools.research_tools.collect_strategy_library
+      tool: core.tools.research_tools.collect_strategy_library
       patterns: ["*strategy*.py", "*signal*.py", "*backtest*.py", "*portfolio*.py", "*risk*.py"]
       max_files: 80
       relevance_score_threshold: 5
@@ -90,58 +129,115 @@ research:
     machine learning for financial time series.
 
 base_classes:
-  - name: StrategyBase
-    module: trading.core.strategy
+  - name: Algorithm
+    module: trading.core.algorithm
     description: >
-      Base class for generated trading strategies or signal modules.
+      Base class for generated trading algorithms. Implement on_data_logic()
+      and emit MarketSignal objects from the current tick plus rolling history.
     key_interface: |
-      class StrategyBase:
-          def __init__(self, cfg: dict):
-              self.cfg = cfg
+      class Algorithm:
+          def __init__(self, cfg: dict | None = None, history_length: int = 0):
+              ...
 
-          def generate_signals(self, bars):
-              # bars is a time-indexed DataFrame or platform data bundle.
-              # Must use only current and past observations at each timestamp.
-              # Returns a DataFrame/Series of target signals or positions.
+          @final
+          def on_data(self, data: list[PriceData]) -> list[MarketSignal]:
+              # Updates rolling history then delegates to on_data_logic().
+              # Signals are gated until required_warmup_bars is reached.
+              ...
+
+          @abstractmethod
+          def on_data_logic(self, data: list[PriceData]) -> list[MarketSignal]:
+              # Use self.price_history[symbol] and self.price_data_history[symbol].
+              # Must only depend on current and historical bars.
               ...
 
 data_sources:
   - name: default_ohlcv
-    description: "Platform-provided OHLCV bars with adjusted prices and volume"
+    description: "Single-symbol OHLCV CSV used by TestDataProvider"
+    path: data/SPY_5min.csv
     fields:
       guaranteed: [open, high, low, close, volume]
-      optional: [vwap, spread, borrow_cost, corporate_actions]
+      optional: [trade_count, vwap, exchange]
+  - name: spy_upro_spxu_5min
+    description: "Multi-symbol 5-minute OHLCV CSV for rotation/switching algorithms"
+    path: data/SPY_UPRO_SPXU_5min.csv
+    fields:
+      guaranteed: [timestamp, symbol, open, high, low, close, volume]
+      optional: [trade_count, vwap, exchange]
+  - name: spy_1min
+    description: "Single-symbol 1-minute OHLCV CSV for aggregation experiments"
+    path: data/SPY_1min.csv
+    fields:
+      guaranteed: [open, high, low, close, volume]
+      optional: [trade_count, vwap, exchange]
 
 risk_constraints:
   no_lookahead: true
   max_gross_exposure: 1.0
   max_single_position: 0.10
-  require_transaction_costs: true
-  require_slippage: true
+  market_orders_only: true
+  require_history_warmup: true
   require_walk_forward_split: true
+
+execution:
+  defaults:
+    mode: backtest
+    symbol: SPY
+    cash: 100000
+    history_length: 200
+    stop_pct: 5.0
+    profit_pct: 10.0
+    tx_cost: 0.0
+    data_provider: trading.data_providers.alpaca_data_provider.AlpacaDataProvider
+    portfolio: trading.core.pf.single_symbol_portfolio.SingleSymbolPortfolio
+    order_manager: trading.core.om.backtesting_om.BacktestingOrderManager
+    alpaca_account: longer_range
+    timeframe: Minute
+    adjustment: split
+    limit: 5000
+    market_hours_only: true
+    aggregation_enabled: true
+    aggregation_period_minutes: 5
+    log_to_mlflow: false
+    benchmarks: {}
+    walk_forward:
+      optimization_window_days: 90
+      trading_window_days: 30
+      improvement_threshold_pct: 5.0
+      num_trials: 20
+      max_concurrent_trials: 4
+  mass_test:
+    max_variants_per_proposal: 4
+
+implementation_examples:
+  - path: ../trading_guy/trading/algorithms/test_algorithm.py
+    purpose: Minimal Algorithm subclass shape and MarketSignal return contract.
+  - path: ../trading_guy/trading/algorithms/macd_rsi_algorithm.py
+    purpose: Real history-driven algorithm using self.price_history and warmup-aware logic.
 
 validate:
   auto_run: true
   max_fix_retries: 3
   test_runner: "uv run pytest"
   test_output_dir: dev/experiments/trading/tests
+  contract_test: trading_algorithm
+  llm_generate_tests: false
 
-experiment_adapter: plugins.trading.adapter
+experiment_adapter: core.plugins.trading.adapter
 
 evaluation:
   primary_metric: sharpe_ratio
   metrics:
     - sharpe_ratio
     - sortino_ratio
-    - max_drawdown
-    - annual_return
+    - max_drawdown_pct
+    - annualized_return
     - win_rate
-    - turnover
-    - exposure
     - profit_factor
+    - total_trades
   thresholds:
     sharpe_ratio: 1.2
-    max_drawdown: -0.20
+    max_drawdown_pct: -20.0
 
 storage:
   mlflow_experiment: trading_agent_experiments
@@ -198,10 +294,10 @@ prompts:
       summary and paper digests.
 
       Each idea must:
-      - Be implementable as a StrategyBase subclass or signal module
-      - Use only current and past market data at each timestamp
-      - Include explicit risk and transaction-cost considerations
-      - Be testable with historical backtesting
+      - Be implementable as a trading.core.algorithm.Algorithm subclass
+      - Emit MarketSignal objects from on_data_logic using only current and past bars
+      - Include explicit warmup, risk, and execution assumptions
+      - Be testable with the Alpaca-backed backtest engine using historical bars only
 
       Return a JSON array:
       [
@@ -218,9 +314,10 @@ prompts:
       Review these trading ideas for feasibility and leakage risk.
 
       Reject or revise ideas that require future data, unavailable fields,
-      unrealistic fills, missing transaction costs, or vague position sizing.
-      Improve accepted ideas with concrete signal logic, risk controls, and
-      validation guidance.
+      unavailable platform APIs, vague order logic, or hand-wavy position sizing.
+      Improve accepted ideas with concrete signal logic, rolling-history usage,
+      warmup requirements, execution guidance, and realistic hyperparameter
+      optimization opportunities.
 
       Return a JSON array of refined ideas using the same schema.
 
@@ -231,16 +328,45 @@ prompts:
       Include:
       - name: same as the idea name
       - description
-      - data_source: exact data source name
-      - universe: symbols or selection rule
+      - mode: "backtest" or "walk-forward"
+      - optimization_target: one of "algorithm", "portfolio", or "joint"
+        Use "algorithm" when isolating strategy logic changes with portfolio behavior fixed.
+        Use "portfolio" when isolating sizing/risk/portfolio changes with algorithm logic fixed.
+        Use "joint" only when intentionally co-optimizing both axes.
+      - data_source: exact data source name from the profile
+      - data_path: path relative to the trading project root when useful
+      - symbol: primary traded symbol
       - timeframe
-      - start and end dates if known
-      - transaction_cost_bps
-      - slippage_bps
+      - start_date and end_date if known
+      - history_length
+      - stop_pct
+      - profit_pct
+      - tx_cost
       - hyperparameters
-      - train_test_split or walk_forward protocol
+      - hpo: object for mode="backtest" with:
+          - objective_metric
+          - num_samples
+          - max_concurrent_trials
+          - algorithm_param_keys
+          - portfolio_param_keys
+          - search_space
+        The pipeline should decide what parameters to tune based on optimization_target.
+        For optimization_target="algorithm", only tune algorithm_param_keys.
+        For optimization_target="portfolio", only tune portfolio_param_keys.
+        For optimization_target="joint", tune both and always include stop_pct and profit_pct in portfolio_param_keys and search_space.
+        Start with a wide search space, not a narrow local search.
+        Prefer continuous ranges so the optimizer can search freely.
+        Use `uniform`, `loguniform`, or `randint` ranges instead of discrete `choice` lists whenever possible.
+        Do not emit `choice` for tunable trading hyperparameters unless a parameter is truly categorical and cannot be represented as a numeric range.
+        search_space entries must use the platform schema:
+          {type: "randint"|"uniform"|"loguniform", ...}
+      - walk_forward: object with optimization/trading windows, trial counts,
+        algorithm_param_keys, portfolio_param_keys, and search_space when mode="walk-forward"
+        These keys must also respect optimization_target.
       - benchmark
-      - success_criterion using sharpe_ratio and max_drawdown
+      - aggregation_enabled and aggregation_period_minutes when helpful
+      - experiment_variants: optional list of up to 3 named override objects for mass testing
+      - success_criterion using sharpe_ratio and max_drawdown_pct
 
       Return a JSON array of proposals.
 
@@ -252,11 +378,13 @@ prompts:
       Include:
       - proposal_name
       - class_name
-      - base_class: "StrategyBase"
-      - init_fields
-      - main_method: "generate_signals"
+      - base_class: "Algorithm"
+      - init_fields including config keys and history_length expectations
+      - tunable_fields that are sensible to expose to HPO
+      - main_method: "on_data_logic"
+      - required_warmup_bars if it should exceed history_length
       - method_steps with explicit no-lookahead rolling/window logic
-      - output_keys
+      - output_keys including signal symbol/type/strength/metadata
       - imports_needed
 
       Return a JSON array of plans.
@@ -266,42 +394,45 @@ prompts:
       Implement the Python class described in the implementation plan.
 
       Requirements:
-      - Subclass StrategyBase from trading.core.strategy
-      - Use pandas/numpy only unless the plan requires standard library modules
+      - Subclass Algorithm from trading.core.algorithm
+      - Implement on_data_logic(self, data: list[PriceData]) -> list[MarketSignal]
+      - Use trading.core.classes.PriceData, MarketSignal, and SignalType
+      - Use self.price_history and self.price_data_history for rolling context
       - Never use future rows to compute current signals
-      - Use rolling/expanding calculations with proper lagging where needed
-      - Include conservative defaults for missing data
-      - Return deterministic signals or target positions
-      - Include a standalone if __name__ == '__main__': synthetic smoke test
+      - Return deterministic signals only; no random behavior
+      - Guard against insufficient history and missing symbols cleanly
+      - Keep dependencies minimal: standard library, numpy/pandas, and trading package utilities only when necessary
+      - Include a small if __name__ == '__main__': smoke block that instantiates the class and runs synthetic ticks without external files
 
       Return ONLY Python source code. No markdown fences.
 
   validate:
     system: |
-      Generate pytest unit tests for this StrategyBase subclass.
+      Generate pytest unit tests for this Algorithm subclass.
 
       Tests must:
       - Import the generated class
-      - Build a small synthetic OHLCV DataFrame
-      - Call generate_signals
-      - Assert output length aligns with input
-      - Assert output has finite numeric values
-      - Include a basic no-lookahead check by changing the final row and
-        verifying earlier signals do not change
+      - Build a small synthetic sequence of PriceData ticks
+      - Call on_data repeatedly
+      - Assert returned values are lists of MarketSignal objects
+      - Assert signal symbols and strengths are valid
+      - Include a no-lookahead check by changing the final tick and
+        verifying earlier outputs do not change
 
       Return ONLY Python test code. No markdown fences.
 
     fix_system: |
-      The following tests failed for the StrategyBase implementation.
+      The following tests failed for the Algorithm implementation.
       Fix the implementation, not the tests. Prioritize no-lookahead behavior,
-      finite outputs, and stable DataFrame alignment. Return ONLY Python source.
+      deterministic outputs, correct MarketSignal usage, and robust warmup handling.
+      Return ONLY Python source.
 
   evaluate:
     system: |
       Analyze these trading experiment results. For each proposal, assess:
       - Risk-adjusted return
       - Drawdown and tail risk
-      - Turnover/cost sensitivity
+      - Robustness across any experiment_variants or walk-forward periods
       - Benchmark comparison
       - Whether the hypothesis was supported
       - Whether results suggest overfitting or leakage risk

@@ -6,10 +6,12 @@ Each step is wrapped so it receives both state and the loaded profile dict.
 from __future__ import annotations
 
 import functools
+import json
 from typing import Callable
 
 from langgraph.graph import StateGraph, END
 
+from configs.config import dev_path
 from core.graph.nodes import STEP_REGISTRY
 from core.graph.state import ResearchState
 from core.utils.logger import get_logger
@@ -17,12 +19,29 @@ from core.utils.logger import get_logger
 log = get_logger(__name__)
 
 
-def _wrap_node(fn: Callable, profile: dict) -> Callable:
+def _wrap_node(fn: Callable, profile: dict, step_name: str) -> Callable:
     """Wrap a node function to inject the profile dict as a second argument."""
     @functools.wraps(fn)
     def wrapper(state: ResearchState) -> dict:
-        return fn(state, profile)
+        delta = fn(state, profile)
+        merged_state = {**state, **(delta or {})}
+        _write_state_snapshot(str(profile.get("name") or state.get("profile_name") or "default"), step_name, merged_state)
+        return delta
     return wrapper
+
+
+def _write_state_snapshot(profile_name: str, node_name: str, state: dict) -> None:
+    step_name = _canonical_step_name(node_name)
+    serialisable: dict = {}
+    for key, value in state.items():
+        try:
+            json.dumps(value, default=str)
+            serialisable[key] = value
+        except Exception:
+            log.debug("builder | Skipping non-serialisable key %r for snapshot %s", key, step_name)
+    out_path = dev_path("state", profile_name, f"after_{step_name}.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(serialisable, indent=2, default=str), encoding="utf-8")
 
 
 def pipeline_steps(profile: dict) -> list[str]:
@@ -67,7 +86,7 @@ def build_graph(profile: dict, *, start_node: str | None = None):
     # Add all nodes
     for step_name in steps:
         node_fn = STEP_REGISTRY[step_name]
-        wrapped = _wrap_node(node_fn, profile)
+        wrapped = _wrap_node(node_fn, profile, step_name)
         graph.add_node(step_name, wrapped)
         log.debug("builder | Added node: %s", step_name)
 

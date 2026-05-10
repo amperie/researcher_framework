@@ -21,6 +21,9 @@ dependencies = [
     "fastapi>=0.135",
     "uvicorn>=0.44",
     "ray>=2.55.1",
+    "tools>=1.0.27",
+    "alpaca>=1.0.0",
+    "ta-lib>=0.6.8",
 ]
 
 [dependency-groups]

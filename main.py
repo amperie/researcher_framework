@@ -9,10 +9,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from typing import Any
 from uuid import uuid4
 
+from configs.config import dev_path
 from core.handoffs import resolve_next_step_seed, resolve_proposal_seed, resolve_run_handoff_seed
 from core.graph.builder import pipeline_steps
 from core.maintenance.dev_cleanup import run_periodic_dev_cleanup
@@ -21,6 +23,19 @@ from core.utils.logger import setup_logging, get_logger
 
 setup_logging()
 log = get_logger(__name__)
+
+
+def _write_state_snapshot(profile_name: str, step_name: str, state: dict[str, Any]) -> None:
+    serialisable: dict[str, Any] = {}
+    for key, value in state.items():
+        try:
+            json.dumps(value, default=str)
+            serialisable[key] = value
+        except Exception:
+            log.debug("main | Skipping non-serialisable key %r", key)
+    out_path = dev_path("state", profile_name, f"after_{step_name}.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(serialisable, indent=2, default=str), encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:
@@ -174,6 +189,7 @@ def run_pipeline_graph(
     from core.graph.builder import build_graph
 
     graph = build_graph(profile, start_node=start_node)
+    final_step = pipeline_steps(profile)[-1]
     log.info(
         "Invoking pipeline graph profile=%r start_node=%r direction=%r family=%r campaign=%r",
         profile_name,
@@ -183,6 +199,7 @@ def run_pipeline_graph(
         initial_state.get("campaign_id"),
     )
     final_state = graph.invoke(initial_state)
+    _write_state_snapshot(profile_name, final_step, final_state)
     if print_results:
         _print_results(final_state, profile_name)
     return final_state

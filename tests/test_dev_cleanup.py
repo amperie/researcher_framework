@@ -43,10 +43,10 @@ def test_cleanup_keeps_recent_state_but_deletes_stale_papers_and_tests_and_termi
     now = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
 
     state_dir = Path(cfg.dev_root) / "state"
-    recent1 = state_dir / "after_recent_1.json"
-    recent2 = state_dir / "after_recent_2.json"
-    old_kept = state_dir / "after_old_kept.json"
-    old_deleted = state_dir / "after_old_deleted.json"
+    recent1 = state_dir / "neuralsignal" / "after_recent_1.json"
+    recent2 = state_dir / "trading" / "after_recent_2.json"
+    old_kept = state_dir / "neuralsignal" / "after_old_kept.json"
+    old_deleted = state_dir / "trading" / "after_old_deleted.json"
     for path in (recent1, recent2, old_kept, old_deleted):
         _write(path, "{}")
     _set_mtime(recent1, now - timedelta(days=1))

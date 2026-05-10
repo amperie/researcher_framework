@@ -121,7 +121,7 @@ def _cleanup_state_snapshots(
     if not state_dir.exists():
         return
     files = sorted(
-        (path for path in state_dir.glob("after_*.json") if path.is_file()),
+        (path for path in state_dir.rglob("after_*.json") if path.is_file()),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )

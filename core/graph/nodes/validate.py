@@ -256,6 +256,7 @@ def _build_test_code(
     if contract_test:
         return (
             _build_contract_test(
+                profile=profile,
                 contract_test=contract_test,
                 script_path=script_path,
                 class_name=class_name,
@@ -363,6 +364,7 @@ def _strip_fences(text: str) -> str:
 
 
 def _build_contract_test(
+    profile: dict,
     contract_test: str,
     script_path: str,
     class_name: str,
@@ -373,6 +375,13 @@ def _build_contract_test(
             script_path=script_path,
             class_name=class_name,
             expected_feature_set_name=expected_feature_set_name,
+        )
+    if contract_test == "trading_algorithm":
+        return _build_trading_algorithm_contract_test(
+            profile=profile,
+            script_path=script_path,
+            class_name=class_name,
+            expected_algorithm_name=expected_feature_set_name,
         )
     raise ValueError(f"Unknown validation contract_test: {contract_test!r}")
 
@@ -543,6 +552,120 @@ def test_feature_set_contract_invalid_output_format():
 
     with pytest.raises(ValueError):
         instance.process_feature_set(_scan())
+'''
+
+
+def _build_trading_algorithm_contract_test(
+    profile: dict,
+    script_path: str,
+    class_name: str,
+    expected_algorithm_name: str,
+) -> str:
+    platform_source = json.dumps(
+        str(Path(((profile.get("platform") or {}).get("source_path")) or "../trading_guy").expanduser().resolve())
+    )
+    script_path_json = json.dumps(str(Path(script_path).resolve()))
+    class_name_json = json.dumps(class_name)
+    expected_name_json = json.dumps(expected_algorithm_name)
+    return f'''\
+import importlib.util
+from pathlib import Path
+import sys
+
+PLATFORM_ROOT = {platform_source}
+SCRIPT_PATH = {script_path_json}
+CLASS_NAME = {class_name_json}
+EXPECTED_ALGORITHM_NAME = {expected_name_json}
+
+if PLATFORM_ROOT not in sys.path:
+    sys.path.insert(0, PLATFORM_ROOT)
+
+from trading.core.algorithm import Algorithm
+from trading.core.classes import MarketSignal, PriceData, SignalType
+
+
+def test_generated_algorithm_imports_real_platform():
+    source = Path(SCRIPT_PATH).read_text(encoding="utf-8")
+    assert "class Algorithm" not in source, "Implementation must import Algorithm from trading.core.algorithm"
+    assert "sys.path" not in source, "Implementation must not mutate sys.path"
+    assert "sys.modules" not in source, "Implementation must not inject fake trading modules"
+
+
+def _load_class():
+    spec = importlib.util.spec_from_file_location("generated_trading_algorithm_contract", SCRIPT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    cls = getattr(module, CLASS_NAME, None)
+    assert cls is not None, f"Class {{CLASS_NAME}} not found"
+    return cls
+
+
+def _price(ts_index, close_price):
+    minute = 30 + ts_index
+    return PriceData(
+        symbol="SPY",
+        timestamp=f"2024-01-01 09:{{minute:02d}}:00",
+        open=float(close_price) - 0.5,
+        high=float(close_price) + 0.5,
+        low=float(close_price) - 1.0,
+        close=float(close_price),
+        volume=1000.0 + ts_index,
+    )
+
+
+def _instantiate(cls):
+    cfg = {{
+        "symbol": "SPY",
+        "history_length": 20,
+        "name": EXPECTED_ALGORITHM_NAME,
+    }}
+    try:
+        return cls(cfg=cfg, history_length=20)
+    except TypeError:
+        return cls(cfg)
+
+
+def _signal_signature(signal):
+    return {{
+        "type": signal.type.name,
+        "symbol": signal.symbol,
+        "strength": signal.strength,
+    }}
+
+
+def test_generated_algorithm_is_algorithm_subclass():
+    cls = _load_class()
+    assert issubclass(cls, Algorithm)
+
+
+def test_generated_algorithm_produces_valid_signals_without_future_leakage():
+    cls = _load_class()
+    algo_a = _instantiate(cls)
+    algo_b = _instantiate(cls)
+
+    prices = [100 + idx * 0.4 for idx in range(30)]
+    outputs_a = []
+    outputs_b = []
+
+    for idx, price in enumerate(prices):
+        tick_a = [_price(idx, price)]
+        alt_price = price if idx < len(prices) - 1 else price + 50.0
+        tick_b = [_price(idx, alt_price)]
+        outputs_a.append(algo_a.on_data(tick_a))
+        outputs_b.append(algo_b.on_data(tick_b))
+
+    for result in outputs_a[-5:]:
+        assert isinstance(result, list)
+        for signal in result:
+            assert isinstance(signal, MarketSignal)
+            assert signal.symbol == "SPY"
+            assert signal.type in {{SignalType.BUY, SignalType.SELL}}
+            assert isinstance(signal.strength, int)
+            assert 0 <= signal.strength <= 100
+
+    signatures_a = [[_signal_signature(item) for item in result] for result in outputs_a[:-1]]
+    signatures_b = [[_signal_signature(item) for item in result] for result in outputs_b[:-1]]
+    assert signatures_a == signatures_b, "Signals before the final bar must not depend on unseen future bars"
 '''
 
 

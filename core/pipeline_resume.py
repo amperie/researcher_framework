@@ -223,6 +223,9 @@ def _experiment_result_from_record(record: dict[str, Any]) -> dict[str, Any]:
         "research_direction": str(content.get("research_direction") or metadata.get("research_direction") or ""),
         "mlflow_run_id": str(metadata.get("mlflow_run_id") or model.get("mlflow_run_id") or ""),
         "artifacts": content.get("artifacts") if isinstance(content.get("artifacts"), dict) else {},
+        "execution_config": content.get("execution_config") if isinstance(content.get("execution_config"), dict) else {},
+        "variant_results": content.get("variant_results") if isinstance(content.get("variant_results"), list) else [],
+        "report": str(content.get("report") or ""),
     }
 
 
@@ -273,14 +276,17 @@ def _synthetic_memory_record_from_result(profile: dict[str, Any], doc: dict[str,
         "content": {
             "experiment_id": experiment_id,
             "proposal_name": proposal_name,
-            "proposal": {},
+            "proposal": dict(doc.get("proposal") or {}),
             "metrics": metrics,
             "model": model,
             "evaluation_summary": evaluation_summary,
             "research_direction": str(doc.get("research_direction") or ""),
             "root_run_family_id": str(doc.get("root_run_family_id") or ""),
             "root_research_direction": str(doc.get("root_research_direction") or doc.get("research_direction") or ""),
-            "artifacts": {},
+            "artifacts": dict(doc.get("artifacts") or {}),
+            "execution_config": dict(doc.get("execution_config") or {}),
+            "variant_results": list(doc.get("variant_results") or []),
+            "report": str(doc.get("report") or ""),
         },
         "metadata": {
             "experiment_id": experiment_id,

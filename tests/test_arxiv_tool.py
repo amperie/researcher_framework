@@ -5,10 +5,14 @@ import urllib.error
 from unittest.mock import MagicMock, patch
 
 from core.tools.arxiv_tool import (
+    _effective_max_results,
     _html_to_text,
+    _normalize_query,
     _safe_id,
     download_paper_text,
+    load_cached_search,
     load_cached_digest,
+    save_search,
     save_digest,
     search_arxiv,
 )
@@ -33,6 +37,30 @@ class TestSafeId:
 
     def test_spaces_replaced(self):
         assert _safe_id("abc def") == "abc_def"
+
+
+class TestNormalizeQuery:
+    def test_collapses_whitespace(self):
+        assert _normalize_query(" alpha   beta  gamma ") == "alpha beta gamma"
+
+    def test_trims_prompt_like_prefixes(self):
+        assert _normalize_query("Research direction: alpha beta") == "alpha beta"
+
+    def test_truncates_before_focus_clause(self):
+        query = "predict SPY direction with MACD Focus on systematic trading and risk controls"
+        assert _normalize_query(query) == "predict SPY direction with MACD"
+
+    def test_limits_length(self):
+        text = "word " * 100
+        assert len(_normalize_query(text)) <= 180
+
+
+class TestEffectiveMaxResults:
+    def test_clamps_upper_bound(self):
+        assert _effective_max_results(100) == 10
+
+    def test_defaults_when_zero(self):
+        assert _effective_max_results(0) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +144,15 @@ class TestDigestCache:
             assert (tmp_path / "2301_12345.digest").exists()
 
 
+class TestSearchCache:
+    def test_save_and_load_roundtrip(self, tmp_path):
+        papers = [{"title": "Test Paper"}]
+        with patch("core.tools.arxiv_tool._SEARCH_CACHE_DIR", tmp_path):
+            save_search("test query", 5, papers)
+            loaded = load_cached_search("test query", 5)
+        assert loaded == papers
+
+
 # ---------------------------------------------------------------------------
 # search_arxiv
 # ---------------------------------------------------------------------------
@@ -171,7 +208,28 @@ class TestSearchArxiv:
             search_arxiv("q", 17)
 
         call_kwargs = mock_search.call_args
-        assert call_kwargs.kwargs.get("max_results") == 17 or call_kwargs.args[1] == 17
+        assert call_kwargs.kwargs.get("max_results") == 10 or call_kwargs.args[1] == 10
+
+    def test_uses_normalized_query(self):
+        with patch("arxiv.Search") as mock_search:
+            mock_search.return_value.results.return_value = iter([])
+            search_arxiv(
+                "use macd and rsi to trade spy Focus on systematic trading and robust backtesting",
+                5,
+            )
+
+        call_kwargs = mock_search.call_args
+        query = call_kwargs.kwargs.get("query") if call_kwargs else ""
+        assert "Focus on systematic trading" not in query
+
+    def test_returns_cached_search_without_hitting_arxiv(self, tmp_path):
+        papers = [{"title": "Cached Paper"}]
+        with patch("core.tools.arxiv_tool._SEARCH_CACHE_DIR", tmp_path):
+            save_search("test query", 5, papers)
+            with patch("arxiv.Search") as mock_search:
+                loaded = search_arxiv("test query", 5)
+        assert loaded == papers
+        mock_search.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -93,7 +93,7 @@ def _research_tool_configs(research_cfg: dict[str, Any]) -> list[dict[str, Any]]
             converted.append({
                 **source,
                 "name": source.get("name", "arxiv"),
-                "tool": "tools.research_tools.collect_arxiv",
+                "tool": "core.tools.research_tools.collect_arxiv",
             })
     return converted
 

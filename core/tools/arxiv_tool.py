@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import sha256
 import urllib.error
 import urllib.request
 from html.parser import HTMLParser
@@ -16,7 +17,11 @@ from core.utils.logger import get_logger
 log = get_logger(__name__)
 
 _PAPERS_CACHE_DIR = dev_path("papers")
+_SEARCH_CACHE_DIR = dev_path("paper_searches")
 _HTML_TIMEOUT = 15
+_DEFAULT_SEARCH_RESULTS = 8
+_MAX_SEARCH_RESULTS = 10
+_MAX_QUERY_CHARS = 180
 
 
 class _TextExtractor(HTMLParser):
@@ -59,6 +64,83 @@ def _digest_cache_path(arxiv_id: str) -> Path:
     return _PAPERS_CACHE_DIR / f"{_safe_id(arxiv_id)}.digest"
 
 
+def _normalize_query(query: str) -> str:
+    text = " ".join(str(query or "").split())
+    if not text:
+        return "arxiv"
+    lowered = text.lower()
+    for prefix in (
+        "research direction:",
+        "direction:",
+        "goal:",
+        "task:",
+    ):
+        if lowered.startswith(prefix):
+            text = text[len(prefix):].strip()
+            lowered = text.lower()
+            break
+
+    stop_phrases = (
+        "focus on systematic trading",
+        "return a json",
+        "emit signals",
+        "when we should buy and sell",
+        "only the ",
+    )
+    cut_index = len(text)
+    for phrase in stop_phrases:
+        idx = lowered.find(phrase)
+        if idx >= 0:
+            cut_index = min(cut_index, idx)
+    text = text[:cut_index].strip(" ,;:.")
+    if len(text) > _MAX_QUERY_CHARS:
+        trimmed = text[:_MAX_QUERY_CHARS]
+        last_space = trimmed.rfind(" ")
+        if last_space > 80:
+            trimmed = trimmed[:last_space]
+        text = trimmed.strip(" ,;:.")
+    return text or "arxiv"
+
+
+def _effective_max_results(max_results: int) -> int:
+    requested = int(max_results or _DEFAULT_SEARCH_RESULTS)
+    if requested < 1:
+        return 1
+    return min(requested, _MAX_SEARCH_RESULTS)
+
+
+def _search_cache_path(query: str, max_results: int) -> Path:
+    normalized = _normalize_query(query)
+    effective_max = _effective_max_results(max_results)
+    key = sha256(f"{normalized}|{effective_max}".encode("utf-8")).hexdigest()[:24]
+    return _SEARCH_CACHE_DIR / f"{key}.json"
+
+
+def load_cached_search(query: str, max_results: int) -> list[dict] | None:
+    path = _search_cache_path(query, max_results)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("arxiv_tool | Failed to read search cache for %s: %s", path.name, exc)
+        return None
+    papers = payload.get("papers")
+    return papers if isinstance(papers, list) else None
+
+
+def save_search(query: str, max_results: int, papers: list[dict]) -> None:
+    path = _search_cache_path(query, max_results)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "query": _normalize_query(query),
+        "max_results": _effective_max_results(max_results),
+        "papers": papers,
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    log.debug("arxiv_tool | Search cached — %s", path.name)
+
+
 def load_cached_digest(arxiv_id: str) -> dict | None:
     path = _digest_cache_path(arxiv_id)
     if not path.exists():
@@ -79,11 +161,23 @@ def save_digest(arxiv_id: str, record: dict) -> None:
 
 def search_arxiv(query: str, max_results: int) -> list[dict]:
     """Search arxiv and return scored paper dicts."""
-    log.info("arxiv_tool | Searching — query=%r, max_results=%d", query, max_results)
+    cached = load_cached_search(query, max_results)
+    if cached is not None:
+        log.info(
+            "arxiv_tool | Search cache hit — query=%r, max_results=%d, papers=%d",
+            _normalize_query(query),
+            _effective_max_results(max_results),
+            len(cached),
+        )
+        return cached
+
+    normalized_query = _normalize_query(query)
+    effective_max = _effective_max_results(max_results)
+    log.info("arxiv_tool | Searching — query=%r, max_results=%d", normalized_query, effective_max)
     results = list(
         arxiv.Search(
-            query=query,
-            max_results=max_results,
+            query=normalized_query,
+            max_results=effective_max,
             sort_by=arxiv.SortCriterion.Relevance,
         ).results()
     )
@@ -96,6 +190,7 @@ def search_arxiv(query: str, max_results: int) -> list[dict]:
             "arxiv_id": r.get_short_id(),
             "published": r.published.date().isoformat(),
         })
+    save_search(query, max_results, papers)
     log.debug("arxiv_tool | Returned %d papers", len(papers))
     return papers
 

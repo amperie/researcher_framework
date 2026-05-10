@@ -234,6 +234,38 @@ class TestStoreResultsMongo:
         mock_client["test_db"]["test_experiments"].insert_one.assert_called_once()
         mock_client.close.assert_called_once()
 
+    def test_mongodb_insert_includes_execution_metadata(self):
+        mock_client = MagicMock()
+        mock_run = MagicMock()
+        mock_run.__enter__ = lambda s: s
+        mock_run.__exit__ = MagicMock(return_value=False)
+        mock_run.info.run_id = "run-1"
+        result = {
+            **RESULT,
+            "artifacts": {"runtime_config_path": "dev/experiments/trading/runtime_configs/Algo.yaml"},
+            "execution_config": {"mode": "backtest", "hpo": {"search_space": {"stop_pct": {"type": "uniform", "low": 1.0, "high": 8.0}}}},
+            "variant_results": [{"variant_name": "base", "raw_output": {"best_config": {"stop_pct": 3.5}}}],
+            "report": "summary",
+        }
+
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+            with patch("mlflow.set_tracking_uri"):
+                with patch("mlflow.set_experiment"):
+                    with patch("mlflow.start_run", return_value=mock_run):
+                        with patch("mlflow.log_params"):
+                            with patch("mlflow.log_metrics"):
+                                with patch("mlflow.set_tags"):
+                                    with patch("core.graph.nodes.store_results.MemoryService.for_profile"):
+                                        with patch("pymongo.MongoClient", return_value=mock_client):
+                                            store_results_node({"experiment_results": [result]}, PROFILE)
+
+        inserted = mock_client["test_db"]["test_experiments"].insert_one.call_args.args[0]
+        assert inserted["proposal"]["description"] == "Test proposal"
+        assert inserted["artifacts"]["runtime_config_path"].endswith("Algo.yaml")
+        assert inserted["execution_config"]["hpo"]["search_space"]["stop_pct"]["high"] == 8.0
+        assert inserted["variant_results"][0]["raw_output"]["best_config"]["stop_pct"] == 3.5
+        assert inserted["report"] == "summary"
+
     def test_mongodb_failure_is_non_fatal(self):
         with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
             with patch("mlflow.set_tracking_uri", side_effect=Exception("off")):

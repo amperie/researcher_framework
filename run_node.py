@@ -26,6 +26,10 @@ from core.graph.nodes import STEP_REGISTRY  # noqa: E402
 _SEP = "-" * 60
 
 
+def _default_state_path(profile_name: str, step_name: str) -> Path:
+    return dev_path("state", profile_name, f"after_{step_name}.json")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a single pipeline step for manual testing.",
@@ -135,7 +139,7 @@ def _run_once(step_name: str, args: argparse.Namespace) -> None:
         except Exception:
             log.debug("run_node | Skipping non-serialisable key %r", k)
 
-    out_path = Path(args.out) if args.out else dev_path("state", f"after_{step_name}.json")
+    out_path = Path(args.out) if args.out else _default_state_path(str(profile.get("name") or "default"), step_name)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(serialisable, indent=2, default=str), encoding="utf-8")
     print(f"[run_node] State saved → {out_path}\n")
@@ -183,7 +187,7 @@ def main() -> None:
 
     if not args.state_file:
         dev_dir = dev_path("state")
-        fixtures = sorted(dev_dir.glob("after_*.json")) if dev_dir.exists() else []
+        fixtures = sorted(dev_dir.rglob("after_*.json")) if dev_dir.exists() else []
         if fixtures:
             print("\nAvailable state files:")
             for i, f in enumerate(fixtures, 1):

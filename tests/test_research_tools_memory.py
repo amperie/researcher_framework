@@ -74,3 +74,23 @@ class TestCollectMemory:
         assert len(artifacts) == 1
         assert artifacts[0]["artifact_id"] == "memory:exp-001"
         assert artifacts[0]["source"] == "prior_experiments"
+
+    def test_collect_memory_falls_back_when_adapter_returns_none(self):
+        mock_service = MagicMock()
+        mock_service.search.return_value = [_record()]
+        mock_adapter = MagicMock()
+        mock_adapter.memory_record_to_artifact.return_value = None
+
+        with patch("core.tools.research_tools.MemoryService.for_profile", return_value=mock_service):
+            with patch("core.tools.research_tools.load_adapter", return_value=mock_adapter):
+                artifacts = collect_memory(
+                    "hallucination probing",
+                    PROFILE,
+                    {"name": "memory", "n_results": 3},
+                    {},
+                )
+
+        assert len(artifacts) == 1
+        assert artifacts[0]["artifact_id"] == "memory:exp-001"
+        assert artifacts[0]["source"] == "memory"
+        assert artifacts[0]["metadata"]["distance"] == 0.12
