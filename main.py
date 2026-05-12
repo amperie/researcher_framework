@@ -24,6 +24,29 @@ from core.utils.logger import setup_logging, get_logger
 setup_logging()
 log = get_logger(__name__)
 
+_CLI_EPILOG = """Examples:
+  Pipeline mode:
+    uv run python main.py --profile neuralsignal --direction "attention head specialization"
+    uv run python main.py --profile neuralsignal --loop
+    uv run python main.py --profile neuralsignal --run-next-steps-once
+    uv run python main.py --profile neuralsignal --next-step "next_step:1"
+    uv run python main.py --profile neuralsignal --proposal-seed "proposal_seed:1"
+    uv run python main.py --profile neuralsignal --resume-from "experiment_result:123" --start-node implement
+
+  Brainstorm mode:
+    uv run python main.py --mode brainstorm --profile neuralsignal --direction "new detector direction"
+    uv run python main.py --mode brainstorm --profile neuralsignal --direction "new detector direction" --brainstorm-config configs/brainstorm/default.brainstorm.yaml
+    uv run python main.py --mode brainstorm --profile trading --resume-brainstorm "<session-id>"
+
+  Discovery:
+    uv run python main.py --list-profiles
+    uv run python main.py --profile neuralsignal --list-nodes
+    uv run python main.py help
+
+Interactive brainstorm commands after pause:
+  help, continue, summary, research, plan, feedback <text>, approve_plan, execute, exit
+"""
+
 
 def _write_state_snapshot(profile_name: str, step_name: str, state: dict[str, Any]) -> None:
     serialisable: dict[str, Any] = {}
@@ -38,14 +61,35 @@ def _write_state_snapshot(profile_name: str, step_name: str, state: dict[str, An
     out_path.write_text(json.dumps(serialisable, indent=2, default=str), encoding="utf-8")
 
 
-def parse_args() -> argparse.Namespace:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Configuration-driven agentic research pipeline."
+        description="Configuration-driven research pipeline and interactive brainstorm runner.",
+        epilog=_CLI_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--profile", type=str, default=None,
                         help="Research profile name (e.g. 'neuralsignal', 'trading').")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="pipeline",
+        choices=["pipeline", "brainstorm"],
+        help="Execution mode.",
+    )
     parser.add_argument("--direction", type=str, default=None,
                         help="Research direction / question to investigate.")
+    parser.add_argument(
+        "--brainstorm-config",
+        type=str,
+        default=None,
+        help="Path to brainstorm.yaml config for brainstorm mode.",
+    )
+    parser.add_argument(
+        "--resume-brainstorm",
+        type=str,
+        default=None,
+        help="Brainstorm session id to resume.",
+    )
     parser.add_argument(
         "--source-experiment",
         type=str,
@@ -100,7 +144,16 @@ def parse_args() -> argparse.Namespace:
                         help="List available profiles and exit.")
     parser.add_argument("--list-nodes", action="store_true",
                         help="List pipeline nodes for the selected profile and exit.")
-    return parser.parse_args()
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = _build_parser()
+    args_list = list(sys.argv[1:] if argv is None else argv)
+    if len(args_list) == 1 and args_list[0].strip().lower() == "help":
+        parser.print_help()
+        raise SystemExit(0)
+    return parser.parse_args(args_list)
 
 
 def _choose_run_mode(args: argparse.Namespace) -> str:
@@ -248,6 +301,10 @@ def main() -> None:
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error loading profile {profile_name!r}: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    if args.mode == "brainstorm":
+        _run_brainstorm_mode(args, profile_name, profile)
+        return
 
     if args.list_nodes:
         print("Pipeline nodes:")
@@ -619,6 +676,69 @@ def _next_step_seeds(profile_name: str, current_direction: str, state: dict[str,
             "source_next_step_title": title,
         })
     return seeds
+
+
+def _run_brainstorm_mode(args: argparse.Namespace, profile_name: str, profile: dict[str, Any]) -> None:
+    from core.brainstorm import (
+        BrainstormEngine,
+        HELP_TEXT,
+        create_brainstorm_state,
+        execute_brainstorm_handoff,
+        load_brainstorm_config,
+        load_brainstorm_session,
+        persist_brainstorm_session,
+    )
+
+    brainstorm_cfg = load_brainstorm_config(args.brainstorm_config)
+    engine = BrainstormEngine(profile, brainstorm_cfg)
+
+    if args.resume_brainstorm:
+        state = load_brainstorm_session(profile, str(args.resume_brainstorm))
+    else:
+        direction = str(args.direction or "").strip()
+        if not direction:
+            direction = input(f"[{profile_name}] Brainstorm direction: ").strip()
+        if not direction:
+            print("Error: a brainstorm direction is required.", file=sys.stderr)
+            sys.exit(1)
+        state = create_brainstorm_state(
+            profile_name=profile_name,
+            direction=direction,
+            brainstorm_cfg=brainstorm_cfg,
+        )
+
+    def _emit(text: str) -> None:
+        if text:
+            print(text.rstrip())
+
+    state = engine.run_until_pause(state, emit=_emit)
+    persist_brainstorm_session(profile, brainstorm_cfg, state)
+
+    while True:
+        if state.get("status") == "cancelled":
+            print("Brainstorm session exited.")
+            return
+        if state.get("status") == "approved_for_execution":
+            start_node, _result = execute_brainstorm_handoff(
+                state,
+                brainstorm_cfg,
+                build_initial_state_fn=build_initial_state,
+                run_pipeline_graph_fn=run_pipeline_graph,
+                profile_name=profile_name,
+                profile=profile,
+            )
+            persist_brainstorm_session(profile, brainstorm_cfg, state)
+            print(f"Brainstorm handoff executed from node: {start_node}")
+            return
+
+        command = input("brainstorm> ").strip()
+        if not command:
+            command = "continue"
+        if command == "help":
+            print(HELP_TEXT.rstrip())
+            continue
+        state = engine.apply_command(state, command, emit=_emit)
+        persist_brainstorm_session(profile, brainstorm_cfg, state)
 
 
 if __name__ == "__main__":

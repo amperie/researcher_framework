@@ -30,6 +30,14 @@ from core.memory import MemoryService
 from core.memory.backends import get_memory_document_store
 from core.memory.backends import get_memory_graph_store, get_memory_vector_store
 from core.utils.profile_loader import list_profiles, load_profile
+from core.brainstorm import (
+    BrainstormEngine,
+    create_brainstorm_state,
+    execute_brainstorm_handoff,
+    load_brainstorm_config,
+    load_brainstorm_session,
+    persist_brainstorm_session,
+)
 
 
 @dataclass
@@ -287,6 +295,120 @@ def get_run_bundle(profile_name: str, record_id: str) -> dict[str, Any]:
             "mlflow": mlflow_bundle,
         },
     }
+
+
+def create_brainstorm_session(profile_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    profile = load_profile(profile_name)
+    brainstorm_cfg = load_brainstorm_config(payload.get("brainstorm_config"))
+    direction = str(payload.get("direction") or "").strip()
+    if not direction:
+        raise ValueError("direction is required")
+    engine = BrainstormEngine(profile, brainstorm_cfg)
+    state = create_brainstorm_state(
+        profile_name=profile_name,
+        direction=direction,
+        brainstorm_cfg=brainstorm_cfg,
+        session_id=str(payload.get("session_id") or "").strip() or None,
+    )
+    if bool(payload.get("autorun", True)):
+        state = engine.run_until_pause(state)
+    persist_brainstorm_session(profile, brainstorm_cfg, state)
+    return {
+        "profile_name": profile_name,
+        "session_id": state.get("session_id"),
+        "status": state.get("status"),
+        "summary": state.get("last_summary", ""),
+        "state": state,
+    }
+
+
+def get_brainstorm_session(profile_name: str, session_id: str) -> dict[str, Any]:
+    profile = load_profile(profile_name)
+    state = load_brainstorm_session(profile, session_id)
+    return {
+        "profile_name": profile_name,
+        "session_id": session_id,
+        "status": state.get("status"),
+        "summary": state.get("last_summary", ""),
+        "state": state,
+    }
+
+
+def command_brainstorm_session(profile_name: str, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    profile = load_profile(profile_name)
+    state = load_brainstorm_session(profile, session_id)
+    brainstorm_cfg = load_brainstorm_config(payload.get("brainstorm_config") or state.get("brainstorm_config_path"))
+    engine = BrainstormEngine(profile, brainstorm_cfg)
+    command = payload.get("command") or payload.get("text") or ""
+    state = engine.apply_command(state, command)
+    persist_brainstorm_session(profile, brainstorm_cfg, state)
+    return {
+        "profile_name": profile_name,
+        "session_id": session_id,
+        "status": state.get("status"),
+        "summary": state.get("last_summary", ""),
+        "state": state,
+    }
+
+
+def execute_brainstorm_session(profile_name: str, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    profile = load_profile(profile_name)
+    state = load_brainstorm_session(profile, session_id)
+    brainstorm_cfg = load_brainstorm_config(payload.get("brainstorm_config") or state.get("brainstorm_config_path"))
+    start_node, result = execute_brainstorm_handoff(
+        state,
+        brainstorm_cfg,
+        build_initial_state_fn=_build_initial_state_for_web,
+        run_pipeline_graph_fn=_run_pipeline_graph_for_web,
+        profile_name=profile_name,
+        profile=profile,
+    )
+    state["status"] = "completed"
+    persist_brainstorm_session(profile, brainstorm_cfg, state)
+    return {
+        "profile_name": profile_name,
+        "session_id": session_id,
+        "start_node": start_node,
+        "result": result,
+    }
+
+
+def _build_initial_state_for_web(
+    profile_name: str,
+    direction: str,
+    seed: dict[str, Any],
+    *,
+    continue_loop: bool,
+    extra_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from main import build_initial_state
+
+    return build_initial_state(
+        profile_name,
+        direction,
+        seed,
+        continue_loop=continue_loop,
+        extra_state=extra_state,
+    )
+
+
+def _run_pipeline_graph_for_web(
+    profile_name: str,
+    profile: dict[str, Any],
+    *,
+    initial_state: dict[str, Any],
+    start_node: str,
+    print_results: bool = False,
+) -> dict[str, Any]:
+    from main import run_pipeline_graph
+
+    return run_pipeline_graph(
+        profile_name,
+        profile,
+        initial_state=initial_state,
+        start_node=start_node,
+        print_results=print_results,
+    )
 
 
 def _load_context(profile_name: str) -> ProfileContext:

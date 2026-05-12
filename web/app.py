@@ -6,7 +6,19 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from web.service import create_proposal_seed, create_run_handoff, delete_orphans, diagnostics, get_run_bundle, list_run_summaries, scan_orphans
+from web.service import (
+    command_brainstorm_session,
+    create_brainstorm_session,
+    create_proposal_seed,
+    create_run_handoff,
+    delete_orphans,
+    diagnostics,
+    execute_brainstorm_session,
+    get_brainstorm_session,
+    get_run_bundle,
+    list_run_summaries,
+    scan_orphans,
+)
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -66,6 +78,54 @@ def api_proposal_seed(profile_name: str, record_id: str, payload: dict | None = 
 @app.get("/api/diagnostics")
 def api_diagnostics() -> dict:
     return diagnostics()
+
+
+@app.post("/api/brainstorm/sessions")
+def api_create_brainstorm_session(payload: dict | None = Body(default=None)) -> dict:
+    data = payload or {}
+    profile_name = str(data.get("profile_name") or "").strip()
+    if not profile_name:
+        raise HTTPException(status_code=400, detail="profile_name is required")
+    try:
+        return create_brainstorm_session(profile_name, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/brainstorm/sessions/{profile_name}/{session_id}")
+def api_get_brainstorm_session(profile_name: str, session_id: str) -> dict:
+    try:
+        return get_brainstorm_session(profile_name, session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/brainstorm/sessions/{profile_name}/{session_id}/commands")
+def api_command_brainstorm_session(profile_name: str, session_id: str, payload: dict | None = Body(default=None)) -> dict:
+    try:
+        return command_brainstorm_session(profile_name, session_id, payload or {})
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/brainstorm/sessions/{profile_name}/{session_id}/execute")
+def api_execute_brainstorm_session(profile_name: str, session_id: str, payload: dict | None = Body(default=None)) -> dict:
+    try:
+        return execute_brainstorm_session(profile_name, session_id, payload or {})
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/api/admin/orphans/scan")
