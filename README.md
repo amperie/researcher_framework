@@ -4,7 +4,7 @@
 
 The intent is extensibility without graph rewrites. New domains are mostly described through configuration: prompts, research tools, datasets, base classes, evaluation thresholds, storage targets, and adapter wiring. The same graph can drive local execution, async subprocess jobs, or Ray-backed runners without changing the overall profile shape.
 
-![Architecture overview](docs/architecture_overview_v2.png)
+![Researcher framework operating modes](docs/researcher_framework_modes.png)
 
 ## Two Ways To Run Research
 
