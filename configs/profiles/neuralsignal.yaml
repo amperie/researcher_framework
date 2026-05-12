@@ -88,41 +88,41 @@ knowledge_graph:
 
 # ── LLM Model Selection ────────────────────────────────────────────────────────
 llm:
-  default_model: claude-sonnet-4-6
+  default_model: claude-haiku-4-6
   default_max_output_tokens: 1800
   prompt_context:
     ideate_max_digests: 2
     ideate_max_artifacts: 5
   step_overrides:
     research:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 1400
     ideate:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 1200
     refine:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 1400
     propose_experiments:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 1400
     plan_implementation:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 1600
     implement:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 2800
     validate:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 2200
     evaluate:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 1400
     propose_next_steps:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 1000
     rank_next_steps:
-      model: claude-sonnet-4-6
+      model: claude-haiku-4-6
       max_output_tokens: 900
 
 # ── Research Sources ──────────────────────────────────────────────────────────

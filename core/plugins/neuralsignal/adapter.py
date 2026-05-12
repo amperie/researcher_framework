@@ -16,9 +16,6 @@ from __future__ import annotations
 import csv
 import json
 import os
-import subprocess
-import threading
-import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -35,7 +32,8 @@ from core.memory import (
     fingerprint_json,
 )
 from core.plugins.base import ResearchAdapter
-from core.plugins.job_runner import TERMINAL_STATUSES, get_runner
+from core.plugins.execution import check_task, read_task_result, run_task, submit_task
+from core.plugins.job_runner import TERMINAL_STATUSES
 from core.utils.logger import get_logger, setup_plugin_file_logging
 
 log = get_logger(__name__)
@@ -98,6 +96,16 @@ class NeuralSignalPlugin(ResearchAdapter):
             "base_classes": profile.get("base_classes") or [],
             "evaluation": profile.get("evaluation") or {},
             "bridge": self.validate_environment(profile, state),
+        }
+
+    def external_runtime_spec(self, profile: dict[str, Any], purpose: str) -> dict[str, Any]:
+        cfg = get_config()
+        return {
+            "python": cfg.neuralsignal_python,
+            "cwd": str(_neuralsignal_workdir(cfg)),
+            "pythonpath_entries": [str(path) for path in _pythonpath_entries(cfg)],
+            "plugin_name": _PLUGIN_NAME,
+            "logger_prefixes": list(_PLUGIN_LOGGER_PREFIXES),
         }
 
     def knowledge_graph_config(self, profile: dict[str, Any]) -> dict[str, Any]:
@@ -202,6 +210,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                     file_paths = [str(expected_dataset_path)]
                 else:
                     task_result = self._call_task(
+                        profile,
                         _CREATE_DATASET_TASK,
                         dataset_cfg,
                         timeout=_task_timeout(profile, "dataset", cfg),
@@ -274,6 +283,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             try:
                 model_cfg = self._build_model_config(profile, artifact, experiment_id)
                 task_result = self._call_task(
+                    profile,
                     _CREATE_S1_MODEL_TASK,
                     model_cfg,
                     timeout=_task_timeout(profile, "model", cfg),
@@ -357,8 +367,6 @@ class NeuralSignalPlugin(ResearchAdapter):
         _ensure_plugin_logging()
         jobs = list(state.get("experiment_jobs") or [])
         errors = list(state.get("errors") or [])
-        runner = get_runner(_execution_cfg(profile).get("runner", "local_process"))
-
         active_count = sum(1 for job in jobs if job.get("status") not in TERMINAL_STATUSES)
         max_parallel = int(_execution_cfg(profile).get("max_parallel_jobs", 1) or 1)
 
@@ -380,7 +388,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                 validation = validation_by_name.get(proposal_name)
                 _require_async_implementation(proposal_name, implementation, validation)
                 payload = self._build_proposal_branch_payload(profile, state, proposal, implementation)
-                job = runner.submit(
+                job = submit_task(
                     self._job_spec(
                         profile,
                         "proposal_branch",
@@ -388,7 +396,10 @@ class NeuralSignalPlugin(ResearchAdapter):
                         _RUN_PROPOSAL_BRANCH_TASK,
                         payload,
                         experiment_id=payload.get("experiment_id"),
-                    )
+                    ),
+                    profile,
+                    "experiment",
+                    default_runner="local_process",
                 )
                 jobs.append(job)
                 submitted.append(job)
@@ -412,15 +423,13 @@ class NeuralSignalPlugin(ResearchAdapter):
         results = list(state.get("experiment_results") or [])
         models = list(state.get("models") or [])
         errors = list(state.get("errors") or [])
-        runner = get_runner(_execution_cfg(profile).get("runner", "local_process"))
-
         updated_jobs: list[dict[str, Any]] = []
         for job in jobs:
-            checked = runner.check(job)
+            checked = check_task(job, profile, "experiment", default_runner="local_process")
             updated_jobs.append(checked)
             if checked.get("status") == "succeeded" and not checked.get("collected"):
                 try:
-                    result = _read_result(checked)
+                    result = read_task_result(checked)
                     if checked.get("stage") == "proposal_branch":
                         branch = self._proposal_branch_outputs_from_job(profile, checked, result)
                         artifact = branch.get("artifact") or {}
@@ -1024,29 +1033,22 @@ class NeuralSignalPlugin(ResearchAdapter):
         cfg = get_config()
         jobs_dir = Path(cfg.experiments_dir) / profile.get("name", "neuralsignal") / "jobs"
         job_id = _slug("_".join(item for item in (stage, proposal_name, artifact_id or experiment_id or str(uuid4())[:8]) if item))
-        env = os.environ.copy()
-        pythonpath_entries = [str(path) for path in _pythonpath_entries(cfg)]
-        existing = env.get("PYTHONPATH", "")
-        if existing:
-            pythonpath_entries.append(existing)
+        runtime = self.external_runtime_spec(profile, "experiment")
         return {
             "job_id": job_id,
             "job_dir": str(jobs_dir / job_id),
             "plugin_name": profile.get("name", _PLUGIN_NAME),
-            "runner": _execution_cfg(profile).get("runner", "local_process"),
             "stage": stage,
             "proposal_name": proposal_name,
             "artifact_id": artifact_id,
             "experiment_id": experiment_id,
             "task_path": task_path,
             "payload": payload,
-            "python": cfg.neuralsignal_python,
-            "cwd": cwd or str(_neuralsignal_workdir(cfg)),
-            "env": {
-                "PYTHONPATH": os.pathsep.join(pythonpath_entries),
-                "RESEARCH_PLUGIN_LOG": profile.get("name", _PLUGIN_NAME),
-                "RESEARCH_PLUGIN_LOGGERS": ",".join(_PLUGIN_LOGGER_PREFIXES),
-            },
+            "python": runtime["python"],
+            "cwd": cwd or runtime["cwd"],
+            "pythonpath_entries": list(runtime.get("pythonpath_entries") or []),
+            "logger_prefixes": list(runtime.get("logger_prefixes") or []),
+            "timeout": _task_timeout(profile, stage, cfg),
         }
 
     def _dataset_artifacts_from_job(self, job: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1108,6 +1110,7 @@ class NeuralSignalPlugin(ResearchAdapter):
 
     def _call_task(
         self,
+        profile: dict[str, Any],
         task_path: str,
         payload: dict[str, Any],
         timeout: int | None = None,
@@ -1117,84 +1120,23 @@ class NeuralSignalPlugin(ResearchAdapter):
         _ensure_plugin_logging()
         cfg = get_config()
         timeout = timeout or cfg.experiment_timeout_seconds
-        env = os.environ.copy()
-
-        pythonpath_entries = [str(path) for path in _pythonpath_entries(cfg)]
-        existing = env.get("PYTHONPATH", "")
-        if existing:
-            pythonpath_entries.append(existing)
-        env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
-        env["RESEARCH_PLUGIN_LOG"] = _PLUGIN_NAME
-        env["RESEARCH_PLUGIN_LOGGERS"] = ",".join(_PLUGIN_LOGGER_PREFIXES)
-
-        cmd = cfg.neuralsignal_python.split() + ["-u", "-m", "core.plugins.task_runner", task_path]
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            cwd=cwd,
+        return run_task(
+            {
+                "task_path": task_path,
+                "payload": payload,
+                "python": cfg.neuralsignal_python,
+                "timeout": timeout,
+                "plugin_name": _PLUGIN_NAME,
+                "logger_prefixes": list(_PLUGIN_LOGGER_PREFIXES),
+                "cwd": cwd,
+                "pythonpath_entries": [str(path) for path in _pythonpath_entries(cfg)],
+                "job_id": f"ns_{Path(task_path).name}_{uuid4().hex[:8]}",
+                "job_dir": str(Path(cfg.experiments_dir) / _PLUGIN_NAME / "sync_tasks" / uuid4().hex[:8]),
+            },
+            profile=profile,
+            purpose="task",
+            default_runner="sync",
         )
-
-        stdout_chunks: list[str] = []
-
-        def _read_stdout() -> None:
-            if proc.stdout:
-                stdout_chunks.append(proc.stdout.read())
-
-        def _relay_stderr() -> None:
-            if not proc.stderr:
-                return
-            for line in iter(proc.stderr.readline, ""):
-                stripped = line.rstrip("\n")
-                if stripped:
-                    log.info("[neuralsignal bridge] %s", stripped)
-
-        t_out = threading.Thread(target=_read_stdout, daemon=True)
-        t_err = threading.Thread(target=_relay_stderr, daemon=True)
-        t_out.start()
-        t_err.start()
-
-        if proc.stdin:
-            try:
-                proc.stdin.write(json.dumps(payload, default=str))
-                proc.stdin.close()
-            except BrokenPipeError:
-                pass
-
-        start = time.monotonic()
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            proc.kill()
-            t_out.join(timeout=2)
-            t_err.join(timeout=2)
-            raise RuntimeError(
-                f"Task {task_path!r} timed out after {timeout} seconds"
-            ) from exc
-
-        elapsed = time.monotonic() - start
-        remaining = max(0.0, timeout - elapsed)
-        t_out.join(timeout=remaining or 2)
-        t_err.join(timeout=2)
-
-        stdout_data = "".join(stdout_chunks)
-        if proc.returncode != 0:
-            raise RuntimeError(f"Task {task_path!r} exited {proc.returncode}: {stdout_data[:500]}")
-
-        json_line = next(
-            (line for line in reversed(stdout_data.splitlines()) if line.lstrip().startswith(("{", "["))),
-            None,
-        )
-        if json_line is None:
-            raise RuntimeError(f"Task {task_path!r} produced no JSON output")
-
-        result = json.loads(json_line)
-        if isinstance(result, dict) and "error" in result:
-            raise RuntimeError(f"Task {task_path!r} error: {result['error']}")
-        return result
 
 
 def get_adapter() -> NeuralSignalPlugin:

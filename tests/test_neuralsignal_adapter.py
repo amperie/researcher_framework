@@ -742,8 +742,7 @@ def test_task_timeout_prefers_stage_override_then_job_timeout(tmp_path):
 def test_submit_experiment_jobs_submits_proposal_branch_job(tmp_path):
     adapter = NeuralSignalPlugin()
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
-    runner = MagicMock()
-    runner.submit.return_value = {
+    submitted = {
         "job_id": "proposal_branch_activation_sparsity",
         "job_dir": str(tmp_path / "job"),
         "status": "submitted",
@@ -752,14 +751,14 @@ def test_submit_experiment_jobs_submits_proposal_branch_job(tmp_path):
     }
 
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_runner", return_value=runner):
+        with patch("core.plugins.neuralsignal.adapter.submit_task", return_value=submitted) as submit_task:
             delta = adapter.submit_experiment_jobs(
                 {**_profile(), "execution": {"runner": "local_process", "max_parallel_jobs": 1}},
                 state,
             )
 
-    runner.submit.assert_called_once()
-    spec = runner.submit.call_args.args[0]
+    submit_task.assert_called_once()
+    spec = submit_task.call_args.args[0]
     assert spec["stage"] == "proposal_branch"
     assert spec["task_path"] == "core.plugins.neuralsignal.tasks.run_proposal_branch"
     assert spec["payload"]["dataset_config"]["dataset"] == "HaluBench"
@@ -770,16 +769,14 @@ def test_submit_experiment_jobs_submits_proposal_branch_job(tmp_path):
 def test_submit_experiment_jobs_reports_missing_implementation(tmp_path):
     adapter = NeuralSignalPlugin()
     state = {"proposals": [_proposal()], "implementations": []}
-    runner = MagicMock()
-
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_runner", return_value=runner):
+        with patch("core.plugins.neuralsignal.adapter.submit_task") as submit_task:
             delta = adapter.submit_experiment_jobs(
                 {**_profile(), "execution": {"runner": "ray", "max_parallel_jobs": 1}},
                 state,
             )
 
-    runner.submit.assert_not_called()
+    submit_task.assert_not_called()
     assert delta["experiment_jobs"] == []
     assert any("has no generated implementation" in error for error in delta["errors"])
 
@@ -795,16 +792,14 @@ def test_submit_experiment_jobs_reports_generation_failure_before_submit(tmp_pat
             "error": "LLM returned prose instead of Python",
         }],
     }
-    runner = MagicMock()
-
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_runner", return_value=runner):
+        with patch("core.plugins.neuralsignal.adapter.submit_task") as submit_task:
             delta = adapter.submit_experiment_jobs(
                 {**_profile(), "execution": {"runner": "ray", "max_parallel_jobs": 1}},
                 state,
             )
 
-    runner.submit.assert_not_called()
+    submit_task.assert_not_called()
     assert delta["experiment_jobs"] == []
     assert any("implementation generation failed" in error for error in delta["errors"])
 
@@ -899,8 +894,7 @@ def test_check_experiment_jobs_collects_completed_proposal_branch(tmp_path):
         },
     }), encoding="utf-8")
 
-    runner = MagicMock()
-    runner.check.return_value = {
+    checked_job = {
         "job_id": "proposal_branch_job",
         "job_dir": str(job_dir),
         "result_path": str(result_path),
@@ -913,7 +907,7 @@ def test_check_experiment_jobs_collects_completed_proposal_branch(tmp_path):
     adapter = NeuralSignalPlugin()
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
         with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch("core.plugins.neuralsignal.adapter.get_runner", return_value=runner):
+            with patch("core.plugins.neuralsignal.adapter.check_task", return_value=checked_job):
                 with patch("core.plugins.neuralsignal.adapter._log_result_to_mlflow", return_value="mlflow-run-branch"):
                     delta = adapter.check_experiment_jobs(
                         {**_profile(), "execution": {"runner": "local_process", "max_parallel_jobs": 1}},
@@ -942,8 +936,8 @@ def test_call_task_sets_neuralsignal_src_on_pythonpath(tmp_path, monkeypatch):
             return self.returncode
 
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=cfg):
-        with patch("core.plugins.neuralsignal.adapter.subprocess.Popen", return_value=FakeProc()) as popen:
-            result = NeuralSignalPlugin()._call_task("some.module.task", {"x": 1}, cwd=str(tmp_path))
+        with patch("core.plugins.external_tasks.subprocess.Popen", return_value=FakeProc()) as popen:
+            result = NeuralSignalPlugin()._call_task({}, "some.module.task", {"x": 1}, cwd=str(tmp_path))
 
     assert result == {"ok": True}
     env = popen.call_args.kwargs["env"]
@@ -953,8 +947,13 @@ def test_call_task_sets_neuralsignal_src_on_pythonpath(tmp_path, monkeypatch):
     assert "existing_path" in pythonpath
     assert env["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
     assert "core.plugins.neuralsignal" in env["RESEARCH_PLUGIN_LOGGERS"]
+    assert env["RESEARCH_LOG_CONFIG"].endswith(os.path.join("configs", "config.yaml"))
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["PYTHONUTF8"] == "1"
     assert popen.call_args.args[0][-3:] == ["-m", "core.plugins.task_runner", "some.module.task"]
     assert popen.call_args.kwargs["cwd"] == str(tmp_path)
+    assert popen.call_args.kwargs["encoding"] == "utf-8"
+    assert popen.call_args.kwargs["errors"] == "replace"
 
 
 def test_call_task_uses_full_timeout_for_process_wait(tmp_path):
@@ -973,8 +972,8 @@ def test_call_task_uses_full_timeout_for_process_wait(tmp_path):
             return self.returncode
 
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=cfg):
-        with patch("core.plugins.neuralsignal.adapter.subprocess.Popen", return_value=FakeProc()):
-            result = NeuralSignalPlugin()._call_task("some.module.task", {"x": 1}, timeout=123)
+        with patch("core.plugins.external_tasks.subprocess.Popen", return_value=FakeProc()):
+            result = NeuralSignalPlugin()._call_task({}, "some.module.task", {"x": 1}, timeout=123)
 
     assert result == {"ok": True}
     assert seen["timeout"] == 123
@@ -999,8 +998,8 @@ def test_call_task_supports_package_dir_as_neuralsignal_src_path(tmp_path, monke
 
     monkeypatch.delenv("PYTHONPATH", raising=False)
     with patch("core.plugins.neuralsignal.adapter.get_config", return_value=cfg):
-        with patch("core.plugins.neuralsignal.adapter.subprocess.Popen", return_value=FakeProc()) as popen:
-            result = NeuralSignalPlugin()._call_task("some.module.task", {"x": 1})
+        with patch("core.plugins.external_tasks.subprocess.Popen", return_value=FakeProc()) as popen:
+            result = NeuralSignalPlugin()._call_task({}, "some.module.task", {"x": 1})
 
     assert result == {"ok": True}
     pythonpath = popen.call_args.kwargs["env"]["PYTHONPATH"].split(os.pathsep)
@@ -1010,4 +1009,19 @@ def test_call_task_supports_package_dir_as_neuralsignal_src_path(tmp_path, monke
     env = popen.call_args.kwargs["env"]
     assert env["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
     assert "core.plugins.job_runner" in env["RESEARCH_PLUGIN_LOGGERS"]
+    assert env["RESEARCH_LOG_CONFIG"].endswith(os.path.join("configs", "config.yaml"))
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["PYTHONUTF8"] == "1"
     assert popen.call_args.args[0][-3:] == ["-m", "core.plugins.task_runner", "some.module.task"]
+    assert popen.call_args.kwargs["encoding"] == "utf-8"
+    assert popen.call_args.kwargs["errors"] == "replace"
+
+
+def test_external_runtime_spec_exposes_shared_runner_settings(tmp_path):
+    cfg = _cfg(tmp_path)
+    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=cfg):
+        spec = NeuralSignalPlugin().external_runtime_spec({}, "validate")
+
+    assert spec["python"] == "python"
+    assert spec["plugin_name"] == "neuralsignal"
+    assert str((Path(os.getcwd()) / "core").resolve()) in spec["pythonpath_entries"]

@@ -26,6 +26,8 @@ from core.graph.nodes.memory import persist_memory_records_for_state
 from core.graph.nodes.code_safety import extract_python_source, validate_python_source
 from core.graph.state import ResearchState
 from core.llm.factory import get_llm
+from core.plugins.execution import run_task
+from core.plugins.loader import adapter_has, load_adapter
 from core.utils.logger import get_logger
 from core.utils.profile_loader import get_prompt
 
@@ -51,6 +53,7 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
 
     cfg = get_config()
     scan_context = _scan_context(profile)
+    adapter = load_adapter(profile) if profile.get("experiment_adapter") else None
 
     updated_impls = list(implementations)
     validation_results: list[dict] = []
@@ -138,7 +141,18 @@ def validate_node(state: ResearchState, profile: dict) -> dict:
             if preflight_error:
                 test_output = f"PREFLIGHT VALIDATION ERROR: {preflight_error}"
             else:
-                test_output = _run_tests(test_runner, str(test_file), cfg.validate_timeout_seconds)
+                runtime_spec = _validation_runtime_spec(adapter, profile)
+                test_output = _run_tests(
+                    test_runner,
+                    str(test_file.resolve()),
+                    cfg.validate_timeout_seconds,
+                    profile=profile,
+                    runtime_spec=runtime_spec,
+                    script_source=current_code,
+                    test_source=test_code,
+                    script_name=Path(script_path).name,
+                    test_name=test_file.name,
+                )
             passed = _pytest_output_passed(test_output)
             failure_summary = _summarize_test_failure(test_output)
 
@@ -288,10 +302,59 @@ def _scan_context(profile: dict) -> str:
     return "\n".join(parts)
 
 
-def _run_tests(test_runner: str, test_file: str, timeout: int) -> str:
+def _run_tests(
+    test_runner: str,
+    test_file: str,
+    timeout: int,
+    *,
+    profile: dict | None = None,
+    runtime_spec: dict | None = None,
+    script_source: str | None = None,
+    test_source: str | None = None,
+    script_name: str | None = None,
+    test_name: str | None = None,
+) -> str:
     """Run tests and return combined stdout+stderr output."""
     cmd = test_runner.split() + [test_file, "-v", "--tb=short"]
     log.debug("validate_node | Running: %s", cmd)
+    if runtime_spec:
+        try:
+            result = run_task(
+                {
+                    "task_path": "core.plugins.framework_tasks.run_tests",
+                    "payload": {
+                        "cmd": cmd,
+                        "cmd_prefix": test_runner.split(),
+                        "cmd_suffix": ["-v", "--tb=short"],
+                        "test_path": test_name or Path(test_file).name,
+                        "staged_files": {
+                            (script_name or "generated_impl.py"): script_source or "",
+                            (test_name or Path(test_file).name): test_source or "",
+                        },
+                        "env": {
+                            "GENERATED_SCRIPT_PATH": script_name or "generated_impl.py",
+                            "VALIDATION_PLATFORM_ROOT": "",
+                        },
+                        "timeout": timeout,
+                        "cwd": runtime_spec.get("cwd"),
+                    },
+                    "python": str(runtime_spec["python"]),
+                    "timeout": timeout + 5,
+                    "plugin_name": str(runtime_spec.get("plugin_name") or "framework"),
+                    "logger_prefixes": list(runtime_spec.get("logger_prefixes") or []),
+                    "cwd": runtime_spec.get("cwd"),
+                    "pythonpath_entries": list(runtime_spec.get("pythonpath_entries") or []),
+                    "env": dict(runtime_spec.get("env") or {}),
+                    "job_id": f"validate_{Path(test_file).stem}",
+                    "job_dir": str(resolve_dev_path(f"dev/experiments/validation/jobs/{Path(test_file).stem}")),
+                },
+                profile or {},
+                "validate",
+                default_runner="sync",
+            )
+            return str(result.get("output") or "")
+        except Exception as exc:
+            return f"ERROR running tests: {exc}"
     try:
         result = subprocess.run(
             cmd,
@@ -306,6 +369,17 @@ def _run_tests(test_runner: str, test_file: str, timeout: int) -> str:
         return f"TIMEOUT: tests exceeded {timeout}s"
     except Exception as exc:
         return f"ERROR running tests: {exc}"
+
+
+def _validation_runtime_spec(adapter, profile: dict) -> dict | None:
+    if adapter is None or not adapter_has(adapter, "external_runtime_spec"):
+        return None
+    try:
+        spec = adapter.external_runtime_spec(profile, "validate")
+    except Exception as exc:
+        log.warning("validate_node | Failed to resolve external validation runtime: %s", exc)
+        return None
+    return spec if isinstance(spec, dict) and spec.get("python") else None
 
 
 def _pytest_output_passed(output: str) -> bool:
@@ -398,6 +472,7 @@ def _build_neuralsignal_feature_set_contract_test(
     return f'''\
 import importlib.util
 import math
+import os
 import sys
 import types
 
@@ -405,7 +480,7 @@ import pandas as pd
 import pytest
 import torch
 
-SCRIPT_PATH = {script_path_json}
+SCRIPT_PATH = os.environ.get("GENERATED_SCRIPT_PATH", {script_path_json})
 CLASS_NAME = {class_name_json}
 EXPECTED_FEATURE_SET_NAME = {expected_name_json}
 
@@ -561,23 +636,21 @@ def _build_trading_algorithm_contract_test(
     class_name: str,
     expected_algorithm_name: str,
 ) -> str:
-    platform_source = json.dumps(
-        str(Path(((profile.get("platform") or {}).get("source_path")) or "../trading_guy").expanduser().resolve())
-    )
     script_path_json = json.dumps(str(Path(script_path).resolve()))
     class_name_json = json.dumps(class_name)
     expected_name_json = json.dumps(expected_algorithm_name)
     return f'''\
 import importlib.util
+import os
 from pathlib import Path
 import sys
 
-PLATFORM_ROOT = {platform_source}
-SCRIPT_PATH = {script_path_json}
+PLATFORM_ROOT = os.environ.get("VALIDATION_PLATFORM_ROOT", "")
+SCRIPT_PATH = os.environ.get("GENERATED_SCRIPT_PATH", {script_path_json})
 CLASS_NAME = {class_name_json}
 EXPECTED_ALGORITHM_NAME = {expected_name_json}
 
-if PLATFORM_ROOT not in sys.path:
+if PLATFORM_ROOT and PLATFORM_ROOT not in sys.path:
     sys.path.insert(0, PLATFORM_ROOT)
 
 from trading.core.algorithm import Algorithm
@@ -589,6 +662,9 @@ def test_generated_algorithm_imports_real_platform():
     assert "class Algorithm" not in source, "Implementation must import Algorithm from trading.core.algorithm"
     assert "sys.path" not in source, "Implementation must not mutate sys.path"
     assert "sys.modules" not in source, "Implementation must not inject fake trading modules"
+    assert "SignalType.EXIT" not in source, "Algorithms must emit directional signals only; exits belong to the portfolio"
+    assert "open_positions" not in source, "Algorithms must not track portfolio position state"
+    assert "hold_time_minutes" not in source, "Algorithms must not implement holding-period logic"
 
 
 def _load_class():

@@ -54,12 +54,13 @@ experiments_dir: ${EXPERIMENTS_DIR:dev/experiments}
 # ── neuralsignal plugin ───────────────────────────────────────────────────────
 neuralsignal_python: ${NEURALSIGNAL_PYTHON:uv run python}
 neuralsignal_src_path: ${NEURALSIGNAL_SRC_PATH:../neuralsignal/neuralsignal}
+trading_python: ${TRADING_PYTHON:uv run python}
 ray_mode: ${RAY_MODE:local}              # local | remote
 ray_address: ${RAY_ADDRESS:auto}         # remote cluster address when ray_mode=remote
 ray_namespace: ${RAY_NAMESPACE:neuralsignalresearcher}
 
 # ── Arxiv ─────────────────────────────────────────────────────────────────────
-max_arxiv_papers: 20
+max_arxiv_papers: 10
 
 # ── Dev workspace maintenance ─────────────────────────────────────────────────
 maintenance:
@@ -75,6 +76,17 @@ maintenance:
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging:
   level: DEBUG
+  ignore_loggers:
+    - name: pymongo
+      max_level: INFO
+    - name: mongo
+      max_level: INFO
+    - name: neo4j
+      max_level: INFO
+    - name: chromadb
+      max_level: INFO
+    - name: chroma
+      max_level: INFO
 
   console:
     enabled: true

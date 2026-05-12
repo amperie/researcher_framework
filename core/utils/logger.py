@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import sys
+import ctypes
 from pathlib import Path
 from typing import Any
 
@@ -26,9 +27,66 @@ _DEFAULT_FILE_FORMAT = (
     "%(asctime)s [%(levelname)-8s] %(name)-40s (%(filename)s:%(lineno)d): %(message)s"
 )
 _FALLBACK_LEVEL = logging.INFO
+_RESET = "\x1b[0m"
+_LEVEL_COLORS = {
+    logging.DEBUG: "\x1b[36m",
+    logging.INFO: "\x1b[32m",
+    logging.WARNING: "\x1b[33m",
+    logging.ERROR: "\x1b[31m",
+    logging.CRITICAL: "\x1b[35m",
+}
+
+
 def _level(name: str) -> int:
     level = logging.getLevelName(name.upper()) if isinstance(name, str) else name
     return level if isinstance(level, int) else _FALLBACK_LEVEL
+
+
+class _ColorFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        color = _LEVEL_COLORS.get(record.levelno)
+        if not color:
+            return message
+        return f"{color}{message}{_RESET}"
+
+
+class _IgnoreLoggerLevelsFilter(logging.Filter):
+    """Suppress records for selected logger prefixes up to a configured level."""
+
+    def __init__(self, rules: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self.rules: list[tuple[str, int]] = []
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            name = str(rule.get("name") or "").strip()
+            if not name:
+                continue
+            max_level = _level(rule.get("max_level", "INFO"))
+            self.rules.append((name, max_level))
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        for prefix, max_level in self.rules:
+            if record.name == prefix or record.name.startswith(f"{prefix}."):
+                return record.levelno > max_level
+        return True
+
+
+def _enable_windows_ansi() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        if handle in (0, -1):
+            return
+        mode = ctypes.c_uint()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) == 0:
+            return
+        kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        return
 
 
 def setup_logging(config_path: str = "configs/config.yaml") -> None:
@@ -44,6 +102,8 @@ def setup_logging(config_path: str = "configs/config.yaml") -> None:
 
     console_cfg: dict[str, Any] = cfg.get("console", {})
     file_cfg: dict[str, Any] = cfg.get("file", {})
+    ignore_loggers_cfg = list(cfg.get("ignore_loggers") or [])
+    ignore_filter = _IgnoreLoggerLevelsFilter(ignore_loggers_cfg) if ignore_loggers_cfg else None
 
     console_level = _level(console_cfg.get("level", "INFO"))
     file_level = _level(file_cfg.get("level", "DEBUG"))
@@ -54,14 +114,17 @@ def setup_logging(config_path: str = "configs/config.yaml") -> None:
     handlers_added: list[str] = []
 
     if console_cfg.get("enabled", True):
+        _enable_windows_ansi()
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(console_level)
         console_handler.setFormatter(
-            logging.Formatter(
+            _ColorFormatter(
                 fmt=console_cfg.get("format", _DEFAULT_CONSOLE_FORMAT),
                 datefmt=console_cfg.get("datefmt", "%H:%M:%S"),
             )
         )
+        if ignore_filter is not None:
+            console_handler.addFilter(ignore_filter)
         root.addHandler(console_handler)
         handlers_added.append(f"console(level={logging.getLevelName(console_level)})")
 
@@ -81,24 +144,14 @@ def setup_logging(config_path: str = "configs/config.yaml") -> None:
                 datefmt=file_cfg.get("datefmt", "%Y-%m-%d %H:%M:%S"),
             )
         )
+        if ignore_filter is not None:
+            file_handler.addFilter(ignore_filter)
         root.addHandler(file_handler)
         handlers_added.append(
             f"file(level={logging.getLevelName(file_level)}, path={log_path})"
         )
 
-    for noisy in (
-        "httpx",
-        "httpcore",
-        "urllib3",
-        "chromadb",
-        "langsmith",
-        "pymongo",
-        "pymongo.command",
-        "pymongo.connection",
-        "pymongo.serverSelection",
-        "pymongo.topology",
-        "pymongo.network",
-    ):
+    for noisy in ("httpx", "httpcore", "urllib3", "langsmith"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     log = get_logger(__name__)

@@ -19,6 +19,13 @@ from core.utils.logger import get_logger
 log = get_logger(__name__)
 
 
+def _canonical_step_name(node_name: str) -> str:
+    raw = str(node_name or "").strip().lower()
+    if not raw:
+        return "unknown"
+    return raw.replace(" ", "_").replace("-", "_")
+
+
 def _wrap_node(fn: Callable, profile: dict, step_name: str) -> Callable:
     """Wrap a node function to inject the profile dict as a second argument."""
     @functools.wraps(fn)

@@ -51,11 +51,11 @@ memory:
       ready_statuses: [ready]
 
 llm:
-  default_model: claude-opus-4-6
+  default_model: claude-haiku-4-5
   step_overrides:
-    research: claude-sonnet-4-6
-    refine: claude-sonnet-4-6
-    evaluate: claude-sonnet-4-6
+    research: claude-haiku-4-5
+    refine: claude-haiku-4-5
+    evaluate: claude-haiku-4-5
 
 platform:
   package: trading
@@ -139,6 +139,14 @@ base_classes:
           def __init__(self, cfg: dict | None = None, history_length: int = 0):
               ...
 
+          @property
+          def required_warmup_bars(self) -> int:
+              # Read-only property on the base class.
+              # Do not assign to self.required_warmup_bars.
+              # Either override this property in the subclass or set
+              # self._required_warmup_bars_override in __init__.
+              ...
+
           @final
           def on_data(self, data: list[PriceData]) -> list[MarketSignal]:
               # Updates rolling history then delegates to on_data_logic().
@@ -149,6 +157,43 @@ base_classes:
           def on_data_logic(self, data: list[PriceData]) -> list[MarketSignal]:
               # Use self.price_history[symbol] and self.price_data_history[symbol].
               # Must only depend on current and historical bars.
+              ...
+  - name: Portfolio
+    module: trading.core.portfolio
+    description: >
+      Base class for generated trading portfolios. Implement
+      process_tick_market_signals_logic() and let the base class manage pending
+      orders, broker sync, portfolio value updates, and tick lifecycle.
+    key_interface: |
+      class Portfolio:
+          def __init__(
+              self,
+              cfg: dict | None = None,
+              order_manager: OrderManager | None = None,
+              starting_cash: float = 0.0,
+              starting_positions: dict[str, Position] | None = None,
+              keep_history: bool = False,
+          ):
+              ...
+
+          @final
+          def process_market_signals_for_tick(
+              self,
+              signals: list[MarketSignal],
+              tick: list[PriceData],
+          ) -> TickResults:
+              # Handles pending order updates, broker sync, order submission,
+              # value updates, and history recording before/after delegating
+              # to process_tick_market_signals_logic().
+              ...
+
+          @abstractmethod
+          def process_tick_market_signals_logic(
+              self,
+              signals: list[MarketSignal],
+              tick: list[PriceData],
+          ) -> TickResults:
+              # Use cfg-driven symbols and get_price(symbol, tick) when needed.
               ...
 
 data_sources:
@@ -177,7 +222,7 @@ risk_constraints:
   max_single_position: 0.10
   market_orders_only: true
   require_history_warmup: true
-  require_walk_forward_split: true
+  require_walk_forward_split: false
 
 execution:
   defaults:
@@ -194,12 +239,22 @@ execution:
     alpaca_account: longer_range
     timeframe: Minute
     adjustment: split
-    limit: 5000
+    start_date: "2023-01-01"
+    end_date: "2025-12-31"
+    limit: 350000
     market_hours_only: true
-    aggregation_enabled: true
-    aggregation_period_minutes: 5
-    log_to_mlflow: false
+    aggregation_enabled: false
+    aggregation_period_minutes: 1
+    log_to_mlflow: true
+    mlflow_annualized_return_threshold: 0.0
+    mlflow_sample_negative_rate: 20
     benchmarks: {}
+    hpo:
+      objective_metric: annualized_return
+      num_samples: 80
+      max_concurrent_trials: 8
+      log_progress: true
+      progress_report_interval_seconds: 15
     walk_forward:
       optimization_window_days: 90
       trading_window_days: 30
@@ -214,6 +269,12 @@ implementation_examples:
     purpose: Minimal Algorithm subclass shape and MarketSignal return contract.
   - path: ../trading_guy/trading/algorithms/macd_rsi_algorithm.py
     purpose: Real history-driven algorithm using self.price_history and warmup-aware logic.
+  - path: ../trading_guy/trading/core/algorithm.py
+    purpose: Canonical base-class contract for warmup handling, history management, and subclass expectations.
+  - path: ../trading_guy/trading/core/portfolio.py
+    purpose: Canonical portfolio lifecycle contract so generated code does not reimplement pending-order, broker-sync, or value-tracking logic.
+  - path: ../trading_guy/trading/core/pf/single_symbol_portfolio.py
+    purpose: Concrete example showing symbol handling should come from cfg["symbol"] instead of hardcoded tickers.
 
 validate:
   auto_run: true
@@ -226,7 +287,7 @@ validate:
 experiment_adapter: core.plugins.trading.adapter
 
 evaluation:
-  primary_metric: sharpe_ratio
+  primary_metric: annualized_return
   metrics:
     - sharpe_ratio
     - sortino_ratio
@@ -236,8 +297,8 @@ evaluation:
     - profit_factor
     - total_trades
   thresholds:
-    sharpe_ratio: 1.2
-    max_drawdown_pct: -20.0
+    sharpe_ratio: 20
+    max_drawdown_pct: -30.0
 
 storage:
   mlflow_experiment: trading_agent_experiments
@@ -328,16 +389,21 @@ prompts:
       Include:
       - name: same as the idea name
       - description
-      - mode: "backtest" or "walk-forward"
+      - mode: always "backtest"
+        Do not emit "walk-forward" for this profile.
       - optimization_target: one of "algorithm", "portfolio", or "joint"
         Use "algorithm" when isolating strategy logic changes with portfolio behavior fixed.
         Use "portfolio" when isolating sizing/risk/portfolio changes with algorithm logic fixed.
         Use "joint" only when intentionally co-optimizing both axes.
-      - data_source: exact data source name from the profile
-      - data_path: path relative to the trading project root when useful
+      - data_source: "alpaca"
+      - data_provider: trading.data_providers.alpaca_data_provider.AlpacaDataProvider
       - symbol: primary traded symbol
+      - symbols: list every symbol the algorithm expects to receive from the data provider, including macro/auxiliary symbols such as VIX or T10Y2Y when used
+      - tradable_symbols: optional list of symbols the portfolio is allowed to trade when different from the full symbols list
       - timeframe
-      - start_date and end_date if known
+      - start_date: "2023-01-01"
+      - end_date: "2025-12-31"
+      - limit: enough data for the full 3-year window on 1-minute bars; use at least 350000 unless a larger value is required by history_length
       - history_length
       - stop_pct
       - profit_pct
@@ -355,16 +421,17 @@ prompts:
         For optimization_target="portfolio", only tune portfolio_param_keys.
         For optimization_target="joint", tune both and always include stop_pct and profit_pct in portfolio_param_keys and search_space.
         Start with a wide search space, not a narrow local search.
+        Enforce stop_pct and profit_pct in the range 0.5 to 20.0 percent.
+        For integer hyperparameters, widen ranges aggressively; as a default heuristic, expand a seed value by roughly three orders of magnitude.
+        Example: a seed fast_period of 12 should be explored on the order of 1 to 12000 rather than 8 to 16.
         Prefer continuous ranges so the optimizer can search freely.
         Use `uniform`, `loguniform`, or `randint` ranges instead of discrete `choice` lists whenever possible.
         Do not emit `choice` for tunable trading hyperparameters unless a parameter is truly categorical and cannot be represented as a numeric range.
         search_space entries must use the platform schema:
           {type: "randint"|"uniform"|"loguniform", ...}
-      - walk_forward: object with optimization/trading windows, trial counts,
-        algorithm_param_keys, portfolio_param_keys, and search_space when mode="walk-forward"
-        These keys must also respect optimization_target.
       - benchmark
-      - aggregation_enabled and aggregation_period_minutes when helpful
+      - aggregation_enabled: false by default
+      - aggregation_period_minutes: 1 when aggregation is disabled
       - experiment_variants: optional list of up to 3 named override objects for mass testing
       - success_criterion using sharpe_ratio and max_drawdown_pct
 
@@ -374,6 +441,18 @@ prompts:
     system: |
       For each trading experiment proposal, write a detailed implementation
       plan. Do NOT write Python code.
+
+      The plan must follow the exact local trading platform contract:
+      - Import Algorithm from trading.core.algorithm
+      - Import ONLY PriceData, MarketSignal, and SignalType from trading.core.classes unless a proposal explicitly requires another known class
+      - Do not reference or import ExecutionTarget or other guessed trading.core.classes symbols
+      - Symbols and universes come from the proposal/runtime config; fixed-symbol strategies are allowed when explicitly requested, but the plan must state where expected symbols are declared, preferably cfg["symbol"], cfg["symbols"], or the proposal universe
+      - If the strategy uses macro or auxiliary symbols, the plan must declare them explicitly in the proposal symbols list so the data provider downloads them
+      - required_warmup_bars is a read-only base-class property; never plan to assign to self.required_warmup_bars
+      - If the algorithm needs a custom warmup threshold, either override the required_warmup_bars property or set self._required_warmup_bars_override in __init__
+      - Prefer self.price_data_history[symbol] when OHLCV fields are needed and self.price_history[symbol] when only closes are needed
+      - Do not reproduce logic already implemented in Algorithm.on_data() or Portfolio.process_market_signals_for_tick()
+      - The algorithm must only emit trading signals. It must not track positions, holding periods, stop-loss execution, profit-taking, or portfolio state.
 
       Include:
       - proposal_name
@@ -396,11 +475,26 @@ prompts:
       Requirements:
       - Subclass Algorithm from trading.core.algorithm
       - Implement on_data_logic(self, data: list[PriceData]) -> list[MarketSignal]
-      - Use trading.core.classes.PriceData, MarketSignal, and SignalType
+      - Import ONLY PriceData, MarketSignal, and SignalType from trading.core.classes unless the implementation plan explicitly requires another known class from the local platform
+      - Never import or reference ExecutionTarget
       - Use self.price_history and self.price_data_history for rolling context
+      - Symbols and universes come from the proposal/runtime config or incoming PriceData; fixed-symbol strategies are allowed when the plan explicitly requires them, but expected symbols must be declared through cfg["symbol"], cfg["symbols"], or another clear config-facing field
+      - If the strategy uses macro or auxiliary symbols, read them from incoming PriceData and require them to be declared in cfg["symbols"]
       - Never use future rows to compute current signals
       - Return deterministic signals only; no random behavior
       - Guard against insufficient history and missing symbols cleanly
+      - Treat required_warmup_bars as read-only; never assign to self.required_warmup_bars
+      - If custom warmup is needed, either:
+        1. override the required_warmup_bars property, or
+        2. set self._required_warmup_bars_override in __init__
+      - Prefer self.price_data_history[symbol] for OHLCV access because self.price_history[symbol] contains closes only
+      - Match the local platform constructor pattern:
+        __init__(self, cfg: dict | None = None, history_length: int = 0)
+      - Do not reimplement history tracking, warmup gating, or the tick lifecycle already provided by Algorithm.on_data()
+      - If the plan references portfolio behavior, assume Portfolio and SingleSymbolPortfolio already manage order lifecycle, cash, positions, and cfg-driven symbol access
+      - The algorithm must only emit MarketSignal objects. It must not track open positions, holding times, exits, stop-loss state, profit targets, or cash.
+      - Do not emit EXIT signals. Emit directional BUY or SELL signals only and let the portfolio decide order/holding behavior.
+      - Use MarketSignal(type=SignalType.BUY|SELL, symbol=..., strength=..., metadata=...) or the equivalent positional constructor supported by the platform
       - Keep dependencies minimal: standard library, numpy/pandas, and trading package utilities only when necessary
       - Include a small if __name__ == '__main__': smoke block that instantiates the class and runs synthetic ticks without external files
 
@@ -425,6 +519,13 @@ prompts:
       The following tests failed for the Algorithm implementation.
       Fix the implementation, not the tests. Prioritize no-lookahead behavior,
       deterministic outputs, correct MarketSignal usage, and robust warmup handling.
+      Local platform contract reminders:
+      - Import Algorithm from trading.core.algorithm
+      - From trading.core.classes, only use known available symbols such as PriceData, MarketSignal, and SignalType unless the failure output proves another class exists
+      - Do not import or reference ExecutionTarget
+      - required_warmup_bars is read-only; never assign to self.required_warmup_bars
+      - If warmup must be customized, override the required_warmup_bars property or set self._required_warmup_bars_override
+      - self.price_history[symbol] stores closes; self.price_data_history[symbol] stores full PriceData objects
       Return ONLY Python source.
 
   evaluate:

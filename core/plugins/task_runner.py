@@ -39,7 +39,8 @@ def load_callable(dotted_path: str) -> Callable[[dict[str, Any]], Any]:
 
 
 def main() -> None:
-    setup_logging()
+    log_config_path = str(os.environ.get("RESEARCH_LOG_CONFIG") or "configs/config.yaml").strip() or "configs/config.yaml"
+    setup_logging(log_config_path)
     plugin_name = str(os.environ.get("RESEARCH_PLUGIN_LOG") or "").strip()
     plugin_loggers = [
         item.strip()
@@ -47,7 +48,7 @@ def main() -> None:
         if item.strip()
     ]
     if plugin_name and plugin_loggers:
-        setup_plugin_file_logging(plugin_name, logger_prefixes=plugin_loggers)
+        setup_plugin_file_logging(plugin_name, logger_prefixes=plugin_loggers, config_path=log_config_path)
 
     if len(sys.argv) != 2:
         print(json.dumps({"error": "Usage: task_runner.py <package.module.function>"}))

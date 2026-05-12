@@ -44,6 +44,8 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
 
     system_prompt = get_prompt(profile, "implement")
     llm = get_llm("implement", profile)
+    implement_cfg = profile.get("implement") or {}
+    max_syntax_retries = int(implement_cfg.get("max_syntax_retries", 2) or 2)
 
     base_class_docs = _base_class_context(profile)
     scan_constraints = _scan_constraints_context(profile)
@@ -91,18 +93,47 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
             f"Base classes available:\n{base_class_docs}\n\n"
             f"Scan field constraints:\n{scan_constraints}\n\n"
             f"Reference implementation examples:\n{implementation_examples}\n\n"
+            f"Proposal execution context:\n{_proposal_execution_context(state, proposal_name)}\n\n"
             f"Implementation plan:\n{json.dumps(plan, indent=2)}"
         )
 
         log.info("implement_node | Generating code for %r", class_name)
         resp = None
         try:
-            resp = llm.invoke([
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_content),
-            ])
-            code = extract_python_source(resp.content)
-            validate_python_source(code, expected_class_name=class_name)
+            code = ""
+            last_error: Exception | None = None
+            for attempt in range(max_syntax_retries + 1):
+                if attempt == 0:
+                    prompt_body = user_content
+                else:
+                    prompt_body = (
+                        f"{user_content}\n\n"
+                        "Your previous response was rejected.\n"
+                        "Return raw Python source only.\n"
+                        "Do not include markdown fences.\n"
+                        "Do not include explanatory prose.\n"
+                        "If you write comments, prefix them with '#'.\n"
+                        f"Previous validation error: {last_error}\n"
+                    )
+                resp = llm.invoke([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=prompt_body),
+                ])
+                code = extract_python_source(resp.content)
+                try:
+                    validate_python_source(code, expected_class_name=class_name)
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt >= max_syntax_retries:
+                        raise
+                    log.warning(
+                        "implement_node | Retrying %r after invalid code response (%d/%d): %s",
+                        class_name,
+                        attempt + 1,
+                        max_syntax_retries,
+                        exc,
+                    )
 
             cache_path.write_text(code, encoding="utf-8")
             log.info("implement_node | Saved %d lines -> %s", len(code.splitlines()), cache_path)
@@ -203,6 +234,62 @@ def _scan_constraints_context(profile: dict) -> str:
             f"  Attn patterns: {layer_patterns.get('attn', [])[:6]}"
         )
     return "\n".join(parts)
+
+
+def _proposal_execution_context(state: ResearchState, proposal_name: str) -> str:
+    proposals = state.get("proposals") or []
+    proposal = next(
+        (
+            item for item in proposals
+            if isinstance(item, dict) and str(item.get("name") or "") == str(proposal_name or "")
+        ),
+        None,
+    )
+    if not isinstance(proposal, dict):
+        return (
+            "No matching proposal found in state. "
+            "If the strategy expects fixed symbols, declare them through cfg['symbol'] or cfg['symbols']; "
+            "otherwise iterate over the incoming PriceData symbols."
+        )
+
+    explicit_symbol = proposal.get("symbol")
+    explicit_symbols = proposal.get("symbols")
+    explicit_universe = proposal.get("universe")
+    if isinstance(explicit_symbols, str):
+        explicit_symbols = [explicit_symbols]
+    elif isinstance(explicit_symbols, (tuple, set)):
+        explicit_symbols = list(explicit_symbols)
+    if isinstance(explicit_universe, str):
+        explicit_universe = [explicit_universe]
+    elif isinstance(explicit_universe, (tuple, set)):
+        explicit_universe = list(explicit_universe)
+
+    expected_symbols: list[str] = []
+    if explicit_symbol:
+        expected_symbols.append(str(explicit_symbol))
+    if isinstance(explicit_symbols, list):
+        expected_symbols.extend(str(item) for item in explicit_symbols if item)
+    if isinstance(explicit_universe, list):
+        expected_symbols.extend(str(item) for item in explicit_universe if item)
+    expected_symbols = list(dict.fromkeys(expected_symbols))
+
+    context = {
+        "proposal_name": proposal.get("name"),
+        "symbol": explicit_symbol,
+        "symbols": explicit_symbols,
+        "universe": explicit_universe,
+        "data_source": proposal.get("data_source"),
+        "timeframe": proposal.get("timeframe"),
+        "mode": proposal.get("mode"),
+        "history_length": proposal.get("history_length"),
+        "guidance": [
+            "If expected_symbols is non-empty, the implementation may target those symbols, but it must read them from cfg/proposal-facing fields rather than hardcoding ticker literals deep in the logic.",
+            "If expected_symbols is empty, the implementation should work from the symbols present in the incoming PriceData tick.",
+            "Do not reimplement base-class history tracking or warmup gating.",
+        ],
+        "expected_symbols": expected_symbols,
+    }
+    return json.dumps(context, indent=2)
 
 
 def _truncate_text(value: str, limit: int) -> str:

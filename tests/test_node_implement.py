@@ -1,10 +1,11 @@
 """Tests for graph/nodes/implement.py."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from core.graph.nodes.implement import implement_node
+from core.graph.nodes.implement import _proposal_execution_context, implement_node
 
 
 def _profile():
@@ -66,3 +67,32 @@ def test_implement_artifact_failure_is_non_fatal(tmp_path):
     implementation = result["implementations"][0]
     assert "stored_artifact_id" not in implementation
     assert any("artifact_store: implementation MyFeature failed" in error for error in result["errors"])
+
+
+def test_proposal_execution_context_prefers_declared_symbols():
+    state = {
+        "proposals": [
+            {
+                "name": "idea_a",
+                "symbol": "SPY",
+                "symbols": ["SPY", "UPRO"],
+                "timeframe": "5min",
+                "data_source": "alpaca",
+                "mode": "backtest",
+            }
+        ]
+    }
+
+    context = json.loads(_proposal_execution_context(state, "idea_a"))
+
+    assert context["proposal_name"] == "idea_a"
+    assert context["expected_symbols"] == ["SPY", "UPRO"]
+    assert any("cfg/proposal-facing fields" in line for line in context["guidance"])
+
+
+def test_proposal_execution_context_handles_missing_proposal():
+    state = {"proposals": []}
+
+    context = _proposal_execution_context(state, "missing")
+
+    assert "No matching proposal found in state" in context

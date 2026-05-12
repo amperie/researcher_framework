@@ -2,13 +2,19 @@
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
+from datetime import date, datetime, timedelta
+import hashlib
+import inspect
 import importlib
 import importlib.util
 import json
+import logging
+import math
 import os
 from pathlib import Path
 import statistics
 import sys
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -16,9 +22,17 @@ import yaml
 
 from configs.config import get_config, resolve_dev_path
 from core.plugins.base import ResearchAdapter
+from core.plugins.execution import run_task
 from core.utils.logger import get_logger
 
 log = get_logger(__name__)
+_PLUGIN_NAME = "trading"
+_PLUGIN_LOGGER_PREFIXES = [
+    "core.plugins.trading",
+    "core.plugins.task_runner",
+    "core.plugins.job_runner",
+]
+_RUN_TRADING_ARTIFACT_TASK = "core.plugins.trading.tasks.run_trading_artifact"
 
 
 class TradingAdapter(ResearchAdapter):
@@ -39,6 +53,7 @@ class TradingAdapter(ResearchAdapter):
             "source_exists": platform_root.exists(),
             "run_py_exists": (platform_root / "run.py").exists(),
             "data_dir_exists": (platform_root / "data").exists(),
+            "trading_python": _trading_python(profile),
             "default_data_provider": provider_name,
             "default_data_exists": (
                 _platform_data_path(profile, _default_data_path(profile)).exists()
@@ -69,6 +84,15 @@ class TradingAdapter(ResearchAdapter):
             "risk_constraints": profile.get("risk_constraints") or {},
             "evaluation": profile.get("evaluation") or {},
             "execution": profile.get("execution") or {},
+        }
+
+    def external_runtime_spec(self, profile: dict[str, Any], purpose: str) -> dict[str, Any]:
+        return {
+            "python": _trading_python(profile),
+            "cwd": str(_platform_root(profile)),
+            "pythonpath_entries": [str(path) for path in _trading_pythonpath_entries(profile)],
+            "plugin_name": _PLUGIN_NAME,
+            "logger_prefixes": list(_PLUGIN_LOGGER_PREFIXES),
         }
 
     def prepare_experiment(
@@ -135,57 +159,54 @@ class TradingAdapter(ResearchAdapter):
         results: list[dict[str, Any]] = []
         output_dir = resolve_dev_path("dev/experiments/trading/results")
         output_dir.mkdir(parents=True, exist_ok=True)
-        platform_root = _platform_root(profile)
-
-        with _sys_path(platform_root):
-            for artifact in artifacts:
-                proposal_name = str(artifact.get("proposal_name") or "unknown")
-                class_name = str(artifact.get("class_name") or proposal_name)
+        proposals_by_name = {
+            str(item.get("name") or ""): item
+            for item in (state.get("proposals") or [])
+            if item.get("name")
+        }
+        for artifact in artifacts:
+            proposal_name = str(artifact.get("proposal_name") or "unknown")
+            try:
                 script_path = str(artifact.get("script_path") or "")
-                runtime_cfg = dict(artifact.get("runtime_config") or {})
-                variant_specs = list(artifact.get("variant_specs") or [{"name": "base", "overrides": {}}])
-                try:
-                    variant_results = [
-                        self._run_variant(
-                            profile=profile,
-                            proposal_name=proposal_name,
-                            class_name=class_name,
-                            script_path=script_path,
-                            runtime_cfg=runtime_cfg,
-                            variant_spec=variant_spec,
-                        )
-                        for variant_spec in variant_specs
-                    ]
-                    summary = _summarize_variant_results(variant_results)
-                    experiment_id = str(uuid4())
-                    result_path = output_dir / f"{class_name}_{experiment_id[:8]}.json"
-                    result_payload = {
-                        "experiment_id": experiment_id,
-                        "proposal_name": proposal_name,
-                        "class_name": class_name,
-                        "mode": runtime_cfg.get("mode", "backtest"),
-                        "metrics": summary["metrics"],
-                        "variants": variant_results,
-                    }
-                    result_path.write_text(json.dumps(result_payload, indent=2, default=_json_default), encoding="utf-8")
-                    results.append({
-                        "experiment_id": experiment_id,
-                        "proposal_name": proposal_name,
-                        "proposal": next((item for item in (state.get("proposals") or []) if item.get("name") == proposal_name), {}),
-                        "metrics": summary["metrics"],
-                        "execution_config": _public_runtime_config(runtime_cfg),
-                        "artifacts": {
-                            "runtime_config_path": artifact.get("config_path", ""),
-                            "results_json_path": str(result_path),
-                            "variant_count": len(variant_results),
-                            "runtime_config": _public_runtime_config(runtime_cfg),
+                script_source = Path(script_path).read_text(encoding="utf-8") if script_path and Path(script_path).exists() else ""
+                result = run_task(
+                    {
+                        "task_path": _RUN_TRADING_ARTIFACT_TASK,
+                        "payload": {
+                            "profile": profile,
+                            "artifact": artifact,
+                            "proposal": proposals_by_name.get(proposal_name, {}),
+                            "script_source": script_source,
                         },
-                        "variant_results": variant_results,
-                        "report": summary.get("report", ""),
-                    })
-                except Exception as exc:
-                    log.error("TradingAdapter.execute_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
-                    errors.append(f"execute_experiment: {proposal_name} failed: {exc}")
+                        "python": _trading_python(profile),
+                        "timeout": int(get_config().experiment_timeout_seconds),
+                        "plugin_name": _PLUGIN_NAME,
+                        "logger_prefixes": list(_PLUGIN_LOGGER_PREFIXES),
+                        "cwd": str(_platform_root(profile)),
+                        "pythonpath_entries": [str(path) for path in _trading_pythonpath_entries(profile)],
+                        "job_id": f"trading_{proposal_name}",
+                        "job_dir": str(resolve_dev_path(f"dev/experiments/trading/sync_tasks/{proposal_name}")),
+                    },
+                    profile,
+                    "execute_experiment",
+                    default_runner="sync",
+                )
+                experiment_id = str(result.get("experiment_id") or uuid4())
+                result_path = output_dir / f"{result.get('class_name', proposal_name)}_{experiment_id[:8]}.json"
+                result_artifacts = dict(result.get("artifacts") or {})
+                runtime_config_path = str(artifact.get("config_path") or "")
+                result["artifacts"] = {
+                    **result_artifacts,
+                    "runtime_config_path": runtime_config_path,
+                    "results_json_path": str(result_path),
+                    "variant_count": len(result.get("variant_results") or []),
+                    "runtime_config": _public_runtime_config(dict(artifact.get("runtime_config") or {})),
+                }
+                result_path.write_text(json.dumps(result, indent=2, default=_json_default), encoding="utf-8")
+                results.append(result)
+            except Exception as exc:
+                log.error("TradingAdapter.execute_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
+                errors.append(f"execute_experiment: {proposal_name} failed: {exc}")
 
         return {
             "experiment_results": results,
@@ -223,36 +244,56 @@ class TradingAdapter(ResearchAdapter):
         script_path: str,
         runtime_cfg: dict[str, Any],
         variant_spec: dict[str, Any],
+        config_artifact_paths: list[str] | None = None,
     ) -> dict[str, Any]:
         trading = _load_trading_runtime()
         variant_name = str(variant_spec.get("name") or "base")
-        merged_cfg = _deep_merge(runtime_cfg, dict(variant_spec.get("overrides") or {}))
+        merged_cfg = _normalize_runtime_config(_deep_merge(runtime_cfg, dict(variant_spec.get("overrides") or {})))
         algorithm_cls = _load_algorithm_class(script_path, class_name)
         mode = str(merged_cfg.get("mode") or "backtest")
+        mlflow_capture = _install_mlflow_capture()
 
-        if mode == "walk-forward":
-            built = _build_runtime_components(trading, merged_cfg, algorithm_cls)
-            engine = trading["WalkForwardEngine"](
-                cfg=merged_cfg,
-                dp=built["data_provider"],
-                al=built["algorithm"],
-                om=built["order_manager"],
-                pf=built["portfolio"],
-            )
-            run_output = engine.run()
-            period_results = list(run_output.get("periods") or [])
-            aggregate = dict(run_output.get("aggregate") or {})
-            metrics = _walk_forward_metrics(period_results, aggregate)
-            report = json.dumps(aggregate, indent=2)
-            raw_output = {
-                "aggregate": aggregate,
-                "periods": [_serialize(item) for item in period_results],
-            }
-        else:
-            hpo_result = _run_hpo_backtest(merged_cfg, algorithm_cls)
-            metrics = dict(hpo_result["metrics"])
-            report = str(hpo_result["report"])
-            raw_output = dict(hpo_result["raw_output"])
+        try:
+            if mode == "walk-forward":
+                built = _build_runtime_components(trading, merged_cfg, algorithm_cls)
+                engine = trading["WalkForwardEngine"](
+                    cfg=merged_cfg,
+                    dp=built["data_provider"],
+                    al=built["algorithm"],
+                    om=built["order_manager"],
+                    pf=built["portfolio"],
+                )
+                run_output = engine.run()
+                period_results = list(run_output.get("periods") or [])
+                aggregate = dict(run_output.get("aggregate") or {})
+                metrics = _walk_forward_metrics(period_results, aggregate)
+                report = json.dumps(aggregate, indent=2)
+                raw_output = {
+                    "aggregate": aggregate,
+                    "periods": [_serialize(item) for item in period_results],
+                }
+                _log_mlflow_config_artifacts(
+                    config_artifact_paths or [],
+                    capture=mlflow_capture,
+                    extra_params={
+                        "algorithm_implementation": str((merged_cfg.get("algorithm") or {}).get("implementation") or ""),
+                        "portfolio_implementation": str((merged_cfg.get("portfolio") or {}).get("implementation") or ""),
+                        "data_provider_implementation": str((merged_cfg.get("data_provider") or {}).get("implementation") or ""),
+                        "order_manager_implementation": str((merged_cfg.get("order_manager") or {}).get("implementation") or ""),
+                    },
+                )
+            else:
+                hpo_result = _run_hpo_backtest(
+                    merged_cfg,
+                    algorithm_cls,
+                    config_artifact_paths=config_artifact_paths or [],
+                    mlflow_capture=mlflow_capture,
+                )
+                metrics = dict(hpo_result["metrics"])
+                report = str(hpo_result["report"])
+                raw_output = dict(hpo_result["raw_output"])
+        finally:
+            _restore_mlflow_capture(mlflow_capture)
 
         return {
             "variant_name": variant_name,
@@ -261,6 +302,13 @@ class TradingAdapter(ResearchAdapter):
             "config": merged_cfg,
             "report": report,
             "raw_output": raw_output,
+            "mlflow": {
+                "run_id": mlflow_capture.get("run_id", ""),
+                "run_url": mlflow_capture.get("run_url", ""),
+                "tracking_uri": mlflow_capture.get("tracking_uri", ""),
+                "experiment_name": mlflow_capture.get("experiment_name", ""),
+                "experiment_id": mlflow_capture.get("experiment_id", ""),
+            },
         }
 
 
@@ -271,6 +319,47 @@ def get_adapter() -> TradingAdapter:
 def _platform_root(profile: dict[str, Any]) -> Path:
     source_path = str(((profile.get("platform") or {}).get("source_path")) or "../trading_guy")
     return Path(source_path).expanduser().resolve()
+
+
+def _trading_python(profile: dict[str, Any]) -> str:
+    execution_cfg = profile.get("execution") or {}
+    configured = execution_cfg.get("python")
+    if configured:
+        return str(configured)
+    platform_root = _platform_root(profile)
+    candidates = [
+        platform_root / ".venv" / "Scripts" / "python.exe",
+        platform_root / ".venv" / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate.resolve())
+    return str(get_config().trading_python)
+
+
+def _trading_pythonpath_entries(profile: dict[str, Any]) -> list[Path]:
+    platform_root = _platform_root(profile)
+    researcher_root = _researcher_root()
+    entries = [platform_root, researcher_root]
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for entry in entries:
+        key = str(entry.resolve())
+        if key not in seen:
+            unique.append(entry.resolve())
+            seen.add(key)
+    return unique
+
+
+def _researcher_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _resolve_generated_path(path_value: str | os.PathLike[str]) -> Path:
+    path = Path(path_value).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (_researcher_root() / path).resolve()
 
 
 class _sys_path:
@@ -345,28 +434,35 @@ def _build_runtime_config(profile: dict[str, Any], proposal: dict[str, Any], imp
     execution_cfg = profile.get("execution") or {}
     defaults = execution_cfg.get("defaults") or {}
     mode = str(proposal.get("mode") or defaults.get("mode") or "backtest")
-    symbol = str(proposal.get("symbol") or proposal.get("universe") or defaults.get("symbol") or "SPY")
-    history_length = int(proposal.get("history_length") or defaults.get("history_length") or 200)
+    symbol_ctx = _resolve_symbol_context(proposal, implementation, defaults)
+    symbol = symbol_ctx["primary_symbol"]
     run_name = f"{proposal.get('name', implementation.get('class_name', 'strategy'))}_{mode}"
     algorithm_params = {
         "symbol": symbol,
-        "history_length": history_length,
+        "symbols": list(symbol_ctx["expected_symbols"]),
+        "tradable_symbols": list(symbol_ctx["tradable_symbols"]),
+        "macro_symbols": list(symbol_ctx["macro_symbols"]),
         **dict(proposal.get("hyperparameters") or {}),
     }
-    portfolio_params = {
-        "symbol": symbol,
-        "cash": float(proposal.get("cash") or defaults.get("cash") or 100000),
-        "keep_history": True,
-        "stop_pct": float(proposal.get("stop_pct") or defaults.get("stop_pct") or 5.0),
-        "profit_pct": float(proposal.get("profit_pct") or defaults.get("profit_pct") or 10.0),
-        "tx_cost": float(proposal.get("tx_cost") or defaults.get("tx_cost") or 0.0),
-    }
+    algorithm_params["history_length"] = _effective_history_length(
+        algorithm_params,
+        fallback=int(proposal.get("history_length") or defaults.get("history_length") or 200),
+    )
+    portfolio_impl = _portfolio_implementation_for_mode(profile, proposal, mode, symbol_ctx)
+    portfolio_params = _build_portfolio_params(
+        proposal=proposal,
+        defaults=defaults,
+        primary_symbol=symbol,
+        portfolio_implementation=portfolio_impl,
+        symbol_ctx=symbol_ctx,
+    )
     data_provider_impl = str(proposal.get("data_provider") or defaults.get("data_provider") or _default_provider(profile))
     data_provider = _build_data_provider_params(
         profile=profile,
         proposal=proposal,
         defaults=defaults,
-        symbol=symbol,
+        symbol_ctx=symbol_ctx,
+        algorithm_params=algorithm_params,
         provider_implementation=data_provider_impl,
     )
 
@@ -377,7 +473,7 @@ def _build_runtime_config(profile: dict[str, Any], proposal: dict[str, Any], imp
             "params": algorithm_params,
         },
         "portfolio": {
-            "implementation": _portfolio_implementation_for_mode(profile, proposal, mode),
+            "implementation": portfolio_impl,
             "params": portfolio_params,
         },
         "order_manager": {
@@ -395,10 +491,14 @@ def _build_runtime_config(profile: dict[str, Any], proposal: dict[str, Any], imp
             "run_name": run_name,
             "description": str(proposal.get("description") or ""),
             "benchmarks": dict(proposal.get("benchmarks") or defaults.get("benchmarks") or {}),
+            "mlflow_policy": {
+                "annualized_return_threshold": float(defaults.get("mlflow_annualized_return_threshold", 0.0)),
+                "sample_negative_rate": int(defaults.get("mlflow_sample_negative_rate", 20) or 20),
+            },
         },
         "aggregation": {
-            "enabled": bool(proposal.get("aggregation_enabled") or defaults.get("aggregation_enabled") or False),
-            "aggregation_period_minutes": int(proposal.get("aggregation_period_minutes") or defaults.get("aggregation_period_minutes") or 5),
+            "enabled": bool(proposal.get("aggregation_enabled", defaults.get("aggregation_enabled", False))),
+            "aggregation_period_minutes": int(proposal.get("aggregation_period_minutes") or defaults.get("aggregation_period_minutes") or 1),
         },
         "walk_forward": _deep_merge(
             dict(defaults.get("walk_forward") or {}),
@@ -416,13 +516,23 @@ def _build_runtime_config(profile: dict[str, Any], proposal: dict[str, Any], imp
             "script_path": implementation.get("script_path", ""),
         },
     }
-    return runtime_cfg
+    return _normalize_runtime_config(_ensure_runtime_data_sufficiency(runtime_cfg))
 
 
-def _portfolio_implementation_for_mode(profile: dict[str, Any], proposal: dict[str, Any], mode: str) -> str:
+def _portfolio_implementation_for_mode(
+    profile: dict[str, Any],
+    proposal: dict[str, Any],
+    mode: str,
+    symbol_ctx: dict[str, Any],
+) -> str:
+    explicit = str(proposal.get("portfolio") or "").strip()
+    if explicit:
+        return explicit
     if mode == "backtest":
+        if len(symbol_ctx.get("tradable_symbols") or []) >= 2:
+            return "trading.core.pf.dual_symbol_switch_portfolio.DualSymbolSwitchPortfolio"
         return "trading.core.pf.single_symbol_portfolio.SingleSymbolPortfolio"
-    return str(proposal.get("portfolio") or _default_portfolio(profile))
+    return _default_portfolio(profile)
 
 
 def _build_hpo_config(
@@ -488,11 +598,25 @@ def _resolve_backtest_hpo_space(
 
     if not search_space:
         search_space = _infer_wide_search_space(algorithm_params, portfolio_params)
+    else:
+        search_space = _expand_backtest_search_space(
+            search_space,
+            algorithm_params=algorithm_params,
+            portfolio_params=portfolio_params,
+        )
 
     if not algorithm_keys:
         algorithm_keys = [key for key in search_space if key in algorithm_params]
     if not portfolio_keys:
         portfolio_keys = [key for key in search_space if key in portfolio_params]
+
+    algorithm_keys, portfolio_keys = _rebalance_hpo_keys(
+        algorithm_keys=algorithm_keys,
+        portfolio_keys=portfolio_keys,
+        search_space=search_space,
+        algorithm_params=algorithm_params,
+        portfolio_params=portfolio_params,
+    )
 
     if optimization_target in {"portfolio", "joint"}:
         for required_key in ("stop_pct", "profit_pct"):
@@ -528,8 +652,8 @@ def _infer_search_spec_from_value(key: str, value: Any) -> dict[str, Any] | None
     if isinstance(value, bool):
         return None
     if isinstance(value, int) and not isinstance(value, bool):
-        low = max(1, int(value * 0.5))
-        high = max(low + 2, int(value * 2.0) + 1)
+        low = 1
+        high = max(2, int(value * 1000) + 1)
         return {"type": "randint", "low": low, "high": high}
     if isinstance(value, float):
         low = max(0.0001, float(value) * 0.25 if value > 0 else 0.0001)
@@ -540,14 +664,29 @@ def _infer_search_spec_from_value(key: str, value: Any) -> dict[str, Any] | None
 
 def _default_portfolio_search_space(key: str, value: float) -> dict[str, Any]:
     if key == "stop_pct":
-        low = min(max(value * 0.4, 0.25), 4.0)
-        high = max(value * 2.5, 12.0)
-        return {"type": "uniform", "low": round(low, 4), "high": round(high, 4)}
+        return {"type": "uniform", "low": 0.5, "high": 20.0}
     if key == "profit_pct":
-        low = min(max(value * 0.5, 0.5), 8.0)
-        high = max(value * 3.0, 20.0)
-        return {"type": "uniform", "low": round(low, 4), "high": round(high, 4)}
+        return {"type": "uniform", "low": 0.5, "high": 20.0}
     return {"type": "uniform", "low": 0.0, "high": max(value * 2.0, 1.0)}
+
+
+def _expand_backtest_search_space(
+    search_space: dict[str, Any],
+    *,
+    algorithm_params: dict[str, Any],
+    portfolio_params: dict[str, Any],
+) -> dict[str, Any]:
+    expanded: dict[str, Any] = {}
+    for key, spec in search_space.items():
+        if key in {"stop_pct", "profit_pct"}:
+            expanded[key] = _default_portfolio_search_space(key, float(portfolio_params.get(key, 0.0) or 0.0))
+            continue
+        value = algorithm_params.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            expanded[key] = {"type": "randint", "low": 1, "high": max(2, int(value * 1000) + 1)}
+            continue
+        expanded[key] = spec
+    return expanded
 
 
 def _filter_search_space_for_target(
@@ -602,6 +741,21 @@ def _filter_hpo_config(
     return cfg
 
 
+def _normalize_runtime_config(runtime_cfg: dict[str, Any]) -> dict[str, Any]:
+    cfg = _deep_merge({}, runtime_cfg)
+    hpo_cfg = dict(cfg.get("hpo") or {})
+    hpo_cfg["search_space"] = _normalize_search_space(dict(hpo_cfg.get("search_space") or {}))
+    cfg["hpo"] = hpo_cfg
+
+    data_provider = dict(cfg.get("data_provider") or {})
+    provider_params = dict(data_provider.get("params") or {})
+    if "timeframe" in provider_params:
+        provider_params["timeframe"] = _normalize_alpaca_timeframe(str(provider_params.get("timeframe") or ""))
+    data_provider["params"] = provider_params
+    cfg["data_provider"] = data_provider
+    return cfg
+
+
 def _normalize_search_space(search_space: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
     for key, spec in search_space.items():
@@ -615,6 +769,21 @@ def _normalize_search_spec(key: str, spec: Any) -> dict[str, Any] | None:
     if not isinstance(spec, dict):
         return None
     spec_type = str(spec.get("type") or "").strip().lower()
+    if spec_type in {"randint", "uniform", "loguniform"}:
+        normalized = dict(spec)
+        if "low" not in normalized:
+            if "lower" in normalized:
+                normalized["low"] = normalized["lower"]
+            elif "min" in normalized:
+                normalized["low"] = normalized["min"]
+        if "high" not in normalized:
+            if "upper" in normalized:
+                normalized["high"] = normalized["upper"]
+            elif "max" in normalized:
+                normalized["high"] = normalized["max"]
+        if "low" not in normalized or "high" not in normalized:
+            return None
+        return normalized
     if spec_type != "choice":
         return dict(spec)
 
@@ -645,7 +814,8 @@ def _build_data_provider_params(
     profile: dict[str, Any],
     proposal: dict[str, Any],
     defaults: dict[str, Any],
-    symbol: str,
+    symbol_ctx: dict[str, Any],
+    algorithm_params: dict[str, Any],
     provider_implementation: str,
 ) -> dict[str, Any]:
     if "alpaca" in provider_implementation.lower():
@@ -653,7 +823,8 @@ def _build_data_provider_params(
             profile=profile,
             proposal=proposal,
             defaults=defaults,
-            symbol=symbol,
+            symbol_ctx=symbol_ctx,
+            algorithm_params=algorithm_params,
         )
 
     data_path = str(proposal.get("data_path") or proposal.get("dataset_path") or defaults.get("data_path") or "data/SPY_5min.csv")
@@ -674,23 +845,16 @@ def _build_alpaca_data_provider_params(
     profile: dict[str, Any],
     proposal: dict[str, Any],
     defaults: dict[str, Any],
-    symbol: str,
+    symbol_ctx: dict[str, Any],
+    algorithm_params: dict[str, Any],
 ) -> dict[str, Any]:
-    symbols = proposal.get("symbols") or proposal.get("universe") or defaults.get("symbols") or [symbol]
-    if isinstance(symbols, str):
-        symbols = [symbols]
-    elif isinstance(symbols, (tuple, set)):
-        symbols = list(symbols)
-    elif not isinstance(symbols, list):
-        symbols = [symbol]
-
     creds = _resolve_alpaca_credentials(profile=profile, proposal=proposal, defaults=defaults)
     params: dict[str, Any] = {
         "provider": "alpaca",
         "api_key": creds.get("api_key", ""),
         "secret_key": creds.get("secret_key", ""),
-        "symbols": [str(item) for item in symbols if item],
-        "timeframe": str(proposal.get("timeframe") or defaults.get("timeframe") or "Minute"),
+        "symbols": [str(item) for item in (symbol_ctx.get("expected_symbols") or []) if item],
+        "timeframe": _normalize_alpaca_timeframe(str(proposal.get("timeframe") or defaults.get("timeframe") or "Minute")),
         "adjustment": str(proposal.get("adjustment") or defaults.get("adjustment") or "split"),
         "market_hours_only": bool(proposal.get("market_hours_only", defaults.get("market_hours_only", True))),
     }
@@ -703,7 +867,290 @@ def _build_alpaca_data_provider_params(
         limit = defaults.get("limit")
     if limit is not None:
         params["limit"] = int(limit)
+    required_limit = _minimum_alpaca_limit(params, algorithm_params)
+    if required_limit > int(params.get("limit") or 0):
+        params["limit"] = required_limit
     return params
+
+
+def _build_portfolio_params(
+    *,
+    proposal: dict[str, Any],
+    defaults: dict[str, Any],
+    primary_symbol: str,
+    portfolio_implementation: str,
+    symbol_ctx: dict[str, Any],
+) -> dict[str, Any]:
+    params = {
+        "cash": float(proposal.get("cash") or defaults.get("cash") or 100000),
+        "keep_history": True,
+        "stop_pct": float(proposal.get("stop_pct") or defaults.get("stop_pct") or 5.0),
+        "profit_pct": float(proposal.get("profit_pct") or defaults.get("profit_pct") or 10.0),
+        "tx_cost": float(proposal.get("tx_cost") or defaults.get("tx_cost") or 0.0),
+    }
+    if portfolio_implementation.endswith("DualSymbolSwitchPortfolio"):
+        tradable_symbols = list(symbol_ctx.get("tradable_symbols") or [])
+        params["upro_symbol"] = tradable_symbols[0] if len(tradable_symbols) > 0 else primary_symbol
+        params["spxu_symbol"] = tradable_symbols[1] if len(tradable_symbols) > 1 else primary_symbol
+        if proposal.get("holding_period_hours") is not None:
+            params["holding_period_hours"] = float(proposal.get("holding_period_hours"))
+        return params
+    params["symbol"] = primary_symbol
+    return params
+
+
+def _resolve_symbol_context(
+    proposal: dict[str, Any],
+    implementation: dict[str, Any],
+    defaults: dict[str, Any],
+) -> dict[str, Any]:
+    explicit_symbols = _normalize_symbol_list(proposal.get("symbols") or proposal.get("universe") or defaults.get("symbols"))
+    macro_symbols = _normalize_symbol_list(proposal.get("macro_symbols"))
+    tradable_symbols = _normalize_symbol_list(
+        proposal.get("tradable_symbols")
+        or [proposal.get("long_symbol"), proposal.get("short_symbol")]
+    )
+    primary_symbol = str(proposal.get("symbol") or defaults.get("symbol") or "SPY")
+    if not tradable_symbols:
+        tradable_symbols = [primary_symbol]
+
+    detected_macro = _detect_macro_symbols(proposal, implementation)
+    macro_symbols = list(dict.fromkeys(macro_symbols + detected_macro))
+    expected_symbols = list(dict.fromkeys(explicit_symbols + tradable_symbols + macro_symbols))
+    if not expected_symbols:
+        expected_symbols = [primary_symbol]
+    return {
+        "primary_symbol": primary_symbol,
+        "tradable_symbols": tradable_symbols,
+        "macro_symbols": macro_symbols,
+        "expected_symbols": expected_symbols,
+    }
+
+
+def _normalize_symbol_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, (tuple, set)):
+        value = list(value)
+    if not isinstance(value, list):
+        return [str(value)] if value else []
+    return [str(item) for item in value if item]
+
+
+def _detect_macro_symbols(proposal: dict[str, Any], implementation: dict[str, Any]) -> list[str]:
+    text_parts = [
+        str(proposal.get("name") or ""),
+        str(proposal.get("description") or ""),
+        json.dumps(proposal.get("hyperparameters") or {}, sort_keys=True),
+        json.dumps(proposal.get("hpo") or {}, sort_keys=True),
+    ]
+    script_path = str(implementation.get("script_path") or "")
+    if script_path and Path(script_path).exists():
+        try:
+            text_parts.append(Path(script_path).read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    haystack = "\n".join(text_parts).lower()
+    macro_symbols: list[str] = []
+    if "vix" in haystack:
+        macro_symbols.append("VIX")
+    if "t10y2y" in haystack or "yield_curve" in haystack or "yield curve" in haystack:
+        macro_symbols.append("T10Y2Y")
+    return macro_symbols
+
+
+def _effective_history_length(algorithm_params: dict[str, Any], fallback: int) -> int:
+    blacklist = {
+        "cash",
+        "limit",
+        "position_size_base",
+        "tx_cost",
+        "stop_pct",
+        "profit_pct",
+        "stop_loss_bps_normal",
+        "stop_loss_bps_high_vix",
+        "hold_time_minutes",
+        "holding_period_hours",
+    }
+    candidates = [max(1, int(fallback or 0))]
+    for key, value in algorithm_params.items():
+        if key in blacklist:
+            continue
+        if not isinstance(value, int) or isinstance(value, bool):
+            continue
+        text = str(key).lower()
+        if any(token in text for token in ("period", "window", "lookback", "history", "warmup", "bars", "length")):
+            candidates.append(int(value))
+    slow = algorithm_params.get("macd_slow_period")
+    signal = algorithm_params.get("macd_signal_period")
+    if isinstance(slow, int) and isinstance(signal, int):
+        candidates.append(int(slow) + int(signal))
+    return max(candidates) + 5
+
+
+def _minimum_alpaca_limit(data_provider_params: dict[str, Any], algorithm_params: dict[str, Any]) -> int:
+    history_length = max(0, int(algorithm_params.get("history_length") or 0))
+    date_range_limit = _date_range_bar_count(data_provider_params)
+    return max(history_length, date_range_limit, int(data_provider_params.get("limit") or 0))
+
+
+def _date_range_bar_count(data_provider_params: dict[str, Any]) -> int:
+    start_raw = data_provider_params.get("start_date")
+    end_raw = data_provider_params.get("end_date")
+    if not start_raw or not end_raw:
+        return 0
+    try:
+        start_day = date.fromisoformat(str(start_raw)[:10])
+        end_day = date.fromisoformat(str(end_raw)[:10])
+    except Exception:
+        return 0
+    if end_day < start_day:
+        return 0
+    trading_days = 0
+    current = start_day
+    while current <= end_day:
+        if current.weekday() < 5:
+            trading_days += 1
+        current += timedelta(days=1)
+    return trading_days * _bars_per_trading_day(data_provider_params)
+
+
+def _rebalance_hpo_keys(
+    *,
+    algorithm_keys: list[str],
+    portfolio_keys: list[str],
+    search_space: dict[str, Any],
+    algorithm_params: dict[str, Any],
+    portfolio_params: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    algorithm_set = list(dict.fromkeys(algorithm_keys))
+    portfolio_set = list(dict.fromkeys(portfolio_keys))
+    for key in search_space:
+        if key in algorithm_params and key not in algorithm_set:
+            algorithm_set.append(key)
+        if key in portfolio_params and key not in portfolio_set:
+            portfolio_set.append(key)
+    portfolio_only_names = {"stop_pct", "profit_pct", "tx_cost", "cash", "holding_period_hours", "min_signal_strength", "symbol", "upro_symbol", "spxu_symbol"}
+    for key in list(portfolio_set):
+        if key in algorithm_params and key not in portfolio_params:
+            portfolio_set.remove(key)
+            if key not in algorithm_set:
+                algorithm_set.append(key)
+    for key in list(search_space):
+        if key in portfolio_only_names and key not in portfolio_set:
+            portfolio_set.append(key)
+            if key in algorithm_set and key not in algorithm_params:
+                algorithm_set.remove(key)
+    algorithm_set = [key for key in algorithm_set if key not in portfolio_set or key in algorithm_params]
+    portfolio_set = [key for key in portfolio_set if key in portfolio_params or key in portfolio_only_names]
+    return algorithm_set, portfolio_set
+
+
+def _ensure_runtime_data_sufficiency(runtime_cfg: dict[str, Any]) -> dict[str, Any]:
+    cfg = _deep_merge({}, runtime_cfg)
+    provider_impl = str(((cfg.get("data_provider") or {}).get("implementation")) or "")
+    if "alpaca" not in provider_impl.lower():
+        return cfg
+
+    algorithm_params = dict(((cfg.get("algorithm") or {}).get("params")) or {})
+    effective_history_length = _effective_history_length(
+        algorithm_params,
+        fallback=int(algorithm_params.get("history_length") or 0),
+    )
+    algorithm_params["history_length"] = effective_history_length
+    cfg.setdefault("algorithm", {})["params"] = algorithm_params
+
+    data_provider = dict(cfg.get("data_provider") or {})
+    params = dict(data_provider.get("params") or {})
+    required_limit = _minimum_alpaca_limit(params, algorithm_params)
+    current_limit = int(params.get("limit") or 0)
+    if required_limit > current_limit:
+        log.info(
+            "Trading runtime | increasing Alpaca limit from %s to %s",
+            current_limit or 0,
+            required_limit,
+        )
+        params["limit"] = required_limit
+    data_provider["params"] = params
+    cfg["data_provider"] = data_provider
+
+    mode = str(cfg.get("mode") or "backtest").strip().lower()
+    if mode != "walk-forward":
+        return cfg
+
+    required_limit = _minimum_walk_forward_limit(cfg)
+    if required_limit > current_limit:
+        log.info(
+            "Trading runtime | increasing Alpaca limit for walk-forward from %s to %s",
+            current_limit or 0,
+            required_limit,
+        )
+        params["limit"] = required_limit
+    data_provider["params"] = params
+    cfg["data_provider"] = data_provider
+    return cfg
+
+
+def _minimum_walk_forward_limit(runtime_cfg: dict[str, Any]) -> int:
+    algorithm_params = dict(((runtime_cfg.get("algorithm") or {}).get("params")) or {})
+    walk_forward = dict(runtime_cfg.get("walk_forward") or {})
+    data_provider = dict(((runtime_cfg.get("data_provider") or {}).get("params")) or {})
+
+    history_length = max(0, int(algorithm_params.get("history_length") or 0))
+    optimization_days = max(1, int(walk_forward.get("optimization_window_days") or 0))
+    trading_days = max(1, int(walk_forward.get("trading_window_days") or 0))
+    warmup_days = max(5, history_length // max(1, _bars_per_trading_day(data_provider)))
+    buffer_days = max(5, int(walk_forward.get("step_days") or 0))
+    total_days = optimization_days + trading_days + warmup_days + buffer_days
+    return history_length + (total_days * _bars_per_trading_day(data_provider))
+
+
+def _bars_per_trading_day(data_provider_params: dict[str, Any]) -> int:
+    timeframe = _normalize_alpaca_timeframe(str(data_provider_params.get("timeframe") or "Minute"))
+    market_hours_only = bool(data_provider_params.get("market_hours_only", True))
+    if timeframe == "Minute":
+        return 78 if market_hours_only else 390
+    if timeframe == "Hour":
+        return 7 if market_hours_only else 24
+    if timeframe == "Day":
+        return 1
+    if timeframe == "Week":
+        return 1
+    if timeframe == "Month":
+        return 1
+    return 78 if market_hours_only else 390
+
+
+def _normalize_alpaca_timeframe(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "Minute"
+    normalized = raw.lower().replace(" ", "")
+    alias_map = {
+        "1m": "Minute",
+        "1min": "Minute",
+        "min": "Minute",
+        "minute": "Minute",
+        "5m": "Minute",
+        "5min": "Minute",
+        "15m": "Minute",
+        "15min": "Minute",
+        "30m": "Minute",
+        "30min": "Minute",
+        "60m": "Hour",
+        "60min": "Hour",
+        "1h": "Hour",
+        "hour": "Hour",
+        "1d": "Day",
+        "day": "Day",
+        "1w": "Week",
+        "week": "Week",
+        "1mo": "Month",
+        "month": "Month",
+    }
+    return alias_map.get(normalized, raw)
 
 
 def _resolve_alpaca_credentials(
@@ -768,6 +1215,7 @@ def _variant_specs(profile: dict[str, Any], proposal: dict[str, Any]) -> list[di
 
 
 def _load_trading_runtime() -> dict[str, Any]:
+    _patch_trading_color_logger_pickling()
     modules = {
         "BacktestingEngine": ("trading.engines.backtest_engine", "BacktestingEngine"),
         "WalkForwardEngine": ("trading.engines.walk_forward_engine", "WalkForwardEngine"),
@@ -782,24 +1230,74 @@ def _load_trading_runtime() -> dict[str, Any]:
 
 
 def _import_dotted(dotted_path: str):
+    _patch_trading_color_logger_pickling()
     module_path, attr = dotted_path.rsplit(".", 1)
     module = importlib.import_module(module_path)
     return getattr(module, attr)
 
 
+def _patch_trading_color_logger_pickling() -> None:
+    try:
+        logger_module = importlib.import_module("utils.logger")
+    except Exception:
+        return
+    color_logger_cls = getattr(logger_module, "ColorLogger", None)
+    if color_logger_cls is None or getattr(color_logger_cls, "_research_pickle_patch", False):
+        return
+
+    def __getstate__(self):
+        base_logger = self.__dict__.get("_logger")
+        logger_name = getattr(base_logger, "name", None)
+        if not logger_name:
+            logger_name = getattr(self, "_logger_name", "") or ""
+        return {"logger_name": str(logger_name or "")}
+
+    def __setstate__(self, state):
+        logger_name = str((state or {}).get("logger_name") or "")
+        self._logger = logging.getLogger(logger_name)
+        self._logger_name = logger_name
+
+    original_init = getattr(color_logger_cls, "__init__", None)
+
+    def patched_init(self, logger):
+        if original_init is not None:
+            original_init(self, logger)
+        else:
+            self._logger = logger
+        self._logger_name = getattr(logger, "name", "")
+
+    original_getattr = getattr(color_logger_cls, "__getattr__", None)
+
+    def patched_getattr(self, name):
+        base_logger = self.__dict__.get("_logger")
+        if base_logger is None:
+            logger_name = self.__dict__.get("_logger_name", "")
+            base_logger = logging.getLogger(str(logger_name or ""))
+            self._logger = base_logger
+        if original_getattr is not None:
+            return original_getattr(self, name)
+        return getattr(base_logger, name)
+
+    color_logger_cls.__init__ = patched_init
+    color_logger_cls.__getattr__ = patched_getattr
+    color_logger_cls.__getstate__ = __getstate__
+    color_logger_cls.__setstate__ = __setstate__
+    color_logger_cls._research_pickle_patch = True
+
+
 def _load_algorithm_class(script_path: str, class_name: str):
-    path = Path(script_path)
+    path = _resolve_generated_path(script_path)
     if not path.exists():
-        raise FileNotFoundError(f"Generated algorithm script not found: {script_path}")
+        raise FileNotFoundError(f"Generated algorithm script not found: {path}")
     module_name = f"generated_trading_{path.stem}_{uuid4().hex[:8]}"
-    spec = importlib.util.spec_from_file_location(module_name, script_path)
+    spec = importlib.util.spec_from_file_location(module_name, str(path))
     if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load module from {script_path}")
+        raise ImportError(f"Could not load module from {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     algorithm_cls = getattr(module, class_name, None)
     if algorithm_cls is None:
-        raise AttributeError(f"{class_name} not found in {script_path}")
+        raise AttributeError(f"{class_name} not found in {path}")
     return algorithm_cls
 
 
@@ -816,6 +1314,8 @@ def _build_runtime_components(trading: dict[str, Any], runtime_cfg: dict[str, An
     portfolio = portfolio_cls(dict(portfolio_spec.get("params") or {}), order_manager)
     data_provider = data_provider_cls(dict(data_provider_spec.get("params") or {}))
     algorithm_params = dict(algorithm_spec.get("params") or {})
+    history_length = _effective_history_length(algorithm_params, fallback=int(algorithm_params.get("history_length") or 0))
+    algorithm_params["history_length"] = history_length
     history_length = int(algorithm_params.pop("history_length", 0) or 0)
     try:
         algorithm = algorithm_cls(cfg=algorithm_params, history_length=history_length)
@@ -829,17 +1329,35 @@ def _build_runtime_components(trading: dict[str, Any], runtime_cfg: dict[str, An
     }
 
 
-def _run_hpo_backtest(runtime_cfg: dict[str, Any], algorithm_cls: type[Any]) -> dict[str, Any]:
-    launcher = importlib.import_module("trading.launchers.run_backtest_ray")
+def _run_hpo_backtest(
+    runtime_cfg: dict[str, Any],
+    algorithm_cls: type[Any],
+    *,
+    config_artifact_paths: list[str] | None = None,
+    mlflow_capture: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ray = importlib.import_module("ray")
+    tune = importlib.import_module("ray.tune")
+    optuna_mod = importlib.import_module("ray.tune.search.optuna")
+    hpo_cfg = dict(runtime_cfg.get("hpo") or {})
+    analysis_cfg = dict(runtime_cfg.get("analysis") or {})
+    run_name = str(analysis_cfg.get("run_name") or "Backtest_HPO")
+    total_samples = int(hpo_cfg.get("num_samples") or 50)
+    max_concurrent_trials = int(hpo_cfg.get("max_concurrent_trials") or 8)
+    log.info(
+        "Trading HPO | running in Ray Tune dashboard=http://127.0.0.1:8265 trials=%s max_concurrent=%s run_name=%s",
+        total_samples,
+        max_concurrent_trials,
+        run_name,
+    )
     order_manager_cls = _import_dotted(str((runtime_cfg.get("order_manager") or {}).get("implementation")))
     data_provider_cls = _import_dotted(str((runtime_cfg.get("data_provider") or {}).get("implementation")))
-    portfolio_cls = _import_dotted("trading.core.pf.single_symbol_portfolio.SingleSymbolPortfolio")
+    portfolio_cls = _import_dotted(str((runtime_cfg.get("portfolio") or {}).get("implementation")))
 
     algorithm_params = dict(((runtime_cfg.get("algorithm") or {}).get("params")) or {})
     portfolio_params = dict(((runtime_cfg.get("portfolio") or {}).get("params")) or {})
     data_provider_params = dict(((runtime_cfg.get("data_provider") or {}).get("params")) or {})
-    hpo_cfg = dict(runtime_cfg.get("hpo") or {})
-    analysis_cfg = dict(runtime_cfg.get("analysis") or {})
+    mlflow_policy = dict(analysis_cfg.get("mlflow_policy") or {})
 
     starting_cash = float(portfolio_params.get("cash") or 100000.0)
     base_pf_cfg = {key: value for key, value in portfolio_params.items() if key not in {"cash", "keep_history"}}
@@ -850,9 +1368,17 @@ def _run_hpo_backtest(runtime_cfg: dict[str, Any], algorithm_cls: type[Any]) -> 
         "description": analysis_cfg.get("description", ""),
         "symbol": base_pf_cfg.get("symbol", algorithm_params.get("symbol", "SPY")),
         "benchmark_paths": analysis_cfg.get("benchmarks") or {},
+        "tracking_uri": ((runtime_cfg.get("mlflow") or {}).get("tracking_uri")) or "",
+        "config_artifact_paths": list(config_artifact_paths or []),
     }
 
-    best_config = launcher.tune_backtest_hyperparameters(
+    ray.init(
+        ignore_reinit_error=True,
+        dashboard_host="0.0.0.0",
+        dashboard_port=8265,
+    )
+    trainable_with_params = tune.with_parameters(
+        _backtest_objective_with_mlflow_policy,
         symbol=base_backtest_cfg["symbol"],
         algorithm_class=algorithm_cls,
         portfolio_class=portfolio_cls,
@@ -862,12 +1388,59 @@ def _run_hpo_backtest(runtime_cfg: dict[str, Any], algorithm_cls: type[Any]) -> 
         base_portfolio_config=base_pf_cfg,
         base_data_provider_config=data_provider_params,
         base_backtest_config=base_backtest_cfg,
-        search_space=_parse_search_space_config(hpo_cfg.get("search_space") or {}),
         algorithm_param_keys=list(hpo_cfg.get("algorithm_param_keys") or []),
         portfolio_param_keys=list(hpo_cfg.get("portfolio_param_keys") or []),
-        num_samples=int(hpo_cfg.get("num_samples") or 50),
-        max_concurrent_trials=int(hpo_cfg.get("max_concurrent_trials") or 8),
+        mlflow_policy=mlflow_policy,
+        config_artifact_paths=list(config_artifact_paths or []),
     )
+    optuna_search = optuna_mod.OptunaSearch(metric="_metric", mode="max")
+    tune_config_kwargs: dict[str, Any] = {
+        "metric": "_metric",
+        "mode": "max",
+        "num_samples": total_samples,
+        "max_concurrent_trials": max_concurrent_trials,
+        "search_alg": optuna_search,
+        "trial_name_creator": _tune_trial_name_creator,
+        "trial_dirname_creator": _tune_trial_dirname_creator,
+    }
+    try:
+        supported_tune_config = set(inspect.signature(tune.TuneConfig).parameters)
+        tune_config_kwargs = {
+            key: value
+            for key, value in tune_config_kwargs.items()
+            if key in supported_tune_config
+        }
+    except Exception:
+        pass
+    tuner = tune.Tuner(
+        trainable_with_params,
+        param_space=_parse_search_space_config(hpo_cfg.get("search_space") or {}),
+        tune_config=tune.TuneConfig(**tune_config_kwargs),
+        run_config=_build_tune_run_config(
+            tune=tune,
+            run_name=run_name,
+            total_samples=total_samples,
+            metric_name="_metric",
+            progress_report_interval_seconds=int(hpo_cfg.get("progress_report_interval_seconds") or 15),
+            log_progress=bool(hpo_cfg.get("log_progress", True)),
+        ),
+    )
+    results = tuner.fit()
+    best_result = _safe_best_tune_result(results)
+    best_config = dict(getattr(best_result, "config", {}) or {})
+    try:
+        context = ray.get_runtime_context()
+        dashboard_url = "http://127.0.0.1:8265"
+        if hasattr(context, "gcs_address"):
+            log.info(
+                "Trading HPO | Ray initialized dashboard=%s gcs_address=%s",
+                dashboard_url,
+                getattr(context, "gcs_address", ""),
+            )
+        else:
+            log.info("Trading HPO | Ray initialized dashboard=%s", dashboard_url)
+    except Exception:
+        log.info("Trading HPO | Ray initialized dashboard=http://127.0.0.1:8265")
 
     best_algorithm_cfg = dict(algorithm_params)
     for key in hpo_cfg.get("algorithm_param_keys") or []:
@@ -879,7 +1452,7 @@ def _run_hpo_backtest(runtime_cfg: dict[str, Any], algorithm_cls: type[Any]) -> 
         if key in best_config:
             best_portfolio_cfg[key] = best_config[key]
 
-    result = launcher.run_backtest_local(
+    result = _run_backtest_local_with_mlflow_policy(
         backtest_cfg=base_backtest_cfg,
         alg_cfg=best_algorithm_cfg,
         pf_cfg=best_portfolio_cfg,
@@ -888,6 +1461,9 @@ def _run_hpo_backtest(runtime_cfg: dict[str, Any], algorithm_cls: type[Any]) -> 
         portfolio_class=portfolio_cls,
         data_provider_class=data_provider_cls,
         order_manager_class=order_manager_cls,
+        mlflow_policy=mlflow_policy,
+        config_artifact_paths=list(config_artifact_paths or []),
+        mlflow_capture=mlflow_capture,
     )
     metrics_obj = result["metrics"]
     metrics = asdict(metrics_obj) if is_dataclass(metrics_obj) else dict(metrics_obj)
@@ -913,10 +1489,441 @@ def _parse_search_space_config(search_space: dict[str, Any]) -> dict[str, Any]:
     return module.parse_search_space(search_space)
 
 
+def _backtest_objective_with_mlflow_policy(
+    config: dict[str, Any],
+    *,
+    symbol: str,
+    algorithm_class: type[Any],
+    portfolio_class: type[Any],
+    data_provider_class: type[Any],
+    order_manager_class: type[Any],
+    base_algorithm_config: dict[str, Any],
+    base_portfolio_config: dict[str, Any],
+    base_data_provider_config: dict[str, Any],
+    base_backtest_config: dict[str, Any],
+    algorithm_param_keys: list[str],
+    portfolio_param_keys: list[str],
+    mlflow_policy: dict[str, Any],
+    config_artifact_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    try:
+        alg_params = {k: config[k] for k in algorithm_param_keys if k in config}
+        alg_cfg = {**base_algorithm_config, **alg_params}
+        pf_params = {k: config[k] for k in portfolio_param_keys if k in config}
+        pf_cfg = {**base_portfolio_config, **pf_params}
+        result = _run_backtest_local_with_mlflow_policy(
+            backtest_cfg=base_backtest_config,
+            alg_cfg=alg_cfg,
+            pf_cfg=pf_cfg,
+            dp_cfg=base_data_provider_config,
+            algorithm_class=algorithm_class,
+            portfolio_class=portfolio_class,
+            data_provider_class=data_provider_class,
+            order_manager_class=order_manager_class,
+            mlflow_policy=mlflow_policy,
+            config_artifact_paths=list(config_artifact_paths or []),
+        )
+        metric_value = _coerce_finite_metric(getattr(result["metrics"], "annualized_return", 0.0), fallback=-1_000_000_000.0)
+        return {"_metric": metric_value}
+    except Exception as exc:
+        log.warning("Trading HPO | trial failed: %s", exc, exc_info=True)
+        return {"_metric": -1_000_000_000.0, "_trial_error": str(exc)}
+
+
+def _run_backtest_local_with_mlflow_policy(
+    *,
+    backtest_cfg: dict[str, Any],
+    alg_cfg: dict[str, Any],
+    pf_cfg: dict[str, Any],
+    dp_cfg: dict[str, Any],
+    algorithm_class: type[Any],
+    portfolio_class: type[Any],
+    data_provider_class: type[Any],
+    order_manager_class: type[Any],
+    mlflow_policy: dict[str, Any],
+    config_artifact_paths: list[str] | None = None,
+    mlflow_capture: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    experiment_name = backtest_cfg["experiment_name"]
+    starting_cash = backtest_cfg["starting_cash"]
+    run_name = backtest_cfg["run_name"]
+    desc = backtest_cfg["description"]
+    config_artifact_path = backtest_cfg.get("config_artifact_path")
+    git_tags = backtest_cfg.get("git_tags") or {}
+    benchmark_paths = backtest_cfg.get("benchmark_paths") or {}
+    tracking_uri = str(backtest_cfg.get("tracking_uri") or "")
+
+    om = order_manager_class()
+    effective_history_length = _effective_history_length(alg_cfg, fallback=int(alg_cfg.get("history_length") or 0))
+    alg_cfg = {**alg_cfg, "history_length": effective_history_length}
+    dp_cfg = dict(dp_cfg)
+    minimum_limit = _minimum_alpaca_limit(dp_cfg, alg_cfg)
+    if minimum_limit > int(dp_cfg.get("limit") or 0):
+        dp_cfg["limit"] = minimum_limit
+    try:
+        al = algorithm_class(cfg=alg_cfg, history_length=effective_history_length)
+    except TypeError:
+        al = algorithm_class(alg_cfg, effective_history_length)
+    dp = data_provider_class(dp_cfg)
+    pf = portfolio_class(pf_cfg, om, starting_cash, {}, True)
+    params = backtest_cfg | alg_cfg | pf_cfg | dp_cfg
+    params.update({
+        "algorithm_implementation": f"{algorithm_class.__module__}.{algorithm_class.__name__}",
+        "portfolio_implementation": f"{portfolio_class.__module__}.{portfolio_class.__name__}",
+        "data_provider_implementation": f"{data_provider_class.__module__}.{data_provider_class.__name__}",
+        "order_manager_implementation": f"{order_manager_class.__module__}.{order_manager_class.__name__}",
+    })
+
+    sim = importlib.import_module("trading.engines.backtest_engine").BacktestingEngine({"state_store": {"enabled": False}}, dp, al, om, pf)
+    sim.run()
+
+    analysis_engine_cls = importlib.import_module("trading.analysis.analysis_engine").AnalysisEngine
+    engine = analysis_engine_cls(sim.pf, pf.om)
+    should_log_to_mlflow = _should_log_to_mlflow(
+        annualized_return=float(getattr(engine.calculate_metrics(), "annualized_return", 0.0) or 0.0),
+        run_name=run_name,
+        params=params,
+        sample_negative_rate=int(mlflow_policy.get("sample_negative_rate", 20) or 20),
+        annualized_return_threshold=float(mlflow_policy.get("annualized_return_threshold", 0.0)),
+    )
+    results = engine.run_full_analysis(
+        experiment_name=experiment_name,
+        run_name=run_name,
+        description=desc,
+        parameters=params,
+        tracking_uri=tracking_uri or None,
+        log_to_mlflow=should_log_to_mlflow,
+        save_charts_locally=False,
+        save_report_locally=False,
+        tags=git_tags if git_tags else None,
+        artifact_paths=_artifact_path_list(config_artifact_path, config_artifact_paths),
+        benchmark_paths=benchmark_paths if benchmark_paths else None,
+    )
+    return results
+
+
+def _should_log_to_mlflow(
+    *,
+    annualized_return: float,
+    run_name: str,
+    params: dict[str, Any],
+    sample_negative_rate: int,
+    annualized_return_threshold: float,
+) -> bool:
+    if annualized_return > annualized_return_threshold:
+        return True
+    rate = max(1, int(sample_negative_rate or 20))
+    signature = json.dumps({"run_name": run_name, "params": params}, sort_keys=True, default=_json_default)
+    bucket = int(hashlib.sha256(signature.encode("utf-8")).hexdigest()[:8], 16)
+    return bucket % rate == 0
+
+
+def _artifact_path_list(primary_path: str | None, extra_paths: list[str] | None) -> list[str] | None:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for value in [primary_path, *(extra_paths or [])]:
+        path = str(value or "").strip()
+        if path and path not in seen:
+            ordered.append(path)
+            seen.add(path)
+    return ordered or None
+
+
+def _install_mlflow_capture() -> dict[str, Any]:
+    capture: dict[str, Any] = {}
+    try:
+        module = importlib.import_module("utils.mlflow_client")
+        client_cls = getattr(module, "MLflowClient", None)
+    except Exception:
+        return capture
+    if client_cls is None:
+        return capture
+
+    original_start = getattr(client_cls, "start_run", None)
+    if not callable(original_start):
+        return capture
+
+    def _wrapped_start(self, *args, **kwargs):
+        result = original_start(self, *args, **kwargs)
+        try:
+            capture["run_id"] = str(getattr(self, "run_id", None) or getattr(getattr(self, "_active_run", None), "info", None).run_id)
+        except Exception:
+            capture.setdefault("run_id", "")
+        try:
+            capture["run_url"] = str(self.get_run_url() or "")
+        except Exception:
+            capture.setdefault("run_url", "")
+        capture["tracking_uri"] = str(getattr(self, "tracking_uri", "") or "")
+        capture["experiment_name"] = str(getattr(self, "experiment_name", "") or "")
+        capture["experiment_id"] = str(getattr(self, "experiment_id", "") or "")
+        return result
+
+    capture["_client_cls"] = client_cls
+    capture["_original_start"] = original_start
+    setattr(client_cls, "start_run", _wrapped_start)
+    return capture
+
+
+def _restore_mlflow_capture(capture: dict[str, Any] | None) -> None:
+    if not capture:
+        return
+    client_cls = capture.get("_client_cls")
+    original_start = capture.get("_original_start")
+    if client_cls is not None and callable(original_start):
+        setattr(client_cls, "start_run", original_start)
+
+
+def _log_mlflow_config_artifacts(
+    artifact_paths: list[str],
+    *,
+    capture: dict[str, Any] | None,
+    extra_params: dict[str, Any] | None = None,
+) -> None:
+    if not artifact_paths:
+        return
+    run_id = str((capture or {}).get("run_id") or "")
+    if not run_id:
+        return
+    try:
+        mlflow = importlib.import_module("mlflow")
+        with mlflow.start_run(run_id=run_id):
+            for key, value in dict(extra_params or {}).items():
+                if value is None or value == "":
+                    continue
+                mlflow.log_param(str(key), value)
+            for path in artifact_paths:
+                if Path(path).is_file():
+                    mlflow.log_artifact(path, artifact_path="config")
+    except Exception as exc:
+        log.warning("Trading MLflow | failed to append config artifacts to run %s: %s", run_id, exc)
+
+
+def _coerce_finite_metric(value: Any, *, fallback: float) -> float:
+    try:
+        metric = float(value)
+    except Exception:
+        return fallback
+    if not math.isfinite(metric):
+        return fallback
+    return metric
+
+
+def _trial_status_counts(trials: list[Any]) -> dict[str, int]:
+    counts = {
+        "queued": 0,
+        "running": 0,
+        "done": 0,
+        "errored": 0,
+        "paused": 0,
+        "other": 0,
+    }
+    for trial in trials:
+        status = str(getattr(trial, "status", "") or "").upper()
+        if status == "PENDING":
+            counts["queued"] += 1
+        elif status == "RUNNING":
+            counts["running"] += 1
+        elif status == "TERMINATED":
+            counts["done"] += 1
+        elif status == "ERROR":
+            counts["errored"] += 1
+        elif status == "PAUSED":
+            counts["paused"] += 1
+        else:
+            counts["other"] += 1
+    return counts
+
+
+def _best_trial_metric(trials: list[Any], metric_name: str) -> float | None:
+    best: float | None = None
+    for trial in trials:
+        result = getattr(trial, "last_result", None) or {}
+        if not isinstance(result, dict):
+            continue
+        try:
+            metric = float(result.get(metric_name))
+        except Exception:
+            continue
+        if not math.isfinite(metric):
+            continue
+        if best is None or metric > best:
+            best = metric
+    return best
+
+
+def _format_hpo_progress_message(
+    *,
+    run_name: str,
+    trials: list[Any],
+    total_samples: int | None,
+    metric_name: str,
+    done: bool,
+) -> str:
+    counts = _trial_status_counts(trials)
+    total = int(total_samples or len(trials) or 0)
+    best_metric = _best_trial_metric(trials, metric_name)
+    best_fragment = "n/a" if best_metric is None else f"{best_metric:.6f}"
+    state = "complete" if done else "running"
+    return (
+        f"Trading HPO progress | run_name={run_name} state={state} "
+        f"done={counts['done']}/{total} running={counts['running']} "
+        f"queued={counts['queued']} errored={counts['errored']} "
+        f"paused={counts['paused']} best_{metric_name}={best_fragment}"
+    )
+
+
+def _short_identifier(value: str, *, prefix: str, max_length: int) -> str:
+    raw = "".join(ch if ch.isalnum() else "_" for ch in str(value or "").strip()).strip("_").lower()
+    if not raw:
+        raw = prefix
+    digest = hashlib.sha1(str(value or "").encode("utf-8")).hexdigest()[:8]
+    base = f"{prefix}_{raw}"
+    room = max(1, int(max_length) - len(digest) - 1)
+    shortened = base[:room].rstrip("_") or prefix
+    return f"{shortened}_{digest}"
+
+
+def _tune_trial_name_creator(trial: Any) -> str:
+    trial_id = str(getattr(trial, "trial_id", "") or getattr(trial, "trial_name", "") or "trial")
+    return _short_identifier(trial_id, prefix="trial", max_length=24)
+
+
+def _tune_trial_dirname_creator(trial: Any) -> str:
+    trial_id = str(getattr(trial, "trial_id", "") or getattr(trial, "trial_name", "") or "trial")
+    return _short_identifier(trial_id, prefix="t", max_length=20)
+
+
+def _make_tune_progress_callback(
+    *,
+    tune: Any,
+    run_name: str,
+    total_samples: int | None,
+    metric_name: str,
+    progress_report_interval_seconds: int,
+) -> Any | None:
+    callback_base = getattr(tune, "Callback", None)
+    if callback_base is None:
+        return None
+
+    interval = max(1, int(progress_report_interval_seconds or 15))
+
+    class TuneProgressLogger(callback_base):
+        def __init__(self) -> None:
+            self._last_report_monotonic = 0.0
+
+        def _maybe_report(self, trials: list[Any], *, done: bool, force: bool = False) -> None:
+            now = time.monotonic()
+            if not force and self._last_report_monotonic and (now - self._last_report_monotonic) < interval:
+                return
+            self._last_report_monotonic = now
+            log.info(
+                _format_hpo_progress_message(
+                    run_name=run_name,
+                    trials=trials,
+                    total_samples=total_samples,
+                    metric_name=metric_name,
+                    done=done,
+                )
+            )
+
+        def on_step_end(self, iteration: int, trials: list[Any], **info: Any) -> None:
+            self._maybe_report(trials, done=False)
+
+        def on_trial_error(self, iteration: int, trials: list[Any], trial: Any, **info: Any) -> None:
+            trial_id = getattr(trial, "trial_id", "") or getattr(trial, "trial_name", "")
+            log.warning("Trading HPO | trial errored run_name=%s trial_id=%s", run_name, trial_id)
+            self._maybe_report(trials, done=False, force=True)
+
+        def on_experiment_end(self, trials: list[Any], **info: Any) -> None:
+            self._maybe_report(trials, done=True, force=True)
+
+    return TuneProgressLogger()
+
+
+def _build_tune_run_config(
+    *,
+    tune: Any,
+    run_name: str,
+    total_samples: int | None,
+    metric_name: str,
+    progress_report_interval_seconds: int,
+    log_progress: bool,
+) -> Any | None:
+    run_config_cls = getattr(tune, "RunConfig", None)
+    if run_config_cls is None:
+        try:
+            run_config_cls = getattr(importlib.import_module("ray.air"), "RunConfig", None)
+        except Exception:
+            run_config_cls = None
+    if run_config_cls is None:
+        return None
+
+    ray_storage_path = resolve_dev_path(".tmp/ray").resolve()
+    ray_storage_path.mkdir(parents=True, exist_ok=True)
+    ray_storage_dir = str(ray_storage_path)
+    ray_storage_uri = ray_storage_path.as_uri()
+    kwargs: dict[str, Any] = {
+        "verbose": 1,
+        "name": _short_tune_run_name(run_name),
+    }
+    if log_progress:
+        callback = _make_tune_progress_callback(
+            tune=tune,
+            run_name=run_name,
+            total_samples=total_samples,
+            metric_name=metric_name,
+            progress_report_interval_seconds=progress_report_interval_seconds,
+        )
+        if callback is not None:
+            kwargs["callbacks"] = [callback]
+
+    try:
+        supported = set(inspect.signature(run_config_cls).parameters)
+        if "storage_path" in supported:
+            kwargs["storage_path"] = ray_storage_uri
+        elif "local_dir" in supported:
+            kwargs["local_dir"] = ray_storage_dir
+        kwargs = {key: value for key, value in kwargs.items() if key in supported}
+    except Exception:
+        kwargs.setdefault("storage_path", ray_storage_uri)
+    try:
+        return run_config_cls(**kwargs)
+    except Exception:
+        if "callbacks" in kwargs:
+            retry_kwargs = dict(kwargs)
+            retry_kwargs.pop("callbacks", None)
+            try:
+                return run_config_cls(**retry_kwargs)
+            except Exception:
+                pass
+        if "storage_path" in kwargs and "local_dir" in kwargs:
+            retry_kwargs = dict(kwargs)
+            retry_kwargs.pop("local_dir", None)
+            retry_kwargs.pop("callbacks", None)
+            try:
+                return run_config_cls(**retry_kwargs)
+            except Exception:
+                return None
+        return None
+
+
+def _short_tune_run_name(run_name: str) -> str:
+    return _short_identifier(run_name, prefix="hpo", max_length=32)
+
+
+def _safe_best_tune_result(results: Any):
+    try:
+        return results.get_best_result(metric="_metric", mode="max")
+    except Exception as exc:
+        log.warning("Trading HPO | no valid best trial found, falling back to baseline config: %s", exc)
+        return type("TuneFallbackResult", (), {"config": {}})()
+
+
 def _walk_forward_metrics(period_results: list[dict[str, Any]], aggregate: dict[str, Any]) -> dict[str, Any]:
     metric_rows = [asdict(item["metrics"]) for item in period_results if item.get("metrics") is not None and is_dataclass(item.get("metrics"))]
     if not metric_rows:
         return {
+            "annualized_return": float(aggregate.get("annualized_return", 0.0) or aggregate.get("mean_annualized_return", 0.0) or 0.0),
             "sharpe_ratio": float(aggregate.get("mean_sharpe_ratio", 0.0) or 0.0),
             "win_rate": float(aggregate.get("mean_win_rate", 0.0) or 0.0),
             "total_return_pct": float(aggregate.get("mean_return_pct", 0.0) or 0.0),

@@ -63,6 +63,51 @@ class TestRunTests:
 
         assert "ERROR" in output
 
+    def test_external_runtime_uses_shared_task_runner(self):
+        runtime_spec = {
+            "python": "python",
+            "cwd": "E:/tmp/runtime",
+            "pythonpath_entries": ["E:/tmp/runtime", "E:/repo"],
+            "plugin_name": "trading",
+            "logger_prefixes": ["core.plugins.trading"],
+        }
+        with patch("core.graph.nodes.validate.run_task", return_value={"output": "1 passed"}) as call_task:
+            output = _run_tests("uv run pytest", "test_file.py", 60, runtime_spec=runtime_spec)
+
+        assert output == "1 passed"
+        assert call_task.call_args.args[0]["task_path"] == "core.plugins.framework_tasks.run_tests"
+        assert call_task.call_args.args[0]["python"] == "python"
+        assert "staged_files" in call_task.call_args.args[0]["payload"]
+
+    def test_external_runtime_receives_absolute_test_path(self, tmp_path):
+        runtime_spec = {
+            "python": "python",
+            "cwd": "E:/tmp/runtime",
+            "pythonpath_entries": ["E:/tmp/runtime", "E:/repo"],
+            "plugin_name": "trading",
+            "logger_prefixes": ["core.plugins.trading"],
+        }
+        test_file = tmp_path / "tests" / "test_algo.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("def test_ok(): pass\n", encoding="utf-8")
+
+        with patch("core.graph.nodes.validate.run_task", return_value={"output": "1 passed"}) as call_task:
+            _run_tests(
+                "uv run pytest",
+                str(test_file.resolve()),
+                60,
+                runtime_spec=runtime_spec,
+                script_source="class Algo: pass\n",
+                test_source="def test_ok(): pass\n",
+                script_name="Algo.py",
+                test_name="test_algo.py",
+            )
+
+        payload = call_task.call_args.args[0]["payload"]
+        assert payload["test_path"] == "test_algo.py"
+        assert payload["staged_files"]["Algo.py"] == "class Algo: pass\n"
+        assert payload["staged_files"]["test_algo.py"] == "def test_ok(): pass\n"
+
 
 # ---------------------------------------------------------------------------
 # _preflight_validation_error

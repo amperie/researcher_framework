@@ -28,12 +28,14 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from configs.config import get_config
+from core.plugins.external_tasks import call_external_task
 from core.plugins.task_runner import load_callable
 from core.utils.logger import get_logger, setup_plugin_file_logging, setup_logging
 
 
 TERMINAL_STATUSES = {"succeeded", "failed", "timed_out", "cancelled"}
 log = get_logger("core.plugins.job_runner")
+_JOB_STORE_ACTOR_NAME = "researcher_framework_job_store"
 
 
 class JobRunner(Protocol):
@@ -119,18 +121,39 @@ class RayRunner:
         job_dir = Path(spec["job_dir"]).resolve()
         job_dir.mkdir(parents=True, exist_ok=True)
 
-        job_spec = {**spec, "job_id": job_id, "job_dir": str(job_dir), "runner": self.runner_name}
+        job_spec = {
+            **spec,
+            "job_id": job_id,
+            "job_dir": str(job_dir),
+            "runner": self.runner_name,
+            "ray_namespace": getattr(self._cfg, "ray_namespace", None),
+        }
         payload = job_spec.pop("payload")
 
         _write_json(job_dir / "job.json", job_spec)
         _write_json(job_dir / "payload.json", payload)
-        _write_json(job_dir / "status.json", _status(job_id, "submitted", job_spec))
+        submitted = _status(job_id, "submitted", job_spec)
+        _write_json(job_dir / "status.json", submitted)
 
-        task = ray.remote(_ray_run_job).options(runtime_env=_ray_runtime_env(job_spec, self._cfg))
-        task.remote(job_spec)
+        store = _get_or_create_job_store(ray, self._cfg)
+        ray.get(store.upsert.remote(job_id, submitted))
+        task = ray.remote(_ray_execute_task).options(runtime_env=_ray_runtime_env(job_spec, self._cfg))
+        task.remote(job_spec, payload, _job_store_actor_name(self._cfg))
         return self.check({"job_id": job_id, "job_dir": str(job_dir)})
 
     def check(self, job: dict[str, Any]) -> dict[str, Any]:
+        status = _read_durable_status(job)
+        try:
+            ray = _ensure_ray(self._cfg)
+            store = _get_existing_job_store(ray, self._cfg)
+            if store is None:
+                return status
+            remote = ray.get(store.get.remote(str(job.get("job_id") or "")))
+        except Exception:
+            return status
+        if not isinstance(remote, dict) or not remote:
+            return status
+        _sync_ray_status(Path(job["job_dir"]), remote)
         return _read_durable_status(job)
 
 
@@ -209,6 +232,48 @@ def _ray_run_job(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class _ResearchJobStore:
+    def __init__(self) -> None:
+        self._records: dict[str, dict[str, Any]] = {}
+
+    def upsert(self, job_id: str, record: dict[str, Any]) -> bool:
+        self._records[str(job_id)] = dict(record)
+        return True
+
+    def get(self, job_id: str) -> dict[str, Any] | None:
+        record = self._records.get(str(job_id))
+        return dict(record) if isinstance(record, dict) else None
+
+
+def _ray_execute_task(spec: dict[str, Any], payload: dict[str, Any], actor_name: str) -> dict[str, Any]:
+    ray = importlib.import_module("ray")
+    actor = ray.get_actor(actor_name, namespace=spec.get("ray_namespace") or None)
+    running = _status(spec["job_id"], "running", spec)
+    ray.get(actor.upsert.remote(spec["job_id"], running))
+    try:
+        repo_root = str(Path(__file__).resolve().parents[2])
+        result = call_external_task(
+            str(spec["task_path"]),
+            dict(payload or {}),
+            python=str(spec.get("python") or sys.executable),
+            timeout=int(spec.get("timeout") or get_config().experiment_timeout_seconds),
+            plugin_name=str(spec.get("plugin_name") or "framework"),
+            logger_prefixes=list(spec.get("logger_prefixes") or []),
+            cwd=spec.get("cwd"),
+            pythonpath_entries=[repo_root, *list(spec.get("pythonpath_entries") or [])],
+            env_overrides=dict(spec.get("env") or {}),
+            log=log,
+        )
+        succeeded = _status(spec["job_id"], "succeeded", spec)
+        succeeded["result"] = result
+        ray.get(actor.upsert.remote(spec["job_id"], succeeded))
+        return succeeded
+    except Exception as exc:
+        failed = _status(spec["job_id"], "failed", spec, error=f"{type(exc).__name__}: {exc}")
+        ray.get(actor.upsert.remote(spec["job_id"], failed))
+        return failed
+
+
 def _worker_command(spec: dict[str, Any], job_dir: Path) -> list[str]:
     python = spec.get("python") or sys.executable
     parts = str(python).split()
@@ -233,9 +298,49 @@ def _read_durable_status(job: dict[str, Any]) -> dict[str, Any]:
     return status
 
 
+def _sync_ray_status(job_dir: Path, remote_status: dict[str, Any]) -> None:
+    _write_json(job_dir / "status.json", remote_status)
+    if remote_status.get("status") == "succeeded" and "result" in remote_status:
+        _write_json(job_dir / "result.json", remote_status["result"])
+
+
+def _job_store_actor_name(cfg: Any) -> str:
+    namespace = str(getattr(cfg, "ray_namespace", "") or "").strip()
+    return f"{_JOB_STORE_ACTOR_NAME}::{namespace or 'default'}"
+
+
+def _get_existing_job_store(ray: Any, cfg: Any) -> Any | None:
+    try:
+        return ray.get_actor(
+            _job_store_actor_name(cfg),
+            namespace=getattr(cfg, "ray_namespace", None) or None,
+        )
+    except Exception:
+        return None
+
+
+def _get_or_create_job_store(ray: Any, cfg: Any) -> Any:
+    actor = _get_existing_job_store(ray, cfg)
+    if actor is not None:
+        return actor
+    actor_cls = ray.remote(_ResearchJobStore)
+    return actor_cls.options(
+        name=_job_store_actor_name(cfg),
+        namespace=getattr(cfg, "ray_namespace", None) or None,
+        lifetime="detached",
+    ).remote()
+
+
 def _ensure_ray(cfg: Any) -> Any:
     ray = importlib.import_module("ray")
     if ray.is_initialized():
+        log.info(
+            "job_runner | Using existing Ray runtime mode=%s address=%s namespace=%s dashboard=%s",
+            getattr(cfg, "ray_mode", "local"),
+            getattr(cfg, "ray_address", "auto") or "auto",
+            getattr(cfg, "ray_namespace", None) or "-",
+            _ray_dashboard_url(ray) or "unavailable",
+        )
         return ray
 
     init_kwargs: dict[str, Any] = {"ignore_reinit_error": True}
@@ -245,7 +350,47 @@ def _ensure_ray(cfg: Any) -> Any:
         init_kwargs["address"] = getattr(cfg, "ray_address", "auto") or "auto"
 
     ray.init(**init_kwargs)
+    log.info(
+        "job_runner | Ray initialized mode=%s address=%s namespace=%s dashboard=%s",
+        getattr(cfg, "ray_mode", "local"),
+        init_kwargs.get("address", "local"),
+        init_kwargs.get("namespace", "-"),
+        _ray_dashboard_url(ray) or "unavailable",
+    )
     return ray
+
+
+def _ray_dashboard_url(ray: Any) -> str:
+    candidates: list[Any] = []
+    try:
+        runtime_context = getattr(ray, "get_runtime_context", None)
+        if callable(runtime_context):
+            candidates.append(runtime_context())
+    except Exception:
+        pass
+    try:
+        worker = getattr(getattr(ray, "_private", None), "worker", None)
+        candidates.append(getattr(worker, "global_worker", None))
+    except Exception:
+        pass
+
+    for candidate in candidates:
+        for attr in ("dashboard_url", "webui_url"):
+            value = getattr(candidate, attr, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        node = getattr(candidate, "node", None)
+        for attr in ("webui_url", "dashboard_url"):
+            value = getattr(node, attr, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        address_info = getattr(node, "address_info", None)
+        if isinstance(address_info, dict):
+            for key in ("webui_url", "dashboard_url"):
+                value = address_info.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return ""
 
 
 def _ray_runtime_env(spec: dict[str, Any], cfg: Any) -> dict[str, Any]:
@@ -257,6 +402,8 @@ def _ray_runtime_env(spec: dict[str, Any], cfg: Any) -> dict[str, Any]:
             env_vars.pop("PYTHONPATH", None)
         if env_vars:
             runtime_env["env_vars"] = env_vars
+    if getattr(cfg, "ray_mode", "local") != "local":
+        runtime_env["working_dir"] = str(Path(__file__).resolve().parents[2])
     return runtime_env
 
 

@@ -54,9 +54,14 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
 
     model_by_exp = {m.get("experiment_id"): m for m in models}
 
-    for result in experiment_results:
-        experiment_id = result.get("experiment_id", "")
-        proposal_name = result.get("proposal_name", "unknown")
+    normalized_results: list[dict] = []
+
+    for raw_result in experiment_results:
+        result = dict(raw_result or {})
+        normalized_results.append(result)
+        proposal_name = str(result.get("proposal_name", "unknown") or "unknown")
+        experiment_id = str(result.get("experiment_id") or proposal_name)
+        result["experiment_id"] = experiment_id
         metrics = result.get("metrics") or {}
 
         inserted_at = datetime.now(timezone.utc).isoformat()
@@ -92,6 +97,8 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
             except Exception as exc:
                 log.warning("store_results_node | MLflow failed: %s", exc)
                 errors.append(f"store_results: MLflow failed for {proposal_name}: {exc}")
+        if mlflow_run_id:
+            result["mlflow_run_id"] = mlflow_run_id
 
         # --- MongoDB ---
         try:
@@ -120,7 +127,10 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
                 "mlflow_run_id": mlflow_run_id,
                 "inserted_at": inserted_at,
             }
-            client[mongo_db][mongo_collection].insert_one(doc)
+            insert_result = client[mongo_db][mongo_collection].insert_one(doc)
+            mongo_document_id = str(getattr(insert_result, "inserted_id", "") or "")
+            if mongo_document_id:
+                result["mongo_document_id"] = mongo_document_id
             client.close()
             log.info("store_results_node | MongoDB insert - %s", experiment_id)
         except Exception as exc:
@@ -131,10 +141,10 @@ def store_results_node(state: ResearchState, profile: dict) -> dict:
 
     try:
         memory_service = MemoryService.for_profile(profile)
-        records = build_memory_records_for_state(profile, state)
+        records = build_memory_records_for_state(profile, {**state, "experiment_results": normalized_results})
         memory_service.persist_records(records)
     except Exception as exc:
         log.warning("store_results_node | Memory persistence failed: %s", exc)
         errors.append(f"store_results: memory persistence failed: {exc}")
 
-    return {"stored_result_ids": stored_ids, "errors": errors}
+    return {"stored_result_ids": stored_ids, "errors": errors, "experiment_results": normalized_results}

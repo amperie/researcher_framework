@@ -127,6 +127,34 @@ class TestStoreResultsMLflow:
         set_experiment.assert_not_called()
         start_run.assert_not_called()
 
+    def test_blank_experiment_id_falls_back_to_proposal_name_and_persists_mlflow_id(self):
+        mock_run = MagicMock()
+        mock_run.__enter__ = lambda s: s
+        mock_run.__exit__ = MagicMock(return_value=False)
+        mock_run.info.run_id = "run-fallback"
+        result_row = {
+            **RESULT,
+            "experiment_id": "",
+        }
+
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+            with patch("mlflow.set_tracking_uri"):
+                with patch("mlflow.set_experiment"):
+                    with patch("mlflow.start_run", return_value=mock_run):
+                        with patch("mlflow.log_params"):
+                            with patch("mlflow.log_metrics"):
+                                with patch("mlflow.set_tags"):
+                                    with patch("core.graph.nodes.store_results.MemoryService.for_profile"):
+                                        with patch("pymongo.MongoClient"):
+                                            result = store_results_node(
+                                                {"experiment_results": [result_row], "research_direction": "test"},
+                                                PROFILE,
+                                            )
+
+        assert "my_proposal" in result["stored_result_ids"]
+        assert result["experiment_results"][0]["experiment_id"] == "my_proposal"
+        assert result["experiment_results"][0]["mlflow_run_id"] == "run-fallback"
+
 
 class TestStoreResultsMemory:
     def test_memory_service_persist_records_called(self):
@@ -265,6 +293,30 @@ class TestStoreResultsMongo:
         assert inserted["execution_config"]["hpo"]["search_space"]["stop_pct"]["high"] == 8.0
         assert inserted["variant_results"][0]["raw_output"]["best_config"]["stop_pct"] == 3.5
         assert inserted["report"] == "summary"
+
+    def test_mongodb_insert_persists_inserted_id_on_result(self):
+        mock_client = MagicMock()
+        mock_client["test_db"]["test_experiments"].insert_one.return_value.inserted_id = "mongo-123"
+        mock_run = MagicMock()
+        mock_run.__enter__ = lambda s: s
+        mock_run.__exit__ = MagicMock(return_value=False)
+        mock_run.info.run_id = "run-1"
+
+        with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):
+            with patch("mlflow.set_tracking_uri"):
+                with patch("mlflow.set_experiment"):
+                    with patch("mlflow.start_run", return_value=mock_run):
+                        with patch("mlflow.log_params"):
+                            with patch("mlflow.log_metrics"):
+                                with patch("mlflow.set_tags"):
+                                    with patch("core.graph.nodes.store_results.MemoryService.for_profile"):
+                                        with patch("pymongo.MongoClient", return_value=mock_client):
+                                            result = store_results_node(
+                                                {"experiment_results": [RESULT]},
+                                                PROFILE,
+                                            )
+
+        assert result["experiment_results"][0]["mongo_document_id"] == "mongo-123"
 
     def test_mongodb_failure_is_non_fatal(self):
         with patch("core.graph.nodes.store_results.get_config", return_value=MOCK_CFG):

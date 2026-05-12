@@ -76,7 +76,7 @@ class MemoryService:
         record = ensure_memory_record_defaults(record)
         plan = projection or default_memory_projection(record)
         record_id = str(record.get("record_id") or "")
-        log.info(
+        log.debug(
             "memory.service | Persisting record id=%r domain=%r kind=%r object_type=%r",
             record_id,
             record.get("domain"),

@@ -389,6 +389,8 @@ def build_idea_memory_records(profile: dict[str, Any], state: dict[str, Any]) ->
     records: list[MemoryRecord] = []
 
     for idea in ideas:
+        if not isinstance(idea, dict):
+            continue
         idea_name = str(idea.get("name") or idea.get("title") or "idea")
         idea_fingerprint = fingerprint_json({
             "domain": domain,
@@ -432,6 +434,8 @@ def build_refined_idea_memory_records(profile: dict[str, Any], state: dict[str, 
     records: list[MemoryRecord] = []
 
     for idea in ideas:
+        if not isinstance(idea, dict):
+            continue
         idea_name = str(idea.get("name") or idea.get("title") or "idea")
         idea_fingerprint = fingerprint_json({
             "domain": domain,
@@ -487,6 +491,8 @@ def build_proposal_memory_records(profile: dict[str, Any], state: dict[str, Any]
     records: list[MemoryRecord] = []
 
     for proposal in proposals:
+        if not isinstance(proposal, dict):
+            continue
         proposal_name = str(proposal.get("name") or "proposal")
         proposal_fingerprint = fingerprint_json({
             "domain": domain,
@@ -601,12 +607,14 @@ def build_validation_memory_records(profile: dict[str, Any], state: dict[str, An
     impl_by_class = {
         impl.get("class_name"): impl
         for impl in implementations
-        if impl.get("class_name")
+        if isinstance(impl, dict) and impl.get("class_name")
     }
     domain = str(profile.get("name") or "")
     records: list[MemoryRecord] = []
 
     for validation in validations:
+        if not isinstance(validation, dict):
+            continue
         class_name = str(validation.get("class_name") or "unknown")
         implementation = impl_by_class.get(class_name) or {}
         proposal_name = implementation.get("proposal_name") or validation.get("proposal_name") or class_name
@@ -658,6 +666,8 @@ def build_implementation_memory_records(profile: dict[str, Any], state: dict[str
     records: list[MemoryRecord] = []
 
     for implementation in implementations:
+        if not isinstance(implementation, dict):
+            continue
         class_name = str(implementation.get("class_name") or "unknown")
         proposal_name = str(implementation.get("proposal_name") or class_name)
         script_path = str(implementation.get("script_path") or "")
@@ -710,6 +720,8 @@ def build_experiment_artifact_memory_records(profile: dict[str, Any], state: dic
     records: list[MemoryRecord] = []
 
     for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
         proposal_name = str(artifact.get("proposal_name") or "unknown")
         artifact_id = str(artifact.get("artifact_id") or artifact.get("dataset_id") or fingerprint_json(artifact))
         artifact_type = str(artifact.get("artifact_type") or artifact.get("type") or "experiment_artifact")
@@ -804,6 +816,8 @@ def build_next_step_memory_records(profile: dict[str, Any], state: dict[str, Any
     records: list[MemoryRecord] = []
 
     for step in next_steps:
+        if not isinstance(step, dict):
+            continue
         title = str(step.get("title") or step.get("suggested_direction") or "next_step")
         records.append({
             "record_id": next_step_record_id(domain, direction, step),

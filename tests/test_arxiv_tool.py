@@ -175,48 +175,60 @@ class TestSearchArxiv:
             "2301.12345", "2023-01-01"
         )
 
-        with patch("arxiv.Search") as mock_search:
-            mock_search.return_value.results.return_value = iter([mock_result])
-            papers = search_arxiv("test query", 5)
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_result])
+        with patch("arxiv.Client", return_value=mock_client) as mock_client_ctor:
+            with patch("arxiv.Search") as mock_search:
+                papers = search_arxiv("test query", 5)
 
         assert len(papers) == 1
         assert papers[0]["title"] == "Test Paper"
         assert papers[0]["arxiv_id"] == "2301.12345"
         assert papers[0]["published"] == "2023-01-01"
+        mock_client_ctor.assert_called_once_with(page_size=5)
 
     def test_abstract_newlines_replaced(self):
         mock_result = self._make_arxiv_result(
             "T", "line1\nline2", "url", "id", "2023-01-01"
         )
 
-        with patch("arxiv.Search") as mock_search:
-            mock_search.return_value.results.return_value = iter([mock_result])
-            papers = search_arxiv("q", 1)
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_result])
+        with patch("arxiv.Client", return_value=mock_client):
+            with patch("arxiv.Search"):
+                papers = search_arxiv("q", 1)
 
         assert "\n" not in papers[0]["abstract"]
 
     def test_empty_results(self):
-        with patch("arxiv.Search") as mock_search:
-            mock_search.return_value.results.return_value = iter([])
-            papers = search_arxiv("empty query", 5)
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([])
+        with patch("arxiv.Client", return_value=mock_client):
+            with patch("arxiv.Search"):
+                papers = search_arxiv("empty query", 5)
 
         assert papers == []
 
     def test_max_results_passed_to_arxiv(self):
-        with patch("arxiv.Search") as mock_search:
-            mock_search.return_value.results.return_value = iter([])
-            search_arxiv("q", 17)
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([])
+        with patch("arxiv.Client", return_value=mock_client) as mock_client_ctor:
+            with patch("arxiv.Search") as mock_search:
+                search_arxiv("q", 17)
 
         call_kwargs = mock_search.call_args
         assert call_kwargs.kwargs.get("max_results") == 10 or call_kwargs.args[1] == 10
+        mock_client_ctor.assert_called_once_with(page_size=10)
 
     def test_uses_normalized_query(self):
-        with patch("arxiv.Search") as mock_search:
-            mock_search.return_value.results.return_value = iter([])
-            search_arxiv(
-                "use macd and rsi to trade spy Focus on systematic trading and robust backtesting",
-                5,
-            )
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([])
+        with patch("arxiv.Client", return_value=mock_client):
+            with patch("arxiv.Search") as mock_search:
+                search_arxiv(
+                    "use macd and rsi to trade spy Focus on systematic trading and robust backtesting",
+                    5,
+                )
 
         call_kwargs = mock_search.call_args
         query = call_kwargs.kwargs.get("query") if call_kwargs else ""

@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from core.plugins.job_runner import LocalProcessRunner, RayRunner, get_runner, run_job
+from core.plugins.job_runner import LocalProcessRunner, RayRunner, _ensure_ray, get_runner, run_job
 
 
 def echo_task(payload):
@@ -104,17 +104,25 @@ def test_ray_runner_submit_starts_local_ray_and_passes_runtime_env(tmp_path):
     ray_module = MagicMock()
     ray_module.is_initialized.return_value = False
     ray_module.remote.return_value = ray_remote
+    store = MagicMock()
+    store.upsert.remote.return_value = True
 
-    with patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module):
+    with (
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
+        patch("core.plugins.job_runner._get_or_create_job_store", return_value=store),
+        patch("core.plugins.job_runner._get_existing_job_store", return_value=None),
+    ):
         job = runner.submit(spec)
 
     ray_module.init.assert_called_once_with(ignore_reinit_error=True, namespace="research")
     runtime_env = ray_options.call_args.kwargs["runtime_env"]
     assert runtime_env["env_vars"]["PYTHONPATH"] == "ns_path;repo_path"
     assert "working_dir" not in runtime_env
-    submitted_spec = ray_task.remote.call_args.args[0]
+    submitted_spec, submitted_payload, submitted_actor = ray_task.remote.call_args.args
     assert submitted_spec["job_dir"] == str((tmp_path / "job-ray-local").resolve())
     assert submitted_spec["task_path"] == "tests.test_job_runner.echo_task"
+    assert submitted_payload == {"value": 7}
+    assert submitted_actor == "researcher_framework_job_store::research"
     assert job["status"] == "submitted"
 
 
@@ -138,8 +146,14 @@ def test_ray_runner_submit_connects_to_remote_cluster_when_configured(tmp_path):
     ray_module = MagicMock()
     ray_module.is_initialized.return_value = False
     ray_module.remote.return_value = ray_remote
+    store = MagicMock()
+    store.upsert.remote.return_value = True
 
-    with patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module):
+    with (
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
+        patch("core.plugins.job_runner._get_or_create_job_store", return_value=store),
+        patch("core.plugins.job_runner._get_existing_job_store", return_value=None),
+    ):
         runner.submit(spec)
 
     ray_module.init.assert_called_once_with(ignore_reinit_error=True, address="ray://cluster.example:10001")
@@ -169,11 +183,69 @@ def test_ray_runner_remote_mode_drops_pythonpath_from_runtime_env(tmp_path):
     ray_module = MagicMock()
     ray_module.is_initialized.return_value = False
     ray_module.remote.return_value = ray_remote
+    store = MagicMock()
+    store.upsert.remote.return_value = True
 
-    with patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module):
+    with (
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
+        patch("core.plugins.job_runner._get_or_create_job_store", return_value=store),
+        patch("core.plugins.job_runner._get_existing_job_store", return_value=None),
+    ):
         runner.submit(spec)
 
     runtime_env = ray_options.call_args.kwargs["runtime_env"]
     assert "PYTHONPATH" not in runtime_env["env_vars"]
     assert runtime_env["env_vars"]["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
+    assert "working_dir" in runtime_env
+
+
+def test_ray_runner_check_syncs_remote_status_and_result(tmp_path):
+    runner = RayRunner.__new__(RayRunner)
+    runner._cfg = SimpleNamespace(ray_mode="remote", ray_address="ray://cluster.example:10001", ray_namespace="research")
+    job_dir = tmp_path / "job-ray-check"
+    job_dir.mkdir()
+    (job_dir / "status.json").write_text(json.dumps({"job_id": "job-ray-check", "status": "submitted"}), encoding="utf-8")
+
+    remote_status = {
+        "job_id": "job-ray-check",
+        "job_dir": str(job_dir),
+        "runner": "ray",
+        "status": "succeeded",
+        "result": {"echo": 9},
+    }
+    store = MagicMock()
+    store.get.remote.return_value = remote_status
+    ray_module = MagicMock()
+    ray_module.is_initialized.return_value = True
+    ray_module.get.return_value = remote_status
+
+    with (
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
+        patch("core.plugins.job_runner._get_existing_job_store", return_value=store),
+    ):
+        status = runner.check({"job_id": "job-ray-check", "job_dir": str(job_dir)})
+
+    assert status["status"] == "succeeded"
+    assert json.loads((job_dir / "result.json").read_text(encoding="utf-8")) == {"echo": 9}
+
+
+def test_ensure_ray_logs_dashboard_url_when_initializing():
+    cfg = SimpleNamespace(ray_mode="remote", ray_address="ray://cluster.example:10001", ray_namespace="research")
+    ray_module = MagicMock()
+    ray_module.is_initialized.return_value = False
+    ray_module.get_runtime_context.return_value = SimpleNamespace(dashboard_url="http://ray-head:8265")
+
+    with (
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
+        patch("core.plugins.job_runner.log") as mock_log,
+    ):
+        _ensure_ray(cfg)
+
+    mock_log.info.assert_called_once_with(
+        "job_runner | Ray initialized mode=%s address=%s namespace=%s dashboard=%s",
+        "remote",
+        "ray://cluster.example:10001",
+        "research",
+        "http://ray-head:8265",
+    )
 

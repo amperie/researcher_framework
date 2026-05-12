@@ -174,12 +174,15 @@ def search_arxiv(query: str, max_results: int) -> list[dict]:
     normalized_query = _normalize_query(query)
     effective_max = _effective_max_results(max_results)
     log.info("arxiv_tool | Searching — query=%r, max_results=%d", normalized_query, effective_max)
+    client = arxiv.Client(page_size=effective_max)
     results = list(
-        arxiv.Search(
-            query=normalized_query,
-            max_results=effective_max,
-            sort_by=arxiv.SortCriterion.Relevance,
-        ).results()
+        client.results(
+            arxiv.Search(
+                query=normalized_query,
+                max_results=effective_max,
+                sort_by=arxiv.SortCriterion.Relevance,
+            )
+        )
     )
     papers = []
     for r in results:

@@ -37,11 +37,14 @@ def plan_implementation_node(state: ResearchState, profile: dict) -> dict:
 
     base_class_docs = _base_class_context(profile)
     scan_constraints = _scan_constraints_context(profile)
+    implementation_examples = _load_implementation_examples(profile)
 
     user_content = (
         f"Available base classes:\n{base_class_docs}\n\n"
         f"Scan field constraints:\n{scan_constraints}\n"
+        f"Reference implementation examples:\n{implementation_examples}\n\n"
         f"{f'Operator proposal-seed notes:\n{proposal_seed_notes}\n\n' if proposal_seed_notes else ''}"
+        f"Proposal execution context:\n{_proposal_execution_context(proposals)}\n\n"
         f"Proposals to plan:\n{json.dumps(proposals, indent=2)}"
     )
 
@@ -111,6 +114,64 @@ def _scan_constraints_context(profile: dict) -> str:
     )
 
 
+def _load_implementation_examples(profile: dict) -> str:
+    examples = profile.get("implementation_examples") or []
+    if not examples:
+        return "(none)"
+
+    rendered: list[str] = []
+    for example in examples:
+        path = example.get("path", "")
+        purpose = example.get("purpose", "")
+        rendered.append(f"Example path: {path}\nPurpose: {purpose}")
+    return "\n\n".join(rendered)
+
+
+def _proposal_execution_context(proposals: list[dict]) -> str:
+    summarized: list[dict] = []
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            continue
+        symbol = proposal.get("symbol")
+        symbols = proposal.get("symbols")
+        universe = proposal.get("universe")
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        elif isinstance(symbols, (tuple, set)):
+            symbols = list(symbols)
+        if isinstance(universe, str):
+            universe = [universe]
+        elif isinstance(universe, (tuple, set)):
+            universe = list(universe)
+        expected_symbols: list[str] = []
+        if symbol:
+            expected_symbols.append(str(symbol))
+        if isinstance(symbols, list):
+            expected_symbols.extend(str(item) for item in symbols if item)
+        if isinstance(universe, list):
+            expected_symbols.extend(str(item) for item in universe if item)
+        summarized.append({
+            "proposal_name": proposal.get("name"),
+            "symbol": symbol,
+            "symbols": symbols,
+            "universe": universe,
+            "expected_symbols": list(dict.fromkeys(expected_symbols)),
+            "timeframe": proposal.get("timeframe"),
+            "data_source": proposal.get("data_source"),
+            "mode": proposal.get("mode"),
+        })
+    guidance = {
+        "guidance": [
+            "Preserve proposal flexibility: fixed-symbol strategies are allowed when explicitly requested by the proposal.",
+            "Plans must state where expected symbols come from, preferably cfg['symbol'], cfg['symbols'], or the declared proposal universe.",
+            "Plans should avoid hardcoded ticker literals unless the proposal explicitly fixes them.",
+            "Do not reproduce logic already provided by Algorithm or Portfolio base classes.",
+        ],
+        "proposals": summarized,
+    }
+    return json.dumps(guidance, indent=2)
+
+
 def _truncate_text(value: str, limit: int) -> str:
     text = str(value or "")
     if len(text) <= limit:
@@ -138,6 +199,16 @@ def _normalize_implementation_plans(
             continue
 
         if isinstance(item, str) and item.strip():
+            parsed = _coerce_plan_string(item)
+            if isinstance(parsed, dict):
+                plan = dict(parsed)
+                if not plan.get("proposal_name") and idx < len(proposal_names) and proposal_names[idx]:
+                    plan["proposal_name"] = proposal_names[idx]
+                if not plan.get("class_name"):
+                    seed_name = str(plan.get("proposal_name") or (proposal_names[idx] if idx < len(proposal_names) else "") or "GeneratedPlan")
+                    plan["class_name"] = _default_class_name(seed_name)
+                normalized.append(plan)
+                continue
             proposal_name = proposal_names[idx] if idx < len(proposal_names) and proposal_names[idx] else f"proposal_{idx + 1}"
             errors.append(
                 f"plan_implementation: dropped malformed plan entry for {proposal_name}: expected object, got string"
@@ -151,6 +222,28 @@ def _normalize_implementation_plans(
     if not normalized and raw_plans:
         errors.append("plan_implementation: no valid implementation-plan objects were returned by the LLM")
     return normalized, errors
+
+
+def _coerce_plan_string(value: str) -> dict | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    candidates = [text]
+    if text.startswith("```"):
+        stripped = text.strip("`").strip()
+        if "\n" in stripped:
+            _, _, remainder = stripped.partition("\n")
+            candidates.append(remainder.strip())
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def _default_class_name(proposal_name: str) -> str:

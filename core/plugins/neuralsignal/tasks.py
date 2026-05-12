@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import tempfile
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
 from core.utils.logger import get_logger
+from core.utils.temp_paths import make_temp_dir
 
 log = get_logger(__name__)
 
@@ -283,7 +283,7 @@ def _save_figure(figure: Any, name: str) -> str:
         return ""
 
     safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name.strip()) or "figure"
-    out_dir = Path(tempfile.mkdtemp(prefix="nsr_figures_"))
+    out_dir = make_temp_dir(prefix="nsr_figures_", category="neuralsignal")
     out_path = out_dir / f"{safe_name}.png"
     try:
         figure.savefig(out_path)
