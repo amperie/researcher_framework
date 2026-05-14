@@ -1,14 +1,65 @@
 # researcher_framework
 
-`researcher_framework` is a configuration-driven, plug-and-play research automation system built on LangGraph. It takes a research direction, runs an end-to-end agentic loop around it, and persists both the reasoning trail and the experimental outputs. The graph stays generic while domain behavior lives in profile YAML and plugin adapters.
+`researcher_framework` is a configuration-driven, plug-and-play research automation system built on LangGraph. It can run in two complementary modes: a structured pipeline for reproducible experiment execution, and an interactive brainstorm mode for open-ended exploration before committing to experiments. Both modes use the same profile system, memory layer, and domain adapters, so exploratory reasoning can feed directly into concrete pipeline runs.
 
 The intent is extensibility without graph rewrites. New domains are mostly described through configuration: prompts, research tools, datasets, base classes, evaluation thresholds, storage targets, and adapter wiring. The same graph can drive local execution, async subprocess jobs, or Ray-backed runners without changing the overall profile shape.
 
-![Architecture overview](docs/architecture_overview_v2.png)
+![Researcher framework operating modes](docs/researcher_framework_modes.png)
+
+## Two Ways To Run Research
+
+The framework has two first-class operating modes.
+
+### Structured Pipeline Mode
+
+Pipeline mode is the deterministic research execution path. It starts from a research direction or a saved seed, follows the active profile's `pipeline.steps`, writes state snapshots after each node, and produces durable outputs: proposals, generated code, validation results, datasets or execution artifacts, metrics, evaluation summaries, stored memory records, and next-step recommendations.
+
+Use pipeline mode when you already know the direction you want to test, or when a brainstorm/session/UI handoff has produced concrete proposals.
+
+```bash
+uv run python main.py --mode pipeline --profile neuralsignal --direction "attention head specialization"
+uv run python main.py --profile neuralsignal --proposal-seed "proposal_seed:..."
+uv run python main.py --profile neuralsignal --resume-from "experiment_result:..." --start-node implement
+```
+
+The graph remains profile-driven. For example, a profile can run the full synchronous path, use async `submit_experiment_jobs` / `check_experiment_jobs`, or start from a later node when the initial state already contains proposals or implementation plans.
+
+### Brainstorm Mode
+
+Brainstorm mode is the exploratory path. It is designed for cases where the agent should reason more freely before the structured pipeline takes over: compare high-level concepts, pull in prior memory, challenge assumptions, narrow open questions, sketch candidate ideas, and turn the discussion into a draft execution plan.
+
+```bash
+uv run python main.py --mode brainstorm --profile neuralsignal --direction "generalization signals across attention heads"
+uv run python main.py --mode brainstorm --profile trading --resume-brainstorm "<session-id>"
+```
+
+Brainstorm sessions are configured by files such as `configs/brainstorm/default.brainstorm.yaml`. The default setup uses facilitator, skeptic, and researcher roles. The researcher role can call configured research tools, such as profile context and memory retrieval, while the facilitator maintains consensus and drafts a plan.
+
+During a paused brainstorm session, the interactive commands are:
+
+```text
+help, continue, summary, research, plan, feedback <text>, approve_plan, execute, exit
+```
+
+The important boundary is that brainstorm mode does not replace the structured pipeline. It produces a `plan_draft` with some combination of:
+
+- `research_direction`
+- `refined_ideas`
+- `proposals`
+- `implementation_plans`
+- constraints, exclusions, success criteria, and unresolved questions
+
+When you run `execute`, the brainstorm handoff becomes the initial pipeline state. The pipeline then starts at the most appropriate node:
+
+- if the brainstorm already produced `implementation_plans`, execution can start at `implement`
+- if it produced `proposals`, execution starts at `plan_implementation`
+- if it only produced ideas or direction, execution starts at `propose_experiments`
+
+That handoff gives the agent room to explore and critique possibilities, while keeping experiment execution, validation, storage, and evaluation reproducible.
 
 ## What It Does
 
-Given a direction like `"attention head specialization"` or a seed from a prior run, the pipeline can:
+Given a direction like `"attention head specialization"`, a brainstorm handoff, or a seed from a prior run, the structured pipeline can:
 
 1. run profile-configured research tools and score returned artifacts
 2. synthesise a research summary and generate experiment ideas
