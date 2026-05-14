@@ -22,6 +22,7 @@ _HTML_TIMEOUT = 15
 _DEFAULT_SEARCH_RESULTS = 8
 _MAX_SEARCH_RESULTS = 10
 _MAX_QUERY_CHARS = 180
+_SEARCH_CACHE_VERSION = "2"
 
 
 class _TextExtractor(HTMLParser):
@@ -109,15 +110,36 @@ def _effective_max_results(max_results: int) -> int:
     return min(requested, _MAX_SEARCH_RESULTS)
 
 
-def _search_cache_path(query: str, max_results: int) -> Path:
+def _normalize_categories(categories: list[str] | None = None) -> list[str]:
+    normalized: list[str] = []
+    for item in categories or []:
+        value = " ".join(str(item or "").split())
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _build_query(query: str, categories: list[str] | None = None) -> str:
+    normalized_query = _normalize_query(query)
+    normalized_categories = _normalize_categories(categories)
+    if not normalized_categories:
+        return normalized_query
+    category_clause = " OR ".join(f"cat:{item}" for item in normalized_categories)
+    return f"({normalized_query}) AND ({category_clause})"
+
+
+def _search_cache_path(query: str, max_results: int, categories: list[str] | None = None) -> Path:
     normalized = _normalize_query(query)
     effective_max = _effective_max_results(max_results)
-    key = sha256(f"{normalized}|{effective_max}".encode("utf-8")).hexdigest()[:24]
+    normalized_categories = ",".join(_normalize_categories(categories))
+    key = sha256(
+        f"{_SEARCH_CACHE_VERSION}|{normalized}|{effective_max}|{normalized_categories}".encode("utf-8")
+    ).hexdigest()[:24]
     return _SEARCH_CACHE_DIR / f"{key}.json"
 
 
-def load_cached_search(query: str, max_results: int) -> list[dict] | None:
-    path = _search_cache_path(query, max_results)
+def load_cached_search(query: str, max_results: int, categories: list[str] | None = None) -> list[dict] | None:
+    path = _search_cache_path(query, max_results, categories)
     if not path.exists():
         return None
     try:
@@ -129,16 +151,17 @@ def load_cached_search(query: str, max_results: int) -> list[dict] | None:
     return papers if isinstance(papers, list) else None
 
 
-def save_search(query: str, max_results: int, papers: list[dict]) -> None:
-    path = _search_cache_path(query, max_results)
+def save_search(query: str, max_results: int, papers: list[dict], categories: list[str] | None = None) -> None:
+    path = _search_cache_path(query, max_results, categories)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "query": _normalize_query(query),
         "max_results": _effective_max_results(max_results),
+        "categories": _normalize_categories(categories),
         "papers": papers,
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    log.debug("arxiv_tool | Search cached — %s", path.name)
+    log.debug("arxiv_tool | Search cached - %s", path.name)
 
 
 def load_cached_digest(arxiv_id: str) -> dict | None:
@@ -156,24 +179,26 @@ def save_digest(arxiv_id: str, record: dict) -> None:
     path = _digest_cache_path(arxiv_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
-    log.debug("arxiv_tool | Digest cached — %s", arxiv_id)
+    log.debug("arxiv_tool | Digest cached - %s", arxiv_id)
 
 
-def search_arxiv(query: str, max_results: int) -> list[dict]:
+def search_arxiv(query: str, max_results: int, categories: list[str] | None = None) -> list[dict]:
     """Search arxiv and return scored paper dicts."""
-    cached = load_cached_search(query, max_results)
+    normalized_categories = _normalize_categories(categories)
+    cached = load_cached_search(query, max_results, normalized_categories)
     if cached is not None:
         log.info(
-            "arxiv_tool | Search cache hit — query=%r, max_results=%d, papers=%d",
-            _normalize_query(query),
+            "arxiv_tool | Search cache hit query=%r categories=%s max_results=%d papers=%d",
+            _build_query(query, normalized_categories),
+            normalized_categories,
             _effective_max_results(max_results),
             len(cached),
         )
         return cached
 
-    normalized_query = _normalize_query(query)
+    normalized_query = _build_query(query, normalized_categories)
     effective_max = _effective_max_results(max_results)
-    log.info("arxiv_tool | Searching — query=%r, max_results=%d", normalized_query, effective_max)
+    log.info("arxiv_tool | Searching query=%r max_results=%d", normalized_query, effective_max)
     client = arxiv.Client(page_size=effective_max)
     results = list(
         client.results(
@@ -185,15 +210,16 @@ def search_arxiv(query: str, max_results: int) -> list[dict]:
         )
     )
     papers = []
-    for r in results:
+    for result in results:
         papers.append({
-            "title": r.title,
-            "abstract": r.summary.replace("\n", " "),
-            "url": r.entry_id,
-            "arxiv_id": r.get_short_id(),
-            "published": r.published.date().isoformat(),
+            "title": result.title,
+            "abstract": result.summary.replace("\n", " "),
+            "url": result.entry_id,
+            "arxiv_id": result.get_short_id(),
+            "published": result.published.date().isoformat(),
+            "categories": list(getattr(result, "categories", None) or []),
         })
-    save_search(query, max_results, papers)
+    save_search(query, max_results, papers, normalized_categories)
     log.debug("arxiv_tool | Returned %d papers", len(papers))
     return papers
 
@@ -201,7 +227,7 @@ def search_arxiv(query: str, max_results: int) -> list[dict]:
 def download_paper_text(arxiv_id: str) -> str | None:
     """Download plain text from the arxiv HTML page for *arxiv_id*."""
     url = f"https://arxiv.org/html/{arxiv_id}"
-    log.debug("arxiv_tool | Fetching HTML — %s", url)
+    log.debug("arxiv_tool | Fetching HTML - %s", url)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "ResearchPipeline/1.0"})
         with urllib.request.urlopen(req, timeout=_HTML_TIMEOUT) as resp:

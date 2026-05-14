@@ -15,6 +15,7 @@ from core.utils.profile_loader import (
     load_profile,
     load_profile_cached,
 )
+from core.tools import research_tool_catalog
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ class TestLoadProfile:
     def test_missing_required_keys_raises(self, tmp_path):
         bad = tmp_path / "bad.yaml"
         bad.write_text(yaml.dump({"name": "x", "pipeline": {}}), encoding="utf-8")
-        with patch("utils.profile_loader._PROFILES_DIR", tmp_path):
+        with patch("core.utils.profile_loader._PROFILES_DIR", tmp_path):
             with pytest.raises(ValueError, match="missing required keys"):
                 load_profile("bad")
 
@@ -65,17 +66,52 @@ class TestLoadProfile:
         incomplete = {"pipeline": {}, "llm": {}, "prompts": {}}
         f = tmp_path / "incomplete.yaml"
         f.write_text(yaml.dump(incomplete), encoding="utf-8")
-        with patch("utils.profile_loader._PROFILES_DIR", tmp_path):
+        with patch("core.utils.profile_loader._PROFILES_DIR", tmp_path):
             with pytest.raises(ValueError, match="missing required keys"):
                 load_profile("incomplete")
 
     def test_valid_profile_returns_dict(self, tmp_path):
         f = tmp_path / "valid.yaml"
         f.write_text(yaml.dump(_VALID_PROFILE), encoding="utf-8")
-        with patch("utils.profile_loader._PROFILES_DIR", tmp_path):
+        with patch("core.utils.profile_loader._PROFILES_DIR", tmp_path):
             profile = load_profile("valid")
         assert profile["name"] == "test"
         assert profile["pipeline"]["steps"] == ["research", "ideate"]
+
+    def test_resolves_research_tool_refs(self, tmp_path):
+        catalog_dir = tmp_path / "research_tools"
+        catalog_dir.mkdir()
+        (catalog_dir / "catalog.yaml").write_text(
+            yaml.dump({
+                "tools": {
+                    "test_arxiv": {
+                        "tool": "core.tools.research_tools.collect_arxiv",
+                        "name": "arxiv",
+                        "max_results": 8,
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+        profile_path = tmp_path / "valid.yaml"
+        profile_path.write_text(
+            yaml.dump({
+                **_VALID_PROFILE,
+                "research": {
+                    "tools": [
+                        {"ref": "test_arxiv", "relevance_score_threshold": 6},
+                    ]
+                },
+            }),
+            encoding="utf-8",
+        )
+        with patch("core.utils.profile_loader._PROFILES_DIR", tmp_path):
+            with patch.object(research_tool_catalog, "RESEARCH_TOOL_CATALOG_DIR", catalog_dir):
+                profile = load_profile("valid")
+        assert profile["research"]["tools"][0]["tool"] == "core.tools.research_tools.collect_arxiv"
+        assert profile["research"]["tools"][0]["name"] == "arxiv"
+        assert profile["research"]["tools"][0]["max_results"] == 8
+        assert profile["research"]["tools"][0]["relevance_score_threshold"] == 6
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +143,7 @@ class TestListProfiles:
         assert profiles == sorted(profiles)
 
     def test_missing_dir_returns_empty(self):
-        with patch("utils.profile_loader._PROFILES_DIR", Path("/nonexistent_path_xyz")):
+        with patch("core.utils.profile_loader._PROFILES_DIR", Path("/nonexistent_path_xyz")):
             result = list_profiles()
         assert result == []
 

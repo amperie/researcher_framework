@@ -15,6 +15,7 @@ In every other module::
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 import logging.handlers
 import sys
@@ -182,6 +183,28 @@ def _load_yaml_section(config_path: str) -> dict[str, Any]:
 def get_logger(name: str) -> logging.Logger:
     """Return a named logger. Always call as ``get_logger(__name__)``."""
     return logging.getLogger(name)
+
+
+@contextmanager
+def temporarily_raise_console_log_level(level: int | str) -> Any:
+    """Temporarily raise console handler levels, then restore them."""
+    target_level = _level(level)
+    root = logging.getLogger()
+    console_handlers: list[tuple[logging.Handler, int]] = []
+    for handler in root.handlers:
+        if isinstance(handler, logging.StreamHandler):
+            stream = getattr(handler, "stream", None)
+            if stream in (sys.stdout, sys.stderr):
+                console_handlers.append((handler, handler.level))
+
+    try:
+        for handler, original_level in console_handlers:
+            if original_level < target_level:
+                handler.setLevel(target_level)
+        yield
+    finally:
+        for handler, original_level in console_handlers:
+            handler.setLevel(original_level)
 
 
 class _LoggerPrefixFilter(logging.Filter):

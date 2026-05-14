@@ -41,9 +41,10 @@ def collect_arxiv(
     research_cfg = profile.get("research") or {}
     domain_context = research_cfg.get("domain_context", "")
     max_results = int(tool_cfg.get("max_results", 20))
+    categories = [str(item) for item in (tool_cfg.get("categories") or []) if str(item).strip()]
     query = tool_cfg.get("query") or f"{direction} {domain_context}"[:300]
 
-    papers = search_arxiv(query, max_results)
+    papers = search_arxiv(query, max_results, categories=categories)
     artifacts: list[dict[str, Any]] = []
     for paper in papers:
         artifacts.append({
@@ -56,7 +57,7 @@ def collect_arxiv(
             "published": paper.get("published", ""),
             "metadata": {
                 "arxiv_id": paper.get("arxiv_id", ""),
-                "categories": tool_cfg.get("categories", []),
+                "categories": paper.get("categories") or categories,
             },
             "raw": paper,
         })

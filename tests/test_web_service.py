@@ -468,3 +468,44 @@ def test_get_run_bundle_includes_proposed_next_steps_panel(monkeypatch):
     assert "Suggested Direction: Probe residual stream signals around hallucination onset" in panel["body"]
     assert bundle["run"]["next_steps"][0]["record_id"] == "next_step:1"
     assert bundle["run"]["next_steps"][0]["copy_command"] == 'uv run python main.py --profile neuralsignal --next-step "next_step:1"'
+
+
+def test_create_brainstorm_session_accepts_source_experiment_seed(monkeypatch):
+    profile = {"name": "neuralsignal"}
+    captured: dict[str, object] = {}
+
+    class _FakeEngine:
+        def __init__(self, _profile, _cfg) -> None:
+            return None
+
+        def run_until_pause(self, state):
+            state["status"] = "awaiting_user"
+            state["last_summary"] = "seeded"
+            return state
+
+    monkeypatch.setattr(service, "load_profile", lambda _profile_name: profile)
+    monkeypatch.setattr(service, "load_brainstorm_config", lambda _path=None: {"name": "cfg", "path": "cfg", "roles": []})
+    monkeypatch.setattr(
+        service,
+        "resolve_brainstorm_seed",
+        lambda *_args, **_kwargs: {"research_direction": "seeded direction", "source_experiment_record_id": "exp-1"},
+    )
+    monkeypatch.setattr(service, "BrainstormEngine", _FakeEngine)
+
+    def _fake_create_state(**kwargs):
+        captured.update(kwargs)
+        return {
+            "session_id": "brainstorm-1",
+            "status": "running",
+            "current_goal": kwargs["direction"],
+            "last_summary": "",
+        }
+
+    monkeypatch.setattr(service, "create_brainstorm_state", _fake_create_state)
+    monkeypatch.setattr(service, "persist_brainstorm_session", lambda *_args, **_kwargs: {})
+
+    result = service.create_brainstorm_session("neuralsignal", {"source_experiment": "exp-1"})
+
+    assert captured["direction"] == "seeded direction"
+    assert captured["seed"]["source_experiment_record_id"] == "exp-1"
+    assert result["status"] == "awaiting_user"

@@ -5,8 +5,10 @@ import urllib.error
 from unittest.mock import MagicMock, patch
 
 from core.tools.arxiv_tool import (
+    _build_query,
     _effective_max_results,
     _html_to_text,
+    _normalize_categories,
     _normalize_query,
     _safe_id,
     download_paper_text,
@@ -61,6 +63,17 @@ class TestEffectiveMaxResults:
 
     def test_defaults_when_zero(self):
         assert _effective_max_results(0) == 8
+
+
+class TestCategories:
+    def test_normalize_categories_dedupes_and_strips(self):
+        assert _normalize_categories([" q-fin.TR ", "q-fin.TR", "", "cs.LG"]) == ["q-fin.TR", "cs.LG"]
+
+    def test_build_query_includes_categories(self):
+        built = _build_query("predict spy direction", ["q-fin.TR", "cs.LG"])
+        assert "predict spy direction" in built
+        assert "cat:q-fin.TR" in built
+        assert "cat:cs.LG" in built
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +177,7 @@ class TestSearchArxiv:
         r.summary = abstract
         r.entry_id = entry_id
         r.get_short_id.return_value = short_id
+        r.categories = ["q-fin.TR"]
         published = MagicMock()
         published.date.return_value.isoformat.return_value = published_date
         r.published = published
@@ -234,12 +248,24 @@ class TestSearchArxiv:
         query = call_kwargs.kwargs.get("query") if call_kwargs else ""
         assert "Focus on systematic trading" not in query
 
+    def test_includes_categories_in_search_query(self):
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([])
+        with patch("arxiv.Client", return_value=mock_client):
+            with patch("arxiv.Search") as mock_search:
+                search_arxiv("predict spy direction", 5, categories=["q-fin.TR", "cs.LG"])
+
+        call_kwargs = mock_search.call_args
+        query = call_kwargs.kwargs.get("query") if call_kwargs else ""
+        assert "cat:q-fin.TR" in query
+        assert "cat:cs.LG" in query
+
     def test_returns_cached_search_without_hitting_arxiv(self, tmp_path):
         papers = [{"title": "Cached Paper"}]
         with patch("core.tools.arxiv_tool._SEARCH_CACHE_DIR", tmp_path):
-            save_search("test query", 5, papers)
+            save_search("test query", 5, papers, ["q-fin.TR"])
             with patch("arxiv.Search") as mock_search:
-                loaded = search_arxiv("test query", 5)
+                loaded = search_arxiv("test query", 5, categories=["q-fin.TR"])
         assert loaded == papers
         mock_search.assert_not_called()
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -19,7 +21,7 @@ from core.handoffs import resolve_next_step_seed, resolve_proposal_seed, resolve
 from core.graph.builder import pipeline_steps
 from core.maintenance.dev_cleanup import run_periodic_dev_cleanup
 from core.pipeline_resume import build_resume_state, ensure_resume_state_for_node
-from core.utils.logger import setup_logging, get_logger
+from core.utils.logger import setup_logging, get_logger, temporarily_raise_console_log_level
 
 setup_logging()
 log = get_logger(__name__)
@@ -35,8 +37,12 @@ _CLI_EPILOG = """Examples:
 
   Brainstorm mode:
     uv run python main.py --mode brainstorm --profile neuralsignal --direction "new detector direction"
-    uv run python main.py --mode brainstorm --profile neuralsignal --direction "new detector direction" --brainstorm-config configs/brainstorm/default.brainstorm.yaml
+    uv run python main.py --mode brainstorm --profile trading --config configs/brainstorm/default.trading.brainstorm.yaml
     uv run python main.py --mode brainstorm --profile trading --resume-brainstorm "<session-id>"
+    uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123"
+    uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123" --proposal-seed "proposal_seed:123"
+    uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123" --handoff "run_handoff:123"
+    uv run python main.py --mode brainstorm --profile trading --next-step "next_step:123" --source-experiment "exp-123"
 
   Discovery:
     uv run python main.py --list-profiles
@@ -46,6 +52,52 @@ _CLI_EPILOG = """Examples:
 Interactive brainstorm commands after pause:
   help, continue, summary, research, plan, feedback <text>, approve_plan, execute, exit
 """
+
+
+class _BrainstormSpinner:
+    def __init__(self) -> None:
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._message = ""
+        self._stream = sys.stdout
+
+    def start(self, message: str) -> None:
+        self.stop()
+        self._message = str(message or "").strip() or "thinking"
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, name="brainstorm-spinner", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        thread = self._thread
+        if thread is None:
+            return
+        self._stop_event.set()
+        thread.join(timeout=0.5)
+        self._thread = None
+        self._clear_line()
+
+    def _run(self) -> None:
+        frames = ["|", "/", "-", "\\"]
+        index = 0
+        while not self._stop_event.is_set():
+            frame = frames[index % len(frames)]
+            print(f"\r[{frame}] {self._message}...", end="", file=self._stream, flush=True)
+            index += 1
+            if self._stop_event.wait(0.1):
+                break
+
+    def _clear_line(self) -> None:
+        print("\r" + (" " * 80) + "\r", end="", file=self._stream, flush=True)
+
+
+_BRAINSTORM_ROLE_COLORS = {
+    "facilitator": "\x1b[38;5;81m",
+    "skeptic": "\x1b[38;5;179m",
+    "researcher": "\x1b[38;5;114m",
+    "seed": "\x1b[38;5;141m",
+}
+_ANSI_RESET = "\x1b[0m"
 
 
 def _write_state_snapshot(profile_name: str, step_name: str, state: dict[str, Any]) -> None:
@@ -59,6 +111,34 @@ def _write_state_snapshot(profile_name: str, step_name: str, state: dict[str, An
     out_path = dev_path("state", profile_name, f"after_{step_name}.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(serialisable, indent=2, default=str), encoding="utf-8")
+
+
+def _format_brainstorm_cli_output(text: str) -> str:
+    raw = str(text or "")
+    lines = raw.splitlines()
+    if not lines:
+        return raw
+    formatted: list[str] = []
+    for line in lines:
+        formatted.append(_colorize_brainstorm_role_line(line))
+    suffix = "\n" if raw.endswith("\n") else ""
+    return "\n".join(formatted) + suffix
+
+
+def _colorize_brainstorm_role_line(line: str) -> str:
+    stripped = str(line or "")
+    if not stripped.startswith("["):
+        return stripped
+    closing = stripped.find("]")
+    if closing <= 1:
+        return stripped
+    role_name = stripped[1:closing].strip().lower()
+    color = _BRAINSTORM_ROLE_COLORS.get(role_name)
+    if not color:
+        return stripped
+    prefix = stripped[: closing + 1]
+    rest = stripped[closing + 1 :]
+    return f"{color}{prefix}{_ANSI_RESET}{rest}"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -80,6 +160,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Research direction / question to investigate.")
     parser.add_argument(
         "--brainstorm-config",
+        "--config",
         type=str,
         default=None,
         help="Path to brainstorm.yaml config for brainstorm mode.",
@@ -94,25 +175,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--source-experiment",
         type=str,
         default=None,
-        help="Source experiment record id to seed from the latest saved UI handoff.",
+        help="Source experiment record id used to seed pipeline execution or import prior run context into brainstorm mode.",
     )
     parser.add_argument(
         "--handoff",
         type=str,
         default=None,
-        help="Explicit saved handoff record id to launch from.",
+        help="Explicit saved run_handoff record id. In pipeline mode it launches from that handoff; in brainstorm mode it imports that handoff context.",
     )
     parser.add_argument(
         "--proposal-seed",
         type=str,
         default=None,
-        help="Explicit saved proposal seed record id to launch from proposal stage.",
+        help="Explicit saved proposal_seed record id. In pipeline mode it launches from proposal stage; in brainstorm mode it imports that proposal into the session.",
     )
     parser.add_argument(
         "--next-step",
         type=str,
         default=None,
-        help="Explicit persisted next_step record id to launch as the next direction.",
+        help="Explicit persisted next_step record id. In pipeline mode it launches that next step; in brainstorm mode it imports that next-step proposal into the session.",
     )
     parser.add_argument(
         "--resume-from",
@@ -682,20 +763,40 @@ def _run_brainstorm_mode(args: argparse.Namespace, profile_name: str, profile: d
     from core.brainstorm import (
         BrainstormEngine,
         HELP_TEXT,
+        BrainstormConfigError,
         create_brainstorm_state,
         execute_brainstorm_handoff,
+        list_brainstorm_configs,
         load_brainstorm_config,
         load_brainstorm_session,
         persist_brainstorm_session,
+        resolve_brainstorm_seed,
     )
 
-    brainstorm_cfg = load_brainstorm_config(args.brainstorm_config)
+    brainstorm_cfg = _load_brainstorm_config_for_cli(
+        profile_name=profile_name,
+        path=args.brainstorm_config,
+        load_brainstorm_config_fn=load_brainstorm_config,
+        list_brainstorm_configs_fn=list_brainstorm_configs,
+        error_type=BrainstormConfigError,
+    )
     engine = BrainstormEngine(profile, brainstorm_cfg)
 
     if args.resume_brainstorm:
         state = load_brainstorm_session(profile, str(args.resume_brainstorm))
     else:
-        direction = str(args.direction or "").strip()
+        try:
+            seed = resolve_brainstorm_seed(
+                profile,
+                source_experiment_record_id=str(args.source_experiment or ""),
+                handoff_record_id=str(args.handoff or ""),
+                proposal_seed_record_id=str(args.proposal_seed or ""),
+                next_step_record_id=str(args.next_step or ""),
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        direction = str(seed.get("research_direction") or args.direction or "").strip()
         if not direction:
             direction = input(f"[{profile_name}] Brainstorm direction: ").strip()
         if not direction:
@@ -705,40 +806,135 @@ def _run_brainstorm_mode(args: argparse.Namespace, profile_name: str, profile: d
             profile_name=profile_name,
             direction=direction,
             brainstorm_cfg=brainstorm_cfg,
+            seed=seed,
         )
 
     def _emit(text: str) -> None:
         if text:
-            print(text.rstrip())
+            print(_format_brainstorm_cli_output(text).rstrip())
 
-    state = engine.run_until_pause(state, emit=_emit)
-    persist_brainstorm_session(profile, brainstorm_cfg, state)
+    spinner = _BrainstormSpinner()
 
-    while True:
-        if state.get("status") == "cancelled":
-            print("Brainstorm session exited.")
-            return
-        if state.get("status") == "approved_for_execution":
-            start_node, _result = execute_brainstorm_handoff(
+    def _on_role_start(role: dict[str, Any], _round_index: int) -> None:
+        role_name = str(role.get("name") or role.get("persona_type") or "role").strip()
+        spinner.start(f"{role_name} thinking")
+
+    def _on_role_end(_role: dict[str, Any], _round_index: int) -> None:
+        spinner.stop()
+
+    try:
+        with temporarily_raise_console_log_level("WARNING"):
+            state = engine.run_until_pause(
                 state,
-                brainstorm_cfg,
-                build_initial_state_fn=build_initial_state,
-                run_pipeline_graph_fn=run_pipeline_graph,
-                profile_name=profile_name,
-                profile=profile,
+                emit=_emit,
+                on_role_start=_on_role_start,
+                on_role_end=_on_role_end,
             )
-            persist_brainstorm_session(profile, brainstorm_cfg, state)
-            print(f"Brainstorm handoff executed from node: {start_node}")
-            return
-
-        command = input("brainstorm> ").strip()
-        if not command:
-            command = "continue"
-        if command == "help":
-            print(HELP_TEXT.rstrip())
-            continue
-        state = engine.apply_command(state, command, emit=_emit)
         persist_brainstorm_session(profile, brainstorm_cfg, state)
+
+        while True:
+            if state.get("status") == "cancelled":
+                print("Brainstorm session exited.")
+                return
+            if state.get("status") == "approved_for_execution":
+                start_node, _result = execute_brainstorm_handoff(
+                    state,
+                    brainstorm_cfg,
+                    build_initial_state_fn=build_initial_state,
+                    run_pipeline_graph_fn=run_pipeline_graph,
+                    profile_name=profile_name,
+                    profile=profile,
+                )
+                persist_brainstorm_session(profile, brainstorm_cfg, state)
+                print(f"Brainstorm handoff executed from node: {start_node}")
+                return
+
+            command = input("brainstorm> ").strip()
+            if not command:
+                command = "continue"
+            if command == "help":
+                print(HELP_TEXT.rstrip())
+                continue
+            if command == "execute":
+                state = engine.apply_command(
+                    state,
+                    command,
+                    emit=_emit,
+                    on_role_start=_on_role_start,
+                    on_role_end=_on_role_end,
+                )
+            else:
+                with temporarily_raise_console_log_level("WARNING"):
+                    state = engine.apply_command(
+                        state,
+                        command,
+                        emit=_emit,
+                        on_role_start=_on_role_start,
+                        on_role_end=_on_role_end,
+                    )
+            persist_brainstorm_session(profile, brainstorm_cfg, state)
+    finally:
+        spinner.stop()
+
+
+def _load_brainstorm_config_for_cli(
+    *,
+    profile_name: str,
+    path: str | None,
+    load_brainstorm_config_fn,
+    list_brainstorm_configs_fn,
+    error_type,
+) -> dict[str, Any]:
+    if not path:
+        config_paths = list_brainstorm_configs_fn()
+        if config_paths:
+            selected = _select_brainstorm_config_path(profile_name=profile_name, config_paths=config_paths)
+            return load_brainstorm_config_fn(str(selected))
+    try:
+        return load_brainstorm_config_fn(path)
+    except error_type as exc:
+        if path:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        config_paths = list_brainstorm_configs_fn()
+        if not config_paths:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        selected = _select_brainstorm_config_path(profile_name=profile_name, config_paths=config_paths)
+        return load_brainstorm_config_fn(str(selected))
+
+
+def _select_brainstorm_config_path(*, profile_name: str, config_paths: list[Any]) -> Any:
+    normalized_paths = [str(item) for item in config_paths]
+    if len(normalized_paths) == 1:
+        print(f"[{profile_name}] Brainstorm config: {normalized_paths[0]}")
+        return config_paths[0]
+    default_index = _default_brainstorm_config_index(profile_name=profile_name, config_paths=normalized_paths)
+    print(f"\n[{profile_name}] Brainstorm config:")
+    for index, config_path in enumerate(normalized_paths, 1):
+        marker = " (default)" if index == default_index else ""
+        print(f"  {index}. {config_path.rsplit('/', 1)[-1].rsplit(chr(92), 1)[-1]}{marker}")
+    choice = input(f"Choose brainstorm config [default {default_index}]: ").strip()
+    selected_index = default_index
+    if choice:
+        if not choice.isdigit():
+            print(f"Error: invalid brainstorm config selection {choice!r}.", file=sys.stderr)
+            sys.exit(1)
+        selected_index = int(choice)
+    if not (1 <= selected_index <= len(normalized_paths)):
+        print(f"Error: invalid brainstorm config selection {selected_index!r}.", file=sys.stderr)
+        sys.exit(1)
+    return config_paths[selected_index - 1]
+
+
+def _default_brainstorm_config_index(*, profile_name: str, config_paths: list[str]) -> int:
+    profile_token = str(profile_name or "").strip().lower()
+    if profile_token:
+        for index, path in enumerate(config_paths, 1):
+            filename = path.rsplit("/", 1)[-1].rsplit(chr(92), 1)[-1].lower()
+            if profile_token in filename:
+                return index
+    return 1
 
 
 if __name__ == "__main__":

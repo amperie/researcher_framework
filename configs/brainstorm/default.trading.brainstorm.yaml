@@ -1,0 +1,102 @@
+name: default_brainstorm
+description: Default interactive brainstorm setup
+
+llm_defaults:
+  provider: anthropic
+  model: ""
+
+stop_policy:
+  max_rounds_per_run: 3
+  max_messages_per_run: 12
+  max_seconds_per_run: 90
+  summary_interval_messages: 4
+  summary_interval_seconds: 20
+  pause_after_research_round: true
+
+summary:
+  print_current_thinking: true
+  include_evidence: true
+  include_open_questions: true
+  max_items_per_section: 3
+  evidence_summary_chars: 80
+
+prompts:
+  role_turn:
+    system_template: |
+      You are the {role_name} persona in a brainstorming session.
+      Role type: {role_type}
+      Goal: {role_goal}
+      Style: {role_style}
+      Respond briefly and concretely. Use at most 4 short bullets. Prefer fragments over paragraphs. No preamble, no recap. Mention weak assumptions only if material.
+    human_template: |
+      Current goal: {current_goal}
+
+      Current consensus summary:
+      {consensus_summary}
+
+      Recent user notes:
+      {user_notes_json}
+
+  consensus:
+    system_template: |
+      Summarize the brainstorming session into JSON with keys: agreed_points, active_options, rejected_options, objections, assumptions, open_questions, next_recommendation, confidence.
+      Use arrays for lists. Keep each list short, with terse entries.
+    human_template: |
+      {consensus_input_json}
+
+  plan:
+    system_template: |
+      Generate a structured brainstorming plan as JSON with keys: research_direction, refined_ideas, proposals, implementation_plans, constraints, exclusions, success_criteria, unresolved_questions.
+      Keep entries terse and avoid explanatory prose.
+    human_template: |
+      {plan_input_json}
+
+  researcher:
+    result_line_template: "- {title}: {summary_excerpt}"
+    empty_message: "No evidence gathered."
+    summary_excerpt_chars: 100
+
+execution_handoff:
+  default_start_node: propose_experiments
+  allow_direct_to_implement: true
+
+roles:
+  - name: facilitator
+    persona_type: facilitator
+    enabled: true
+    llm_key: brainstorm
+    goal: Drive the discussion, track consensus, and decide when to pause.
+    style: Concise, structured, neutral.
+
+  - name: skeptic
+    persona_type: skeptic
+    enabled: true
+    llm_key: brainstorm
+    goal: Attack weak assumptions and point out failure modes.
+    style: Direct, critical, evidence-seeking.
+
+  - name: researcher
+    persona_type: researcher
+    enabled: true
+    llm_key: brainstorm
+    goal: Ground the discussion in evidence from configured research tools.
+    tools:
+      - ref: trading_arxiv
+      - ref: trading_memory
+      - ref: trading_prior_experiments
+      - ref: trading_ssrn_finance
+      - ref: trading_nber_asset_pricing
+      - ref: trading_repec_finance
+      - ref: trading_quantpedia_strategies
+      - ref: trading_quantconnect_strategies
+      - ref: trading_reddit_trading
+      - ref: trading_aqr_research
+      - ref: trading_fred_series_context
+      - ref: trading_cftc_cot
+      - ref: trading_sec_filings_signals
+      - ref: trading_adapter_context
+      - ref: trading_profile_context
+      - ref: trading_strategy_library
+    research_budget:
+      max_tools_per_round: 0
+      max_artifacts_per_tool: 4

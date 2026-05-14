@@ -4,6 +4,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from core.graph.nodes.research import research_node
+from core.tools.research_tools import collect_arxiv
 
 
 # ---------------------------------------------------------------------------
@@ -276,4 +277,18 @@ class TestResearchNodeDigests:
                         )
 
         assert result["paper_digests"] == []
+
+
+def test_collect_arxiv_passes_categories_to_search():
+    profile = _make_profile()
+    tool_cfg = {
+        "name": "arxiv",
+        "max_results": 5,
+        "categories": ["q-fin.TR", "cs.LG"],
+    }
+
+    with patch("core.tools.research_tools.search_arxiv", return_value=[]) as mock_search:
+        collect_arxiv("predict spy direction", profile, tool_cfg, {})
+
+    assert mock_search.call_args.kwargs["categories"] == ["q-fin.TR", "cs.LG"]
 

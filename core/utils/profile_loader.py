@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 
+from core.tools.research_tool_catalog import ResearchToolCatalogError, resolve_research_tool_refs
 from core.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -50,6 +51,14 @@ def load_profile(name: str) -> dict:
         raise ValueError(
             f"Profile {name!r} is missing required keys: {sorted(missing)}"
         )
+
+    try:
+        research_cfg = dict(profile.get("research") or {})
+        if research_cfg.get("tools"):
+            research_cfg["tools"] = resolve_research_tool_refs(list(research_cfg.get("tools") or []), path_key="tool")
+            profile["research"] = research_cfg
+    except ResearchToolCatalogError as exc:
+        raise ValueError(f"Profile {name!r} has invalid research tool config: {exc}") from exc
 
     log.info(
         "profile_loader | Loaded profile %r — steps=%s",

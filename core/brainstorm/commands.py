@@ -9,7 +9,7 @@ HELP_TEXT = """Available commands:
   research       Ask the researcher role to gather more evidence
   plan           Draft or refresh the current plan
   feedback ...   Add feedback, constraints, or direction
-  approve_plan   Approve the current plan draft
+  approve_plan   Approve the current plan draft without executing it
   execute        Start downstream execution from the approved plan
   exit           Exit brainstorm mode
 """

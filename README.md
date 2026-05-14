@@ -30,6 +30,46 @@ Profiles live under `configs/profiles/` and are the single source of truth for a
 
 A profile controls the step list, prompts, research tools, datasets, base classes, execution mode, evaluation thresholds, and storage targets. In practice, most domain customization belongs in the profile rather than in graph code.
 
+## Running It
+
+List profiles:
+
+```powershell
+uv run python main.py --list-profiles
+```
+
+Run the main pipeline from a fresh direction:
+
+```powershell
+uv run python main.py --profile neuralsignal --direction "attention head specialization"
+```
+
+Run the pipeline from saved seeds:
+
+```powershell
+uv run python main.py --profile neuralsignal --next-step "next_step:..."
+uv run python main.py --profile neuralsignal --source-experiment "exp-123" --proposal-seed "proposal_seed:..."
+uv run python main.py --profile neuralsignal --source-experiment "exp-123" --handoff "run_handoff:..."
+```
+
+Start brainstorm mode from a fresh prompt:
+
+```powershell
+uv run python main.py --mode brainstorm --profile trading --direction "using technical indicators and regime detection to predict SPY direction"
+```
+
+Resume or seed brainstorm mode from prior work:
+
+```powershell
+uv run python main.py --mode brainstorm --profile trading --resume-brainstorm "brainstorm-session-id"
+uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123"
+uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123" --proposal-seed "proposal_seed:..."
+uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123" --handoff "run_handoff:..."
+uv run python main.py --mode brainstorm --profile trading --next-step "next_step:..." --source-experiment "exp-123"
+```
+
+In brainstorm mode, imported run context, proposal templates, and lineage are loaded into the brainstorm session so you can adjust them before using `execute` to hand off into the main pipeline.
+
 ## Adding A New Research Domain
 
 To add a new domain, copy an existing profile such as `configs/profiles/neuralsignal.yaml`, update the domain prompts, datasets, tools, base classes, and thresholds, then point `experiment_adapter` at a new `plugins/<domain>/adapter.py`. If the adapter implements the same small prepare/execute or async submit/check interface, the existing graph can run the new domain without structural changes.

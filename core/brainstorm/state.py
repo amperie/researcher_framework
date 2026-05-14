@@ -12,8 +12,9 @@ class BrainstormRoleConfig(TypedDict, total=False):
     llm_key: str
     model: str
     provider: str
-    tools: list[str]
+    tools: list[dict]
     research_budget: dict
+    prompt_overrides: dict
 
 
 class BrainstormTurn(TypedDict, total=False):
@@ -76,8 +77,24 @@ class BrainstormState(TypedDict, total=False):
     pending_decisions: list[str]
     stop_policy: dict
     summary_config: dict
+    prompt_config: dict
     progress: dict
     execution_handoff: dict
     approved_plan: bool
     last_summary: str
     errors: list[str]
+    source_experiment_record_id: str
+    source_next_step_record_id: str
+    source_next_step_title: str
+    source_proposal_seed_record_id: str
+    source_proposal_seed_title: str
+    proposal_seed_planning_notes: str
+    seed_context_artifacts: list[dict]
+    root_run_family_id: str
+    root_research_direction: str
+    campaign_id: str
+    campaign_title: str
+    campaign_variant_id: str
+    campaign_variant_title: str
+    campaign_variant_index: int
+    campaign_size: int

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -96,3 +97,24 @@ def test_proposal_execution_context_handles_missing_proposal():
     context = _proposal_execution_context(state, "missing")
 
     assert "No matching proposal found in state" in context
+
+
+def test_implement_normalizes_generated_plan_placeholder_before_validation(tmp_path, caplog):
+    cfg = SimpleNamespace(experiments_dir=str(tmp_path))
+    llm = MagicMock()
+    llm.invoke.return_value = MagicMock(content="class IdeaA:\n    pass\n")
+    state = {
+        "profile_name": "neuralsignal",
+        "implementation_plans": [{"proposal_name": "idea_a", "class_name": "GeneratedPlan"}],
+    }
+
+    with caplog.at_level(logging.INFO):
+        with patch("core.graph.nodes.implement.get_config", return_value=cfg):
+            with patch("core.graph.nodes.implement.get_llm", return_value=llm):
+                with patch("core.graph.nodes.implement.persist_memory_records_for_state"):
+                    result = implement_node(state, _profile())
+
+    implementation = result["implementations"][0]
+    assert implementation["class_name"] == "IdeaA"
+    assert implementation["script_path"].endswith("IdeaA.py")
+    assert "Normalized placeholder class name to 'IdeaA'" in caplog.text

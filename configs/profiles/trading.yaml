@@ -64,62 +64,45 @@ platform:
 research:
   max_summary_artifacts: 20
   tools:
-    - name: arxiv
-      tool: core.tools.research_tools.collect_arxiv
-      categories: [q-fin.TR, q-fin.PM, q-fin.ST, cs.LG]
-      max_results: 8
+    - ref: trading_arxiv
       relevance_score_threshold: 6
       max_papers_to_digest: 2
-    - name: ssrn_finance
-      tool: core.tools.research_tools.collect_ssrn_finance
+    - ref: trading_ssrn_finance
       max_results: 6
       relevance_score_threshold: 7
-    - name: nber_asset_pricing
-      tool: core.tools.research_tools.collect_nber_asset_pricing
+    - ref: trading_nber_asset_pricing
       max_results: 5
       relevance_score_threshold: 6
-    - name: repec_finance
-      tool: core.tools.research_tools.collect_repec_finance
+    - ref: trading_repec_finance
       max_results: 5
       relevance_score_threshold: 6
-    - name: quantpedia_strategies
-      tool: core.tools.research_tools.collect_quantpedia_strategies
+    - ref: trading_quantpedia_strategies
       max_results: 6
       relevance_score_threshold: 8
-    - name: quantconnect_strategies
-      tool: core.tools.research_tools.collect_quantconnect_strategies
+    - ref: trading_quantconnect_strategies
       max_results: 5
       relevance_score_threshold: 7
-    - name: reddit_trading
-      tool: core.tools.research_tools.collect_reddit_trading
+    - ref: trading_reddit_trading
       max_results: 5
       default_terms: algorithmic trading strategies
       relevance_score_threshold: 5
-    - name: aqr_research
-      tool: core.tools.research_tools.collect_aqr_research
+    - ref: trading_aqr_research
       max_results: 5
       relevance_score_threshold: 6
-    - name: fred_series_context
-      tool: core.tools.research_tools.collect_fred_series_context
+    - ref: trading_fred_series_context
       relevance_score_threshold: 5
-    - name: cftc_cot
-      tool: core.tools.research_tools.collect_cftc_cot
+    - ref: trading_cftc_cot
       relevance_score_threshold: 5
-    - name: sec_filings_signals
-      tool: core.tools.research_tools.collect_sec_filings_signals
+    - ref: trading_sec_filings_signals
       relevance_score_threshold: 5
-    - name: prior_experiments
-      tool: core.tools.research_tools.collect_prior_experiments
+    - ref: trading_prior_experiments
       n_results: 8
       relevance_score_threshold: 7
-    - name: adapter_context
-      tool: core.tools.research_tools.collect_adapter_context
+    - ref: trading_adapter_context
       relevance_score_threshold: 5
-    - name: profile_context
-      tool: core.tools.research_tools.collect_profile_context
+    - ref: trading_profile_context
       relevance_score_threshold: 5
-    - name: strategy_library
-      tool: core.tools.research_tools.collect_strategy_library
+    - ref: trading_strategy_library
       patterns: ["*strategy*.py", "*signal*.py", "*backtest*.py", "*portfolio*.py", "*risk*.py"]
       max_files: 80
       relevance_score_threshold: 5

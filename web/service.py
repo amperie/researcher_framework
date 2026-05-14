@@ -37,6 +37,7 @@ from core.brainstorm import (
     load_brainstorm_config,
     load_brainstorm_session,
     persist_brainstorm_session,
+    resolve_brainstorm_seed,
 )
 
 
@@ -300,15 +301,23 @@ def get_run_bundle(profile_name: str, record_id: str) -> dict[str, Any]:
 def create_brainstorm_session(profile_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     profile = load_profile(profile_name)
     brainstorm_cfg = load_brainstorm_config(payload.get("brainstorm_config"))
-    direction = str(payload.get("direction") or "").strip()
+    seed = resolve_brainstorm_seed(
+        profile,
+        source_experiment_record_id=str(payload.get("source_experiment") or payload.get("source_experiment_record_id") or "").strip(),
+        handoff_record_id=str(payload.get("handoff") or payload.get("handoff_record_id") or "").strip(),
+        proposal_seed_record_id=str(payload.get("proposal_seed") or payload.get("proposal_seed_record_id") or "").strip(),
+        next_step_record_id=str(payload.get("next_step") or payload.get("next_step_record_id") or "").strip(),
+    )
+    direction = str(payload.get("direction") or seed.get("research_direction") or "").strip()
     if not direction:
-        raise ValueError("direction is required")
+        raise ValueError("direction is required when no brainstorm seed source is provided")
     engine = BrainstormEngine(profile, brainstorm_cfg)
     state = create_brainstorm_state(
         profile_name=profile_name,
         direction=direction,
         brainstorm_cfg=brainstorm_cfg,
         session_id=str(payload.get("session_id") or "").strip() or None,
+        seed=seed,
     )
     if bool(payload.get("autorun", True)):
         state = engine.run_until_pause(state)

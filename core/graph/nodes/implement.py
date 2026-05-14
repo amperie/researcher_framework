@@ -21,6 +21,7 @@ from configs.config import get_config
 from core.graph.nodes.artifact_refs import register_implementation_artifact
 from core.graph.nodes.code_safety import extract_python_source, validate_python_source
 from core.graph.nodes.memory import persist_memory_records_for_state
+from core.graph.nodes.plan_implementation import _default_class_name
 from core.graph.state import ResearchState
 from core.llm.factory import get_llm
 from core.utils.logger import get_logger
@@ -63,7 +64,12 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
                 f"implement: skipped malformed implementation plan at index {idx}: expected object, got {type(plan).__name__}"
             )
             continue
-        class_name = plan.get("class_name") or plan.get("proposal_name", "UnknownClass")
+        proposal_name = str(plan.get("proposal_name") or plan.get("name") or "").strip()
+        class_name = _resolved_class_name(plan, proposal_name)
+        if plan.get("class_name") != class_name:
+            plan = dict(plan)
+            plan["class_name"] = class_name
+            log.info("implement_node | Normalized placeholder class name to %r", class_name)
         proposal_name = plan.get("proposal_name", class_name)
         cache_path = cache_dir / f"{class_name}.py"
 
@@ -110,9 +116,11 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
                         f"{user_content}\n\n"
                         "Your previous response was rejected.\n"
                         "Return raw Python source only.\n"
+                        f"Define exactly one top-level class named {class_name!r}.\n"
                         "Do not include markdown fences.\n"
                         "Do not include explanatory prose.\n"
                         "If you write comments, prefix them with '#'.\n"
+                        "Do not reuse a different class name from an earlier attempt.\n"
                         f"Previous validation error: {last_error}\n"
                     )
                 resp = llm.invoke([
@@ -172,6 +180,22 @@ def implement_node(state: ResearchState, profile: dict) -> dict:
         log.warning("implement_node | Memory persistence failed: %s", exc)
         delta["errors"] = list(delta.get("errors") or []) + [f"implement: memory persistence failed: {exc}"]
     return delta
+
+
+def _resolved_class_name(plan: dict, proposal_name: str) -> str:
+    class_name = str(plan.get("class_name") or "").strip()
+    if class_name and class_name.lower() not in {"unknownclass", "generatedplan"}:
+        return class_name
+
+    seed_name = (
+        str(plan.get("proposal_name") or "").strip()
+        or proposal_name
+        or str(plan.get("title") or "").strip()
+        or str(plan.get("name") or "").strip()
+        or class_name
+        or "GeneratedPlan"
+    )
+    return _default_class_name(seed_name)
 
 
 def _strip_fences(text: str) -> str:

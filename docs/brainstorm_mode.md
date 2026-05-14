@@ -77,6 +77,31 @@ Recommended entrypoints:
 - web endpoints under the existing inspector app for session control and
   session inspection
 
+Current CLI usage:
+
+```text
+uv run python main.py --mode brainstorm --profile <profile> --direction "..."
+uv run python main.py --mode brainstorm --profile <profile> --resume-brainstorm "<session-id>"
+uv run python main.py --mode brainstorm --profile <profile> --source-experiment "exp-123"
+uv run python main.py --mode brainstorm --profile <profile> --source-experiment "exp-123" --proposal-seed "proposal_seed:123"
+uv run python main.py --mode brainstorm --profile <profile> --source-experiment "exp-123" --handoff "run_handoff:123"
+uv run python main.py --mode brainstorm --profile <profile> --next-step "next_step:123" --source-experiment "exp-123"
+```
+
+Seed behavior:
+
+- `--resume-brainstorm` loads an existing brainstorm session state
+- `--source-experiment` imports a prior experiment run and proposal context into
+  a new brainstorm session
+- `--proposal-seed` imports a saved proposal seed into a new brainstorm session
+- `--handoff` imports a saved run handoff into a new brainstorm session
+- `--next-step` imports a persisted next-step recommendation into a new
+  brainstorm session
+
+When seeded from prior work, brainstorm mode carries the imported proposal,
+evidence, lineage, and campaign metadata in session state so the user can edit
+or redirect the idea before using `execute` to continue into the main pipeline.
+
 Brainstorm mode configuration should be loaded from a dedicated
 `brainstorm.yaml` file, with the path supplied at runtime. Different
 brainstorm setups should therefore be swappable without changing code or

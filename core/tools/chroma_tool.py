@@ -39,7 +39,7 @@ class ChromaStore:
         if self._collection is None:
             self._client = _build_client()
             self._collection = self._client.get_or_create_collection(self._collection_name)
-            log.info(
+            log.debug(
                 "ChromaStore | Connected — collection=%r, records=%d",
                 self._collection_name, self._collection.count(),
             )
