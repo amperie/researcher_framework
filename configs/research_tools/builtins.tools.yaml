@@ -1,0 +1,130 @@
+tools:
+  trading_arxiv:
+    tool: core.tools.research_tools.collect_arxiv
+    path: core.tools.research_tools.collect_arxiv
+    name: arxiv
+    categories: [q-fin.TR, q-fin.PM, q-fin.ST, cs.LG]
+    max_results: 8
+
+  arxiv:
+    # Must override categories key
+    tool: core.tools.research_tools.collect_arxiv
+    path: core.tools.research_tools.collect_arxiv
+    name: arxiv
+    max_results: 8
+
+  trading_memory:
+    tool: core.tools.research_tools.collect_memory
+    path: core.tools.research_tools.collect_memory
+    name: memory
+    n_results: 5
+
+  trading_prior_experiments:
+    tool: core.tools.research_tools.collect_prior_experiments
+    path: core.tools.research_tools.collect_prior_experiments
+    name: prior_experiments
+    n_results: 8
+
+  trading_ssrn_finance:
+    tool: core.tools.research_tools.collect_ssrn_finance
+    path: core.tools.research_tools.collect_ssrn_finance
+    name: ssrn_finance
+    max_results: 6
+
+  trading_nber_asset_pricing:
+    tool: core.tools.research_tools.collect_nber_asset_pricing
+    path: core.tools.research_tools.collect_nber_asset_pricing
+    name: nber_asset_pricing
+    max_results: 5
+
+  trading_repec_finance:
+    tool: core.tools.research_tools.collect_repec_finance
+    path: core.tools.research_tools.collect_repec_finance
+    name: repec_finance
+    max_results: 5
+
+  trading_quantpedia_strategies:
+    tool: core.tools.research_tools.collect_quantpedia_strategies
+    path: core.tools.research_tools.collect_quantpedia_strategies
+    name: quantpedia_strategies
+    max_results: 6
+
+  trading_quantconnect_strategies:
+    tool: core.tools.research_tools.collect_quantconnect_strategies
+    path: core.tools.research_tools.collect_quantconnect_strategies
+    name: quantconnect_strategies
+    max_results: 5
+
+  trading_reddit_trading:
+    tool: core.tools.research_tools.collect_reddit_trading
+    path: core.tools.research_tools.collect_reddit_trading
+    name: reddit_trading
+    max_results: 5
+    default_terms: algorithmic trading strategies
+
+  trading_aqr_research:
+    tool: core.tools.research_tools.collect_aqr_research
+    path: core.tools.research_tools.collect_aqr_research
+    name: aqr_research
+    max_results: 5
+
+  trading_fred_series_context:
+    tool: core.tools.research_tools.collect_fred_series_context
+    path: core.tools.research_tools.collect_fred_series_context
+    name: fred_series_context
+
+  trading_cftc_cot:
+    tool: core.tools.research_tools.collect_cftc_cot
+    path: core.tools.research_tools.collect_cftc_cot
+    name: cftc_cot
+
+  trading_sec_filings_signals:
+    tool: core.tools.research_tools.collect_sec_filings_signals
+    path: core.tools.research_tools.collect_sec_filings_signals
+    name: sec_filings_signals
+
+  trading_adapter_context:
+    tool: core.tools.research_tools.collect_adapter_context
+    path: core.tools.research_tools.collect_adapter_context
+    name: adapter_context
+
+  trading_profile_context:
+    tool: core.tools.research_tools.collect_profile_context
+    path: core.tools.research_tools.collect_profile_context
+    name: profile_context
+    include:
+      - base_classes
+      - datasets
+      - data_sources
+      - risk_constraints
+      - evaluation
+
+  trading_strategy_library:
+    tool: core.tools.research_tools.collect_strategy_library
+    path: core.tools.research_tools.collect_strategy_library
+    name: strategy_library
+    patterns:
+      - "*strategy*.py"
+      - "*signal*.py"
+      - "*backtest*.py"
+      - "*portfolio*.py"
+      - "*risk*.py"
+    max_files: 80
+
+  neuralsignal_arxiv:
+    tool: core.tools.research_tools.collect_arxiv
+    path: core.tools.research_tools.collect_arxiv
+    name: arxiv
+    categories: [cs.LG, cs.AI, cs.CL]
+    max_results: 8
+
+  neuralsignal_memory:
+    tool: core.tools.research_tools.collect_memory
+    path: core.tools.research_tools.collect_memory
+    name: memory
+    n_results: 5
+
+  neuralsignal_profile_context:
+    tool: core.tools.research_tools.collect_profile_context
+    path: core.tools.research_tools.collect_profile_context
+    name: profile_context
