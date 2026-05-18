@@ -436,6 +436,8 @@ prompts:
       - Prefer self.price_data_history[symbol] when OHLCV fields are needed and self.price_history[symbol] when only closes are needed
       - Do not reproduce logic already implemented in Algorithm.on_data() or Portfolio.process_market_signals_for_tick()
       - The algorithm must only emit trading signals. It must not track positions, holding periods, stop-loss execution, profit-taking, or portfolio state.
+      - Any tunable config leaf that should change during HPO or walk-forward live reconfiguration must be cached in __init__ on a same-named public instance attribute, for example self.rsi_period <- cfg["rsi_config"]["rsi_period"]
+      - Plans should prefer lazy/per-tick recomputation over cached derived state; if derived state must be rebuilt when tunables change, the plan must explicitly call out that a custom reconfigure(new_params) is required and that it must delegate to super().reconfigure(new_params)
 
       Include:
       - proposal_name
@@ -443,6 +445,7 @@ prompts:
       - base_class: "Algorithm"
       - init_fields including config keys and history_length expectations
       - tunable_fields that are sensible to expose to HPO
+      - whether a custom reconfigure(new_params) is needed for derived state rebuilds
       - main_method: "on_data_logic"
       - required_warmup_bars if it should exceed history_length
       - method_steps with explicit no-lookahead rolling/window logic
@@ -473,6 +476,12 @@ prompts:
       - Prefer self.price_data_history[symbol] for OHLCV access because self.price_history[symbol] contains closes only
       - Match the local platform constructor pattern:
         __init__(self, cfg: dict | None = None, history_length: int = 0)
+      - Always implement __init__(self, cfg: dict | None = None, history_length: int = 0) and call super().__init__(cfg=cfg, history_length=history_length)
+      - In __init__, read each tunable config leaf once and store it on a same-named public instance attribute so Algorithm.reconfigure() can auto-sync it later
+      - For nested config, preserve the nested cfg shape but mirror the leaf name on the attribute, for example:
+        cfg["rsi_config"]["rsi_period"] -> self.rsi_period
+      - Avoid persistent derived state that depends on tunables when a per-tick recomputation is cheap enough
+      - If nontrivial derived state must be rebuilt after parameter changes, implement reconfigure(self, new_params: dict) and call super().reconfigure(new_params) before rebuilding that derived state
       - Do not reimplement history tracking, warmup gating, or the tick lifecycle already provided by Algorithm.on_data()
       - If the plan references portfolio behavior, assume Portfolio and SingleSymbolPortfolio already manage order lifecycle, cash, positions, and cfg-driven symbol access
       - The algorithm must only emit MarketSignal objects. It must not track open positions, holding times, exits, stop-loss state, profit targets, or cash.

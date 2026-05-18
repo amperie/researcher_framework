@@ -640,6 +640,7 @@ def _build_trading_algorithm_contract_test(
     class_name_json = json.dumps(class_name)
     expected_name_json = json.dumps(expected_algorithm_name)
     return f'''\
+import ast
 import importlib.util
 import os
 from pathlib import Path
@@ -665,6 +666,67 @@ def test_generated_algorithm_imports_real_platform():
     assert "SignalType.EXIT" not in source, "Algorithms must emit directional signals only; exits belong to the portfolio"
     assert "open_positions" not in source, "Algorithms must not track portfolio position state"
     assert "hold_time_minutes" not in source, "Algorithms must not implement holding-period logic"
+
+
+def _parse_source_tree():
+    return ast.parse(Path(SCRIPT_PATH).read_text(encoding="utf-8"))
+
+
+def _algorithm_class_def():
+    tree = _parse_source_tree()
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == CLASS_NAME:
+            return node
+    raise AssertionError(f"Class {{CLASS_NAME}} definition not found in source")
+
+
+def _method_node(class_node, method_name):
+    for node in class_node.body:
+        if isinstance(node, ast.FunctionDef) and node.name == method_name:
+            return node
+    return None
+
+
+def _calls_super_reconfigure(method_node):
+    for node in ast.walk(method_node):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "reconfigure":
+            continue
+        owner = func.value
+        if not isinstance(owner, ast.Call):
+            continue
+        if isinstance(owner.func, ast.Name) and owner.func.id == "super":
+            return True
+    return False
+
+
+def _cfg_leaf_synced_attrs(init_node):
+    attrs = []
+    for node in ast.walk(init_node):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Attribute):
+                continue
+            if not isinstance(target.value, ast.Name) or target.value.id != "self":
+                continue
+            attr_name = target.attr
+            if attr_name.startswith("_"):
+                continue
+            leaf_names = set()
+            for child in ast.walk(node.value):
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute) and child.func.attr == "get":
+                    if child.args and isinstance(child.args[0], ast.Constant) and isinstance(child.args[0].value, str):
+                        leaf_names.add(child.args[0].value)
+                if isinstance(child, ast.Subscript):
+                    key = child.slice
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        leaf_names.add(key.value)
+            if attr_name in leaf_names:
+                attrs.append(attr_name)
+    return sorted(set(attrs))
 
 
 def _load_class():
@@ -712,6 +774,49 @@ def _signal_signature(signal):
 def test_generated_algorithm_is_algorithm_subclass():
     cls = _load_class()
     assert issubclass(cls, Algorithm)
+
+
+def test_generated_algorithm_reconfigure_contract():
+    class_node = _algorithm_class_def()
+    init_node = _method_node(class_node, "__init__")
+    assert init_node is not None, (
+        "Generated trading algorithms must implement __init__(self, cfg=None, history_length=0) "
+        "and cache tunables on same-named instance attributes for reconfigure()."
+    )
+
+    source = Path(SCRIPT_PATH).read_text(encoding="utf-8")
+    assert "super().__init__(" in source, "Algorithm __init__ must delegate to Algorithm.__init__"
+
+    attr_names = _cfg_leaf_synced_attrs(init_node)
+    assert attr_names, (
+        "Algorithm __init__ must cache at least one tunable cfg leaf onto a same-named public instance "
+        "attribute so Algorithm.reconfigure() can auto-sync it."
+    )
+
+    reconfigure_node = _method_node(class_node, "reconfigure")
+    if reconfigure_node is not None:
+        assert _calls_super_reconfigure(reconfigure_node), (
+            "Custom reconfigure() must call super().reconfigure(new_params) before any subclass-specific rebuild logic."
+        )
+
+    cls = _load_class()
+    algo = _instantiate(cls)
+    for attr_name in attr_names:
+        before = getattr(algo, attr_name)
+        if isinstance(before, bool):
+            updated = not before
+        elif isinstance(before, int):
+            updated = before + 1
+        elif isinstance(before, float):
+            updated = before + 1.0
+        elif isinstance(before, str):
+            updated = before + "_updated"
+        else:
+            continue
+        algo.reconfigure({{attr_name: updated}})
+        assert getattr(algo, attr_name) == updated, (
+            f"Algorithm.reconfigure() did not update self.{{attr_name}} from cfg leaf '{{attr_name}}'"
+        )
 
 
 def test_generated_algorithm_produces_valid_signals_without_future_leakage():

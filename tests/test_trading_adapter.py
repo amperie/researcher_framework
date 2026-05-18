@@ -286,6 +286,8 @@ def test_trading_contract_test_includes_platform_root(tmp_path: Path):
     )
     assert "PLATFORM_ROOT" in source
     assert "Signals before the final bar" in source
+    assert "test_generated_algorithm_reconfigure_contract" in source
+    assert "super().reconfigure(new_params)" in source
 
 
 def test_resolve_alpaca_credentials_prefers_env_when_present(tmp_path: Path, monkeypatch):
