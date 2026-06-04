@@ -23,6 +23,7 @@ import yaml
 from configs.config import get_config, resolve_dev_path
 from core.plugins.base import ResearchAdapter
 from core.plugins.execution import run_task
+from core.utils import terminal_progress
 from core.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -164,8 +165,12 @@ class TradingAdapter(ResearchAdapter):
             for item in (state.get("proposals") or [])
             if item.get("name")
         }
+        total_hpo_trials = _total_hpo_trials(artifacts)
+        completed_hpo_trials = 0
+        terminal_progress.configure_hpo(total_hpo_trials)
         for artifact in artifacts:
             proposal_name = str(artifact.get("proposal_name") or "unknown")
+            artifact_trials = _artifact_hpo_trials(artifact)
             try:
                 script_path = str(artifact.get("script_path") or "")
                 script_source = Path(script_path).read_text(encoding="utf-8") if script_path and Path(script_path).exists() else ""
@@ -184,6 +189,11 @@ class TradingAdapter(ResearchAdapter):
                         "logger_prefixes": list(_PLUGIN_LOGGER_PREFIXES),
                         "cwd": str(_platform_root(profile)),
                         "pythonpath_entries": [str(path) for path in _trading_pythonpath_entries(profile)],
+                        "env": {
+                            "RESEARCH_PROGRESS_BRIDGE": "1",
+                            "RESEARCH_HPO_TRIAL_OFFSET": str(completed_hpo_trials),
+                            "RESEARCH_HPO_TRIAL_TOTAL": str(total_hpo_trials),
+                        },
                         "job_id": f"trading_{proposal_name}",
                         "job_dir": str(resolve_dev_path(f"dev/experiments/trading/sync_tasks/{proposal_name}")),
                     },
@@ -204,9 +214,23 @@ class TradingAdapter(ResearchAdapter):
                 }
                 result_path.write_text(json.dumps(result, indent=2, default=_json_default), encoding="utf-8")
                 results.append(result)
+                completed_hpo_trials += artifact_trials
+                terminal_progress.update_hpo(
+                    done=completed_hpo_trials,
+                    running=0,
+                    total=total_hpo_trials,
+                    message=f"{proposal_name} complete",
+                )
             except Exception as exc:
                 log.error("TradingAdapter.execute_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
                 errors.append(f"execute_experiment: {proposal_name} failed: {exc}")
+                completed_hpo_trials += artifact_trials
+                terminal_progress.update_hpo(
+                    done=completed_hpo_trials,
+                    running=0,
+                    total=total_hpo_trials,
+                    message=f"{proposal_name} failed",
+                )
 
         return {
             "experiment_results": results,
@@ -314,6 +338,22 @@ class TradingAdapter(ResearchAdapter):
 
 def get_adapter() -> TradingAdapter:
     return TradingAdapter()
+
+
+def _artifact_hpo_trials(artifact: dict[str, Any]) -> int:
+    runtime_cfg = dict(artifact.get("runtime_config") or {})
+    variant_specs = list(artifact.get("variant_specs") or [{"name": "base", "overrides": {}}])
+    total = 0
+    for variant_spec in variant_specs:
+        merged_cfg = _normalize_runtime_config(_deep_merge(runtime_cfg, dict(variant_spec.get("overrides") or {})))
+        if str(merged_cfg.get("mode") or "backtest") == "walk-forward":
+            continue
+        total += int((merged_cfg.get("hpo") or {}).get("num_samples") or 50)
+    return total
+
+
+def _total_hpo_trials(artifacts: list[dict[str, Any]]) -> int:
+    return sum(_artifact_hpo_trials(dict(artifact or {})) for artifact in artifacts)
 
 
 def _platform_root(profile: dict[str, Any]) -> Path:
@@ -565,10 +605,12 @@ def _build_hpo_config(
     hpo_cfg["objective_metric"] = str(
         proposal_hpo.get("objective_metric")
         or proposal_hpo.get("optimization_metric")
+        or base.get("objective_metric")
         or "annualized_return"
     )
-    hpo_cfg["num_samples"] = int(proposal_hpo.get("num_samples") or proposal_hpo.get("n_trials") or 50)
-    hpo_cfg["max_concurrent_trials"] = int(proposal_hpo.get("max_concurrent_trials") or 8)
+    hpo_cfg["num_samples"] = int(proposal_hpo.get("num_samples") or proposal_hpo.get("n_trials") or base.get("num_samples") or 50)
+    hpo_cfg["max_concurrent_trials"] = int(proposal_hpo.get("max_concurrent_trials") or base.get("max_concurrent_trials") or 8)
+    hpo_cfg["smoke_trials"] = int(proposal_hpo.get("smoke_trials") or base.get("smoke_trials") or 3)
     hpo_cfg["search_space"] = search_space
     hpo_cfg["algorithm_param_keys"] = algorithm_keys
     hpo_cfg["portfolio_param_keys"] = portfolio_keys
@@ -583,18 +625,14 @@ def _resolve_backtest_hpo_space(
     portfolio_params: dict[str, Any],
     optimization_target: str,
 ) -> tuple[dict[str, Any], list[str], list[str]]:
-    proposal_hpo = dict(proposal.get("hpo") or {})
-    search_space = _normalize_search_space(dict(proposal_hpo.get("search_space") or {}))
+    proposal_hpo = proposal.get("hpo") if isinstance(proposal.get("hpo"), dict) else {}
+    search_space = _normalize_search_space(proposal_hpo.get("search_space") or {})
     algorithm_keys = [str(item) for item in (proposal_hpo.get("algorithm_param_keys") or []) if item]
     portfolio_keys = [str(item) for item in (proposal_hpo.get("portfolio_param_keys") or []) if item]
 
     tunable_params = proposal_hpo.get("tunable_params") or {}
-    if not search_space and isinstance(tunable_params, dict):
-        for key, spec in tunable_params.items():
-            if isinstance(spec, dict):
-                normalized_spec = _normalize_search_spec(str(key), dict(spec))
-                if normalized_spec:
-                    search_space[str(key)] = normalized_spec
+    if not search_space:
+        search_space = _normalize_search_space(tunable_params)
 
     if not search_space:
         search_space = _infer_wide_search_space(algorithm_params, portfolio_params)
@@ -651,14 +689,8 @@ def _infer_wide_search_space(algorithm_params: dict[str, Any], portfolio_params:
 def _infer_search_spec_from_value(key: str, value: Any) -> dict[str, Any] | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, int) and not isinstance(value, bool):
-        low = 1
-        high = max(2, int(value * 1000) + 1)
-        return {"type": "randint", "low": low, "high": high}
-    if isinstance(value, float):
-        low = max(0.0001, float(value) * 0.25 if value > 0 else 0.0001)
-        high = max(low * 1.5, float(value) * 4.0 if value > 0 else 5.0)
-        return {"type": "uniform", "low": round(low, 6), "high": round(high, 6)}
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _semantic_search_spec(key, value)
     return None
 
 
@@ -670,6 +702,134 @@ def _default_portfolio_search_space(key: str, value: float) -> dict[str, Any]:
     return {"type": "uniform", "low": 0.0, "high": max(value * 2.0, 1.0)}
 
 
+def _semantic_search_spec(key: str, value: Any = None, spec: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    name = str(key or "").lower()
+    raw = dict(spec or {})
+    if raw.get("type") == "choice":
+        return _normalize_search_spec(key, raw)
+    if _is_percentile_key(name):
+        low, high = _bounded_float_bounds(raw, 1.0, 99.0)
+        return {"type": "uniform", "low": low, "high": high}
+    if "quantile" in name:
+        low, high = _bounded_float_bounds(raw, 0.01, 0.99)
+        return {"type": "uniform", "low": low, "high": high}
+    if "correlation" in name:
+        low, high = _bounded_float_bounds(raw, 0.0, 1.0)
+        return {"type": "uniform", "low": low, "high": high}
+    if "zscore" in name or "z_score" in name:
+        low, high = _signed_float_bounds(value, raw, default=(-4.0, 4.0))
+        return {"type": "uniform", "low": low, "high": high}
+    if "ratio" in name:
+        low, high = _bounded_float_bounds(raw, 0.1, 5.0)
+        return {"type": "uniform", "low": low, "high": high}
+    if any(token in name for token in ("fraction", "position_size", "risk_fraction", "base_position")):
+        low, high = _bounded_float_bounds(raw, 0.001, 1.0)
+        return {"type": "uniform", "low": low, "high": high}
+    if _is_window_key(name):
+        low, high = _integer_window_bounds(name, value, raw)
+        return {"type": "randint", "low": low, "high": high}
+    if isinstance(value, int) and not isinstance(value, bool):
+        base = max(1, abs(int(value)))
+        default_low = max(1, base // 3)
+        default_high = min(501, max(base * 3, base + 5) + 1)
+        low, high = _bounded_int_bounds(raw, default_low, default_high, 1, 501)
+        return {"type": "randint", "low": low, "high": high}
+    if isinstance(value, float) or raw:
+        low, high = _positive_float_bounds(value, raw)
+        return {"type": "uniform", "low": low, "high": high}
+    return None
+
+
+def _is_percentile_key(name: str) -> bool:
+    return (
+        "percentile" in name
+        or name.endswith("_pct")
+        or name.endswith("_percent")
+    ) and name not in {"stop_pct", "profit_pct", "tx_cost"}
+
+
+def _is_window_key(name: str) -> bool:
+    return any(token in name for token in (
+        "window", "lookback", "period", "bars", "hold", "lock", "confirmation",
+        "forward", "rips", "ma_", "_ma", "sma", "ema",
+    ))
+
+
+def _integer_window_bounds(name: str, value: Any, raw: dict[str, Any]) -> tuple[int, int]:
+    if "rips" in name:
+        return _bounded_int_bounds(raw, 5, 121, 5, 121)
+    if "slow" in name and ("ma" in name or "sma" in name or "ema" in name):
+        return _bounded_int_bounds(raw, 10, 501, 10, 501)
+    if "fast" in name and ("ma" in name or "sma" in name or "ema" in name):
+        return _bounded_int_bounds(raw, 2, 101, 2, 101)
+    if any(token in name for token in ("confirmation", "lock", "hold", "forward")):
+        return _bounded_int_bounds(raw, 1, 201, 1, 201)
+    if "atr" in name or "rsi" in name:
+        return _bounded_int_bounds(raw, 2, 101, 2, 101)
+    base = _numeric_seed(value, raw, default=20.0)
+    low = max(2, int(base / 3))
+    high = min(501, max(low + 5, int(base * 3) + 1))
+    return _bounded_int_bounds(raw, low, high, 2, 501)
+
+
+def _bounded_int_bounds(
+    raw: dict[str, Any],
+    default_low: int,
+    default_high: int,
+    min_low: int,
+    max_high: int,
+) -> tuple[int, int]:
+    if raw.get("low") is not None and raw.get("high") is not None:
+        low = max(min_low, int(raw["low"]))
+        high = min(max_high, int(raw["high"]))
+        if low < high:
+            return low, high
+    return default_low, default_high
+
+
+def _bounded_float_bounds(raw: dict[str, Any], default_low: float, default_high: float) -> tuple[float, float]:
+    if raw.get("low") is not None and raw.get("high") is not None:
+        low = max(default_low, float(raw["low"]))
+        high = min(default_high, float(raw["high"]))
+        if low < high:
+            return round(low, 6), round(high, 6)
+    return default_low, default_high
+
+
+def _signed_float_bounds(value: Any, raw: dict[str, Any], *, default: tuple[float, float]) -> tuple[float, float]:
+    if raw.get("low") is not None and raw.get("high") is not None:
+        low = max(default[0], float(raw["low"]))
+        high = min(default[1], float(raw["high"]))
+        if low < high:
+            return round(low, 6), round(high, 6)
+    seed = _numeric_seed(value, raw, default=0.0)
+    if seed < 0:
+        return default[0], -0.25
+    if seed > 0:
+        return 0.25, default[1]
+    return default
+
+
+def _positive_float_bounds(value: Any, raw: dict[str, Any]) -> tuple[float, float]:
+    if raw.get("low") is not None and raw.get("high") is not None:
+        low = max(0.0001, float(raw["low"]))
+        high = min(100.0, float(raw["high"]))
+        if low < high:
+            return round(low, 6), round(high, 6)
+    seed = max(0.0001, _numeric_seed(value, raw, default=1.0))
+    return round(max(0.0001, seed / 3), 6), round(min(100.0, max(seed * 3, seed + 0.1)), 6)
+
+
+def _numeric_seed(value: Any, raw: dict[str, Any], *, default: float) -> float:
+    for candidate in (value, raw.get("value"), raw.get("default")):
+        try:
+            if candidate is not None:
+                return float(candidate)
+        except Exception:
+            pass
+    return float(default)
+
+
 def _expand_backtest_search_space(
     search_space: dict[str, Any],
     *,
@@ -678,14 +838,25 @@ def _expand_backtest_search_space(
 ) -> dict[str, Any]:
     expanded: dict[str, Any] = {}
     for key, spec in search_space.items():
+        if _is_hpo_excluded_key(key):
+            continue
         if key in {"stop_pct", "profit_pct"}:
             expanded[key] = _default_portfolio_search_space(key, float(portfolio_params.get(key, 0.0) or 0.0))
             continue
         value = algorithm_params.get(key)
         if isinstance(value, int) and not isinstance(value, bool):
-            expanded[key] = {"type": "randint", "low": 1, "high": max(2, int(value * 1000) + 1)}
+            normalized = _semantic_search_spec(key, value, spec)
+            if normalized:
+                expanded[key] = normalized
             continue
-        expanded[key] = spec
+        if isinstance(value, float):
+            normalized = _semantic_search_spec(key, value, spec)
+            if normalized:
+                expanded[key] = normalized
+            continue
+        normalized = _semantic_search_spec(key, None, spec)
+        if normalized:
+            expanded[key] = normalized
     return expanded
 
 
@@ -744,7 +915,7 @@ def _filter_hpo_config(
 def _normalize_runtime_config(runtime_cfg: dict[str, Any]) -> dict[str, Any]:
     cfg = _deep_merge({}, runtime_cfg)
     hpo_cfg = dict(cfg.get("hpo") or {})
-    hpo_cfg["search_space"] = _normalize_search_space(dict(hpo_cfg.get("search_space") or {}))
+    hpo_cfg["search_space"] = _normalize_search_space(hpo_cfg.get("search_space") or {})
     cfg["hpo"] = hpo_cfg
 
     data_provider = dict(cfg.get("data_provider") or {})
@@ -756,18 +927,64 @@ def _normalize_runtime_config(runtime_cfg: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
-def _normalize_search_space(search_space: dict[str, Any]) -> dict[str, Any]:
+def _normalize_search_space(search_space: Any) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
-    for key, spec in search_space.items():
+    for key, spec in _search_space_entries(search_space):
+        if _is_hpo_excluded_key(key):
+            continue
         normalized_spec = _normalize_search_spec(str(key), spec)
-        if normalized_spec:
+        if normalized_spec is not None:
             normalized[str(key)] = normalized_spec
     return normalized
+
+
+def _is_hpo_excluded_key(key: str) -> bool:
+    name = str(key or "").strip().lower()
+    return name in {
+        "symbol",
+        "symbols",
+        "tradable_symbols",
+        "timeframe",
+        "adjustment",
+        "start_date",
+        "end_date",
+        "data_provider",
+        "portfolio",
+        "order_manager",
+        "api_key",
+        "secret_key",
+        "alpaca_account",
+        "alpaca_account_path",
+    }
+
+
+def _search_space_entries(search_space: Any) -> list[tuple[str, Any]]:
+    if isinstance(search_space, dict):
+        return [(str(key), spec) for key, spec in search_space.items() if key]
+    if not isinstance(search_space, list):
+        return []
+    entries: list[tuple[str, Any]] = []
+    for item in search_space:
+        if isinstance(item, str) and item.strip():
+            entries.append((item.strip(), {}))
+            continue
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key") or item.get("name") or item.get("param") or item.get("parameter") or item.get("parameter_name")
+        if not key:
+            continue
+        spec = item.get("spec") or item.get("space") or item.get("search_space")
+        if not isinstance(spec, dict):
+            spec = {k: v for k, v in item.items() if k not in {"key", "name", "param", "parameter", "parameter_name"}}
+        entries.append((str(key), spec))
+    return entries
 
 
 def _normalize_search_spec(key: str, spec: Any) -> dict[str, Any] | None:
     if not isinstance(spec, dict):
         return None
+    if not spec:
+        return {}
     spec_type = str(spec.get("type") or "").strip().lower()
     if spec_type in {"randint", "uniform", "loguniform"}:
         normalized = dict(spec)
@@ -1129,6 +1346,7 @@ def _normalize_alpaca_timeframe(value: str) -> str:
         return "Minute"
     normalized = raw.lower().replace(" ", "")
     alias_map = {
+        "1": "Minute",
         "1m": "Minute",
         "1min": "Minute",
         "min": "Minute",
@@ -1344,6 +1562,7 @@ def _run_hpo_backtest(
     run_name = str(analysis_cfg.get("run_name") or "Backtest_HPO")
     total_samples = int(hpo_cfg.get("num_samples") or 50)
     max_concurrent_trials = int(hpo_cfg.get("max_concurrent_trials") or 8)
+    objective_metric = str(hpo_cfg.get("objective_metric") or "annualized_return")
     log.info(
         "Trading HPO | running in Ray Tune dashboard=http://127.0.0.1:8265 trials=%s max_concurrent=%s run_name=%s",
         total_samples,
@@ -1392,6 +1611,23 @@ def _run_hpo_backtest(
         portfolio_param_keys=list(hpo_cfg.get("portfolio_param_keys") or []),
         mlflow_policy=mlflow_policy,
         config_artifact_paths=list(config_artifact_paths or []),
+        objective_metric=objective_metric,
+    )
+    _run_hpo_smoke_trials(
+        search_space=dict(hpo_cfg.get("search_space") or {}),
+        algorithm_param_keys=list(hpo_cfg.get("algorithm_param_keys") or []),
+        portfolio_param_keys=list(hpo_cfg.get("portfolio_param_keys") or []),
+        base_algorithm_config=dict(algorithm_params),
+        base_portfolio_config=base_pf_cfg,
+        base_data_provider_config=data_provider_params,
+        base_backtest_config=base_backtest_cfg,
+        algorithm_class=algorithm_cls,
+        portfolio_class=portfolio_cls,
+        data_provider_class=data_provider_cls,
+        order_manager_class=order_manager_cls,
+        mlflow_policy=mlflow_policy,
+        objective_metric=objective_metric,
+        smoke_trials=int(hpo_cfg.get("smoke_trials") or 3),
     )
     optuna_search = optuna_mod.OptunaSearch(metric="_metric", mode="max")
     tune_config_kwargs: dict[str, Any] = {
@@ -1489,6 +1725,113 @@ def _parse_search_space_config(search_space: dict[str, Any]) -> dict[str, Any]:
     return module.parse_search_space(search_space)
 
 
+def _run_hpo_smoke_trials(
+    *,
+    search_space: dict[str, Any],
+    algorithm_param_keys: list[str],
+    portfolio_param_keys: list[str],
+    base_algorithm_config: dict[str, Any],
+    base_portfolio_config: dict[str, Any],
+    base_data_provider_config: dict[str, Any],
+    base_backtest_config: dict[str, Any],
+    algorithm_class: type[Any],
+    portfolio_class: type[Any],
+    data_provider_class: type[Any],
+    order_manager_class: type[Any],
+    mlflow_policy: dict[str, Any],
+    objective_metric: str,
+    smoke_trials: int,
+) -> None:
+    samples = _smoke_trial_configs(search_space, limit=smoke_trials)
+    if not samples:
+        return
+    failures: list[str] = []
+    metrics: list[float] = []
+    trade_counts: list[int] = []
+    for sample in samples:
+        try:
+            sample = _repair_sampled_hpo_config(sample)
+            alg_cfg = {**base_algorithm_config, **{k: sample[k] for k in algorithm_param_keys if k in sample}}
+            pf_cfg = {**base_portfolio_config, **{k: sample[k] for k in portfolio_param_keys if k in sample}}
+            result = _run_backtest_local_with_mlflow_policy(
+                backtest_cfg=base_backtest_config,
+                alg_cfg=alg_cfg,
+                pf_cfg=pf_cfg,
+                dp_cfg=base_data_provider_config,
+                algorithm_class=algorithm_class,
+                portfolio_class=portfolio_class,
+                data_provider_class=data_provider_class,
+                order_manager_class=order_manager_class,
+                mlflow_policy={**mlflow_policy, "annualized_return_threshold": 1e18},
+            )
+            metrics.append(_metric_from_result(result["metrics"], objective_metric, fallback=float("nan")))
+            trade_counts.append(len(result.get("trades") or []))
+        except Exception as exc:
+            failures.append(str(exc))
+    if len(failures) == len(samples):
+        raise ValueError(f"HPO smoke check failed: all {len(samples)} sampled configs crashed; first_error={failures[0]}")
+    if trade_counts and max(trade_counts) <= 0:
+        raise ValueError(f"HPO smoke check failed: {len(trade_counts)} sampled configs produced zero trades")
+    if metrics and not any(math.isfinite(value) for value in metrics):
+        raise ValueError(f"HPO smoke check failed: no finite {objective_metric} values")
+
+
+def _smoke_trial_configs(search_space: dict[str, Any], *, limit: int) -> list[dict[str, Any]]:
+    if limit <= 0 or not search_space:
+        return []
+    configs: list[dict[str, Any]] = []
+    fractions = [0.5, 0.2, 0.8, 0.35, 0.65]
+    for fraction in fractions[: max(1, limit)]:
+        configs.append({key: _sample_spec_midpoint(spec, fraction=fraction) for key, spec in search_space.items()})
+    return configs
+
+
+def _sample_spec_midpoint(spec: dict[str, Any], *, fraction: float) -> Any:
+    spec_type = str((spec or {}).get("type") or "").lower()
+    values = list((spec or {}).get("values") or [])
+    if spec_type == "choice" and values:
+        return values[min(len(values) - 1, max(0, int(round(fraction * (len(values) - 1)))))]
+    low = float((spec or {}).get("low", 0.0))
+    high = float((spec or {}).get("high", low))
+    value = low + (high - low) * float(fraction)
+    if spec_type == "randint":
+        return max(int(low), min(int(high) - 1, int(round(value))))
+    return round(value, 6)
+
+
+def _repair_sampled_hpo_config(config: dict[str, Any]) -> dict[str, Any]:
+    repaired = dict(config)
+    for low_key, high_key in (
+        ("low_quantile", "high_quantile"),
+        ("lower_quantile", "upper_quantile"),
+        ("vol_low_quantile", "vol_high_quantile"),
+        ("percentile_low", "percentile_high"),
+        ("birth_death_ratio_lower", "birth_death_ratio_upper"),
+        ("ratio_gate_lower_normal", "ratio_gate_upper_normal"),
+        ("ratio_gate_lower_degraded", "ratio_gate_upper_degraded"),
+        ("h0_percentile_low", "h0_percentile_high"),
+        ("vol_persistence_low_pct", "vol_persistence_high_pct"),
+    ):
+        if low_key in repaired and high_key in repaired:
+            low = float(repaired[low_key])
+            high = float(repaired[high_key])
+            if low >= high:
+                midpoint = (low + high) / 2.0
+                repaired[low_key] = midpoint * 0.8
+                repaired[high_key] = midpoint * 1.2 if midpoint else high + 1.0
+    for fast_key, slow_key in (
+        ("fast_ma_period", "slow_ma_period"),
+        ("momentum_fast_sma", "momentum_slow_sma"),
+        ("fast_period", "slow_period"),
+    ):
+        if fast_key in repaired and slow_key in repaired:
+            fast = int(repaired[fast_key])
+            slow = int(repaired[slow_key])
+            if fast >= slow:
+                repaired[fast_key] = max(1, slow // 2)
+    return repaired
+
+
 def _backtest_objective_with_mlflow_policy(
     config: dict[str, Any],
     *,
@@ -1505,8 +1848,10 @@ def _backtest_objective_with_mlflow_policy(
     portfolio_param_keys: list[str],
     mlflow_policy: dict[str, Any],
     config_artifact_paths: list[str] | None = None,
+    objective_metric: str = "annualized_return",
 ) -> dict[str, Any]:
     try:
+        config = _repair_sampled_hpo_config(dict(config))
         alg_params = {k: config[k] for k in algorithm_param_keys if k in config}
         alg_cfg = {**base_algorithm_config, **alg_params}
         pf_params = {k: config[k] for k in portfolio_param_keys if k in config}
@@ -1523,7 +1868,7 @@ def _backtest_objective_with_mlflow_policy(
             mlflow_policy=mlflow_policy,
             config_artifact_paths=list(config_artifact_paths or []),
         )
-        metric_value = _coerce_finite_metric(getattr(result["metrics"], "annualized_return", 0.0), fallback=-1_000_000_000.0)
+        metric_value = _metric_from_result(result["metrics"], objective_metric, fallback=-1_000_000_000.0)
         return {"_metric": metric_value}
     except Exception as exc:
         log.warning("Trading HPO | trial failed: %s", exc, exc_info=True)
@@ -1708,6 +2053,16 @@ def _coerce_finite_metric(value: Any, *, fallback: float) -> float:
     return metric
 
 
+def _metric_from_result(metrics: Any, name: str, *, fallback: float) -> float:
+    if is_dataclass(metrics):
+        value = getattr(metrics, name, None)
+    elif isinstance(metrics, dict):
+        value = metrics.get(name)
+    else:
+        value = getattr(metrics, name, None)
+    return _coerce_finite_metric(value, fallback=fallback)
+
+
 def _trial_status_counts(trials: list[Any]) -> dict[str, int]:
     counts = {
         "queued": 0,
@@ -1824,6 +2179,15 @@ def _make_tune_progress_callback(
                     metric_name=metric_name,
                     done=done,
                 )
+            )
+            counts = _trial_status_counts(trials)
+            offset = int(os.environ.get("RESEARCH_HPO_TRIAL_OFFSET") or 0)
+            global_total = int(os.environ.get("RESEARCH_HPO_TRIAL_TOTAL") or 0) or (offset + int(total_samples or 0))
+            terminal_progress.emit_hpo_update(
+                done=offset + counts["done"] + counts["errored"],
+                running=counts["running"],
+                total=global_total,
+                message=f"{run_name} {'complete' if done else 'running'}",
             )
 
         def on_step_end(self, iteration: int, trials: list[Any], **info: Any) -> None:

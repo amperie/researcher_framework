@@ -53,6 +53,7 @@ memory:
 llm:
   default_model: claude-haiku-4-5
   step_overrides:
+    arxiv_query_rewrite: claude-haiku-4-5
     research: claude-haiku-4-5
     refine: claude-haiku-4-5
     evaluate: claude-haiku-4-5
@@ -234,7 +235,7 @@ execution:
     benchmarks: {}
     hpo:
       objective_metric: annualized_return
-      num_samples: 80
+      num_samples: 20
       max_concurrent_trials: 8
       log_progress: true
       progress_report_interval_seconds: 15
@@ -403,10 +404,11 @@ prompts:
         For optimization_target="algorithm", only tune algorithm_param_keys.
         For optimization_target="portfolio", only tune portfolio_param_keys.
         For optimization_target="joint", tune both and always include stop_pct and profit_pct in portfolio_param_keys and search_space.
-        Start with a wide search space, not a narrow local search.
+        Specify the intended tunable parameters, but keep numeric ranges realistic.
         Enforce stop_pct and profit_pct in the range 0.5 to 20.0 percent.
-        For integer hyperparameters, widen ranges aggressively; as a default heuristic, expand a seed value by roughly three orders of magnitude.
-        Example: a seed fast_period of 12 should be explored on the order of 1 to 12000 rather than 8 to 16.
+        Keep percentiles in [1, 99], quantiles in [0.01, 0.99], moving-average windows <= 500,
+        Rips/topology windows <= 120, z-score thresholds within about [-4, 4], and position/risk
+        fractions in [0.001, 1.0]. Do not expand integer parameters by orders of magnitude.
         Prefer continuous ranges so the optimizer can search freely.
         Use `uniform`, `loguniform`, or `randint` ranges instead of discrete `choice` lists whenever possible.
         Do not emit `choice` for tunable trading hyperparameters unless a parameter is truly categorical and cannot be represented as a numeric range.

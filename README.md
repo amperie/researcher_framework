@@ -33,7 +33,7 @@ uv run python main.py --mode brainstorm --profile neuralsignal --direction "gene
 uv run python main.py --mode brainstorm --profile trading --resume-brainstorm "<session-id>"
 ```
 
-Brainstorm sessions are configured by files such as `configs/brainstorm/default.brainstorm.yaml`. The default setup uses facilitator, skeptic, and researcher roles. The researcher role can call configured research tools, such as profile context and memory retrieval, while the facilitator maintains consensus and drafts a plan.
+Brainstorm sessions are configured by files such as `configs/brainstorm/default.trading.brainstorm.yaml`. The default setup uses facilitator, skeptic, and researcher roles. The researcher role can call configured research tools, such as profile context and memory retrieval, while the facilitator maintains consensus and drafts a plan.
 
 During a paused brainstorm session, the interactive commands are:
 
@@ -83,16 +83,35 @@ A profile controls the step list, prompts, research tools, datasets, base classe
 
 ## Running It
 
+Show help:
+
+```powershell
+uv run python main.py help
+```
+
 List profiles:
 
 ```powershell
 uv run python main.py --list-profiles
 ```
 
+List nodes for a profile:
+
+```powershell
+uv run python main.py --profile neuralsignal --list-nodes
+```
+
 Run the main pipeline from a fresh direction:
 
 ```powershell
 uv run python main.py --profile neuralsignal --direction "attention head specialization"
+```
+
+Run all proposed next steps once, or continuously loop through the top promoted next step:
+
+```powershell
+uv run python main.py --profile trading --direction "SPY intraday momentum" --run-next-steps-once
+uv run python main.py --profile neuralsignal --direction "residual entropy features" --loop
 ```
 
 Run the pipeline from saved seeds:
@@ -103,10 +122,19 @@ uv run python main.py --profile neuralsignal --source-experiment "exp-123" --pro
 uv run python main.py --profile neuralsignal --source-experiment "exp-123" --handoff "run_handoff:..."
 ```
 
+Resume the pipeline from memory or a state snapshot:
+
+```powershell
+uv run python main.py --profile neuralsignal --resume-from "experiment_result:..." --start-node implement
+uv run python main.py --profile neuralsignal --start-node check_experiment_jobs --resume-snapshot
+uv run python main.py --profile neuralsignal --start-node implement --resume-snapshot dev/state/neuralsignal/after_plan_implementation.json
+```
+
 Start brainstorm mode from a fresh prompt:
 
 ```powershell
 uv run python main.py --mode brainstorm --profile trading --direction "using technical indicators and regime detection to predict SPY direction"
+uv run python main.py --mode brainstorm --profile trading --config configs/brainstorm/default.trading.brainstorm.yaml
 ```
 
 Resume or seed brainstorm mode from prior work:
@@ -120,6 +148,15 @@ uv run python main.py --mode brainstorm --profile trading --next-step "next_step
 ```
 
 In brainstorm mode, imported run context, proposal templates, and lineage are loaded into the brainstorm session so you can adjust them before using `execute` to hand off into the main pipeline.
+
+Attach campaign metadata or force NeuralSignal dataset regeneration when needed:
+
+```powershell
+uv run python main.py --profile trading --direction "factor rotation" --campaign-id "camp-1" --campaign-title "Macro rotation" --campaign-variant-id "v1" --campaign-variant-title "Baseline" --campaign-variant-index 1 --campaign-size 3
+uv run python main.py --profile neuralsignal --direction "new detector" --force-dataset-refresh
+```
+
+Full CLI reference: [`docs/main_cli_usage.md`](docs/main_cli_usage.md).
 
 ## Adding A New Research Domain
 

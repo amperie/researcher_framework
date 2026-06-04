@@ -14,6 +14,7 @@ log = get_logger(__name__)
 def build_core_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
     """Build generic canonical memory records from the current graph state."""
     records: list[MemoryRecord] = []
+    records.extend(build_pipeline_run_memory_records(profile, state))
     records.extend(build_research_memory_records(profile, state))
     records.extend(build_idea_memory_records(profile, state))
     records.extend(build_refined_idea_memory_records(profile, state))
@@ -33,6 +34,75 @@ def build_core_memory_records(profile: dict[str, Any], state: dict[str, Any]) ->
         profile.get("name"),
     )
     return deduped
+
+
+def build_pipeline_run_memory_records(profile: dict[str, Any], state: dict[str, Any]) -> list[MemoryRecord]:
+    """Build a lightweight run anchor even when no experiment result exists."""
+    domain = str(profile.get("name") or state.get("profile_name") or "")
+    direction = str(state.get("research_direction") or "")
+    family_id = str(state.get("root_run_family_id") or "")
+    if not family_id and not direction:
+        return []
+    root_direction = str(state.get("root_research_direction") or direction)
+    run_key = fingerprint_json({
+        "domain": domain,
+        "family_id": family_id,
+        "direction": direction,
+        "source_next_step_record_id": state.get("source_next_step_record_id") or "",
+        "source_proposal_seed_record_id": state.get("source_proposal_seed_record_id") or "",
+        "campaign_variant_id": state.get("campaign_variant_id") or "",
+    })
+    record_id = f"pipeline_run:{run_key}"
+    counts = {
+        "n_ideas": len(state.get("ideas") or []),
+        "n_refined_ideas": len(state.get("refined_ideas") or []),
+        "n_proposals": len(state.get("proposals") or []),
+        "n_experiment_results": len(state.get("experiment_results") or []),
+        "n_next_steps": len(state.get("next_steps") or []),
+    }
+    return [{
+        "record_id": record_id,
+        "domain": domain,
+        "kind": "pipeline_run",
+        "object_type": "pipeline_run",
+        "object_key": run_key,
+        "object_role": "run",
+        "schema_version": "1",
+        "title": direction or family_id or "pipeline_run",
+        "summary": (
+            f"Direction: {direction}\n"
+            f"Ideas: {counts['n_ideas']}\n"
+            f"Proposals: {counts['n_proposals']}\n"
+            f"Experiment results: {counts['n_experiment_results']}\n"
+            f"Next steps: {counts['n_next_steps']}"
+        ).strip(),
+        "content": {
+            "research_direction": direction,
+            "root_run_family_id": family_id,
+            "root_research_direction": root_direction,
+            "source_next_step_record_id": str(state.get("source_next_step_record_id") or ""),
+            "source_next_step_title": str(state.get("source_next_step_title") or ""),
+            "source_proposal_seed_record_id": str(state.get("source_proposal_seed_record_id") or ""),
+            "source_proposal_seed_title": str(state.get("source_proposal_seed_title") or ""),
+            "counts": counts,
+            "next_step_selection": state.get("next_step_selection") or {},
+        },
+        "metadata": {
+            "profile": domain,
+            "research_direction": direction,
+            "root_run_family_id": family_id,
+            "root_research_direction": root_direction,
+            "source_next_step_record_id": str(state.get("source_next_step_record_id") or ""),
+            "source_next_step_title": str(state.get("source_next_step_title") or ""),
+            "source_proposal_seed_record_id": str(state.get("source_proposal_seed_record_id") or ""),
+            "source_proposal_seed_title": str(state.get("source_proposal_seed_title") or ""),
+            **counts,
+        },
+        "tags": [domain, "pipeline_run"],
+        "created_at": _now_iso(),
+        "entities": [{"entity_type": "research_direction", "key": direction, "name": direction}] if direction else [],
+        "relations": [],
+    }]
 
 
 def ensure_memory_record_defaults(record: MemoryRecord, *, node: str = "") -> MemoryRecord:
@@ -386,6 +456,12 @@ def build_idea_memory_records(profile: dict[str, Any], state: dict[str, Any]) ->
     ideas = state.get("ideas") or []
     direction = state.get("research_direction", "")
     domain = str(profile.get("name") or "")
+    root_run_family_id = str(state.get("root_run_family_id") or "")
+    root_research_direction = str(state.get("root_research_direction") or direction or "")
+    source_next_step_record_id = str(state.get("source_next_step_record_id") or "")
+    source_next_step_title = str(state.get("source_next_step_title") or "")
+    source_proposal_seed_record_id = str(state.get("source_proposal_seed_record_id") or "")
+    source_proposal_seed_title = str(state.get("source_proposal_seed_title") or "")
     records: list[MemoryRecord] = []
 
     for idea in ideas:
@@ -416,6 +492,12 @@ def build_idea_memory_records(profile: dict[str, Any], state: dict[str, Any]) ->
             "metadata": {
                 "profile": domain,
                 "research_direction": direction,
+                "root_run_family_id": root_run_family_id,
+                "root_research_direction": root_research_direction,
+                "source_next_step_record_id": source_next_step_record_id,
+                "source_next_step_title": source_next_step_title,
+                "source_proposal_seed_record_id": source_proposal_seed_record_id,
+                "source_proposal_seed_title": source_proposal_seed_title,
                 "idea_name": idea_name,
             },
             "tags": [domain, "idea"],
@@ -431,6 +513,12 @@ def build_refined_idea_memory_records(profile: dict[str, Any], state: dict[str, 
     ideas = state.get("refined_ideas") or []
     direction = state.get("research_direction", "")
     domain = str(profile.get("name") or "")
+    root_run_family_id = str(state.get("root_run_family_id") or "")
+    root_research_direction = str(state.get("root_research_direction") or direction or "")
+    source_next_step_record_id = str(state.get("source_next_step_record_id") or "")
+    source_next_step_title = str(state.get("source_next_step_title") or "")
+    source_proposal_seed_record_id = str(state.get("source_proposal_seed_record_id") or "")
+    source_proposal_seed_title = str(state.get("source_proposal_seed_title") or "")
     records: list[MemoryRecord] = []
 
     for idea in ideas:
@@ -461,6 +549,12 @@ def build_refined_idea_memory_records(profile: dict[str, Any], state: dict[str, 
             "metadata": {
                 "profile": domain,
                 "research_direction": direction,
+                "root_run_family_id": root_run_family_id,
+                "root_research_direction": root_research_direction,
+                "source_next_step_record_id": source_next_step_record_id,
+                "source_next_step_title": source_next_step_title,
+                "source_proposal_seed_record_id": source_proposal_seed_record_id,
+                "source_proposal_seed_title": source_proposal_seed_title,
                 "idea_name": idea_name,
             },
             "tags": [domain, "refined_idea"],

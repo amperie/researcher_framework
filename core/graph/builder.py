@@ -15,6 +15,7 @@ from configs.config import dev_path
 from core.graph.nodes import STEP_REGISTRY
 from core.graph.state import ResearchState
 from core.utils.logger import get_logger
+from core.utils import terminal_progress
 
 log = get_logger(__name__)
 
@@ -30,9 +31,11 @@ def _wrap_node(fn: Callable, profile: dict, step_name: str) -> Callable:
     """Wrap a node function to inject the profile dict as a second argument."""
     @functools.wraps(fn)
     def wrapper(state: ResearchState) -> dict:
+        terminal_progress.start_stage(step_name)
         delta = fn(state, profile)
         merged_state = {**state, **(delta or {})}
         _write_state_snapshot(str(profile.get("name") or state.get("profile_name") or "default"), step_name, merged_state)
+        terminal_progress.finish_stage(step_name)
         return delta
     return wrapper
 

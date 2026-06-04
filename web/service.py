@@ -71,6 +71,7 @@ def list_run_summaries(*, profile_name: str | None = None, limit: int = 100) -> 
         if profile_name and ctx.name != profile_name:
             continue
         seen_ids: set[str] = set()
+        seen_run_keys: set[tuple[str, str]] = set()
         try:
             records = ctx.memory_service.find_records({"object_type": "experiment_result"}, limit=limit)
         except Exception:
@@ -83,6 +84,10 @@ def list_run_summaries(*, profile_name: str | None = None, limit: int = 100) -> 
                 seen_ids.add(record_id)
             if experiment_id:
                 seen_ids.add(experiment_id)
+            seen_run_keys.add((
+                str(metadata.get("root_run_family_id") or ""),
+                str(metadata.get("research_direction") or ""),
+            ))
             mlflow_bundle = _mlflow_bundle(ctx.profile, metadata)
             runs.append({
                 "profile_name": ctx.name,
@@ -103,10 +108,49 @@ def list_run_summaries(*, profile_name: str | None = None, limit: int = 100) -> 
                 "primary_metric_value": metadata.get(_primary_metric_name(ctx.profile, metadata), None),
                 "source": "memory",
             })
+        for record in _pipeline_run_summaries(ctx, seen_run_keys, limit=limit):
+            record_id = str(record.get("record_id") or "")
+            if record_id:
+                seen_ids.add(record_id)
+            runs.append(record)
         for raw_run in _raw_result_summaries(ctx.profile, limit=limit, seen_ids=seen_ids):
             runs.append({"profile_name": ctx.name, **raw_run})
     runs.sort(key=lambda item: item.get("created_at", ""), reverse=True)
     return runs[:limit]
+
+
+def _pipeline_run_summaries(ctx: ProfileContext, seen_run_keys: set[tuple[str, str]], *, limit: int) -> list[dict[str, Any]]:
+    try:
+        records = ctx.memory_service.find_records({"object_type": "pipeline_run"}, limit=limit)
+    except Exception:
+        return []
+    output: list[dict[str, Any]] = []
+    for record in records:
+        metadata = dict(record.get("metadata") or {})
+        family_id = str(metadata.get("root_run_family_id") or "")
+        direction = str(metadata.get("research_direction") or "")
+        if (family_id, direction) in seen_run_keys:
+            continue
+        output.append({
+            "profile_name": ctx.name,
+            "record_id": str(record.get("record_id") or ""),
+            "title": str(record.get("title") or metadata.get("research_direction") or ""),
+            "created_at": str(record.get("created_at") or ""),
+            "experiment_id": "",
+            "proposal_name": "pipeline run",
+            "dataset": "",
+            "detector": "",
+            "assessment": "planning",
+            "mlflow_run_id": "",
+            "mlflow_ui_url": "",
+            "root_run_family_id": family_id,
+            "root_research_direction": str(metadata.get("root_research_direction") or metadata.get("research_direction") or ""),
+            "source_next_step_title": str(metadata.get("source_next_step_title") or ""),
+            "primary_metric_name": "",
+            "primary_metric_value": None,
+            "source": "pipeline_memory",
+        })
+    return output
 
 
 def diagnostics() -> dict[str, Any]:
@@ -586,7 +630,16 @@ def _related_records(ctx: ProfileContext, run_record: dict[str, Any]) -> list[di
     metadata = dict(run_record.get("metadata") or {})
     proposal_name = str(metadata.get("proposal_name") or "")
     research_direction = str(metadata.get("research_direction") or "")
+    family_id = str(metadata.get("root_run_family_id") or "")
+    source_next_step_record_id = str(metadata.get("source_next_step_record_id") or "")
+    source_proposal_seed_record_id = str(metadata.get("source_proposal_seed_record_id") or "")
     filters: list[dict[str, Any]] = []
+    if family_id:
+        filters.append({"metadata.root_run_family_id": family_id})
+    if source_next_step_record_id:
+        filters.append({"metadata.source_next_step_record_id": source_next_step_record_id})
+    if source_proposal_seed_record_id:
+        filters.append({"metadata.source_proposal_seed_record_id": source_proposal_seed_record_id})
     if proposal_name:
         filters.append({"metadata.proposal_name": proposal_name})
     if research_direction:
@@ -852,8 +905,7 @@ def _run_text_panels(run_record: dict[str, Any], related_records: list[dict[str,
         _record_content_text(research_record, content_keys=["research_summary"]) or str((research_record or {}).get("summary") or ""),
     )
 
-    idea_record = _find_related_record(related_records, "idea")
-    add_panel("Idea", _record_text(idea_record))
+    add_panel("Ideas", _records_text(_related_records_by_kind(related_records, "idea")))
 
     refined_idea_record = _find_related_record(related_records, "refined_idea")
     add_panel("Refined Idea", _record_text(refined_idea_record))
@@ -908,6 +960,22 @@ def _find_related_record(records: list[dict[str, Any]], kind: str) -> dict[str, 
         if str(record.get("kind") or record.get("object_type") or "") == kind:
             return record
     return None
+
+
+def _related_records_by_kind(records: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
+    return [
+        record for record in records
+        if str(record.get("kind") or record.get("object_type") or "") == kind
+    ]
+
+
+def _records_text(records: list[dict[str, Any]]) -> str:
+    blocks = []
+    for index, record in enumerate(records, 1):
+        title = str(record.get("title") or "").strip()
+        body = _record_text(record)
+        blocks.append(f"{index}. {title}\n{body}".strip() if title else body)
+    return "\n\n".join(block for block in blocks if block).strip()
 
 
 def _record_text(record: dict[str, Any] | None) -> str:

@@ -41,9 +41,11 @@ Example:
 
 ```yaml
 tools:
-  - ref: trading_arxiv
+  - ref: arxiv-q-bio
     max_results: 4
 ```
+
+arXiv top-level archive presets are named `arxiv-<category-prefix>`, for example `arxiv-math`, `arxiv-cs`, `arxiv-q-bio`, and `arxiv-q-fin`. Each preset expands to the concrete category IDs listed in the arXiv taxonomy, such as `q-bio.BM`, `q-bio.NC`, and `q-bio.QM` for `arxiv-q-bio`.
 
 ## Current Catalog Reuse
 
@@ -56,7 +58,7 @@ The trading brainstorm config uses refs in [default.trading.brainstorm.yaml](/E:
 The actual accepted keys are still defined by the Python collectors in [research_tools.py](/E:/Programming/NeuralSignalResearcher/core/tools/research_tools.py:1). The most useful built-ins are:
 
 - `collect_arxiv`
-  Keys: `max_results`, `query`, `categories`
+  Keys: `max_results`, `query`, `categories`, `match_any`
 - `collect_memory`
   Keys: `n_results`
 - `collect_prior_experiments`

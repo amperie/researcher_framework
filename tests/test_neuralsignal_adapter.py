@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from core.plugins.neuralsignal import adapter as ns_adapter
 from core.plugins.neuralsignal.adapter import NeuralSignalPlugin
 
 
@@ -146,6 +147,68 @@ def test_build_dataset_config_contains_neuralsignal_payload(tmp_path):
     assert payload["backend_config"]["mongo_url"] == "mongodb://localhost:27017"
 
 
+def test_build_dataset_config_forwards_scan_cache_backend_options(tmp_path):
+    adapter = NeuralSignalPlugin()
+    profile = _profile()
+    profile["backend_config"] = {"cache_scan_on_write": False}
+    profile["datasets"][0]["scan_cache"] = {
+        "enabled": True,
+        "memory_size": 8,
+        "disk_size": 64,
+        "directory": str(tmp_path / "scan-cache"),
+        "on_load": True,
+    }
+    proposal = _proposal()
+    proposal["hyperparameters"]["backend_config"] = {"scan_hd_cache_size": 128}
+
+    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+        payload = adapter._build_dataset_config(profile, proposal, _implementation(tmp_path))
+
+    backend = payload["backend_config"]
+    assert backend["cache_scan_on_load"] is True
+    assert backend["cache_scan_on_write"] is False
+    assert backend["scan_cache_size"] == 8
+    assert backend["scan_hd_cache_size"] == 128
+    assert backend["scan_cache_directory"] == str(tmp_path / "scan-cache")
+
+
+def test_build_dataset_config_replaces_missing_drive_scan_cache_directory_with_f_temp(tmp_path):
+    adapter = NeuralSignalPlugin()
+    profile = _profile()
+    profile["datasets"][0]["backend_config"] = {
+        "scan_cache_size": 8,
+        "scan_hd_cache_size": 64,
+        "scan_cache_directory": "J:\\Temp\\scan_cache",
+    }
+
+    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path in {"F:/temp", "F:\\temp"}):
+            payload = adapter._build_dataset_config(profile, _proposal(), _implementation(tmp_path))
+
+    cache_dir = Path(payload["backend_config"]["scan_cache_directory"])
+    assert cache_dir == Path("F:/temp")
+    assert cache_dir.exists()
+    assert payload["backend_config"]["scan_cache_size"] == 8
+    assert payload["backend_config"]["scan_hd_cache_size"] == 64
+
+
+def test_default_scan_cache_directory_uses_tmp_when_f_drive_missing():
+    profile = _profile()
+    with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path == "/tmp"):
+        cache_dir = ns_adapter._default_scan_cache_directory(profile)
+
+    assert cache_dir == Path("/tmp")
+
+
+def test_default_scan_cache_directory_falls_back_when_f_drive_missing(tmp_path):
+    profile = _profile()
+    with patch("core.plugins.neuralsignal.adapter._path_root_exists", return_value=False):
+        with patch("core.plugins.neuralsignal.adapter.dev_path", lambda *parts: tmp_path.joinpath(*parts)):
+            cache_dir = ns_adapter._default_scan_cache_directory(profile)
+
+    assert cache_dir == tmp_path / "scan_cache" / "neuralsignal"
+
+
 def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path):
     csv_path = tmp_path / "features.csv"
     csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
@@ -160,7 +223,7 @@ def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path)
                     delta = adapter.prepare_experiment(_profile(), state)
 
     call_task.assert_called_once()
-    assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_dataset"
+    assert call_task.call_args.args[1] == "core.plugins.neuralsignal.tasks.create_dataset"
     assert call_task.call_args.kwargs["timeout"] == 7200
     assert call_task.call_args.kwargs["cwd"] == str(tmp_path / "neuralsignal_src")
     assert delta["errors"] == []
@@ -349,8 +412,8 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
                                                     delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
 
     call_task.assert_called_once()
-    assert call_task.call_args.args[0] == "plugins.neuralsignal.tasks.create_s1_model"
-    payload = call_task.call_args.args[1]
+    assert call_task.call_args.args[1] == "core.plugins.neuralsignal.tasks.create_s1_model"
+    payload = call_task.call_args.args[2]
     assert call_task.call_args.kwargs["timeout"] == 7200
     assert call_task.call_args.kwargs["cwd"] == str(tmp_path)
     assert payload["dataset_path"] == str(tmp_path / "features.csv")
@@ -874,7 +937,7 @@ def test_check_experiment_jobs_collects_completed_proposal_branch(tmp_path):
         json.dumps({
             "job_id": "proposal_branch_job",
             "job_dir": str(job_dir),
-            "task_path": "plugins.neuralsignal.tasks.run_proposal_branch",
+            "task_path": "core.plugins.neuralsignal.tasks.run_proposal_branch",
             "payload": payload,
         }),
         encoding="utf-8",

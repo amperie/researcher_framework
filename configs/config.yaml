@@ -38,6 +38,15 @@ mlflow_uri: ${MLFLOW_URI:http://hp.lan:8899}
 artifact_store_backend: ${ARTIFACT_STORE_BACKEND:s3}
 dev_root: ${DEV_ROOT:dev}
 artifact_store_root: ${ARTIFACT_STORE_ROOT:dev/artifacts}
+
+# Cache locations can be platform-specific. Relative dev/... paths are resolved
+# against dev_root by configs.config.cache_path().
+cache_locations:
+  uv:
+    windows: ${UV_CACHE_DIR_WINDOWS:dev/uv-cache}
+    linux: ${UV_CACHE_DIR_LINUX:/tmp/neuralsignalresearcher/uv-cache}
+    macos: ${UV_CACHE_DIR_MACOS:~/Library/Caches/neuralsignalresearcher/uv-cache}
+
 s3_endpoint_url: ${S3_ENDPOINT_URL:http://hp.lan:9000}
 s3_access_key_id: ${S3_ACCESS_KEY_ID:minioadmin}
 s3_secret_access_key: ${S3_SECRET_ACCESS_KEY:minioadmin123}

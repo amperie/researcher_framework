@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import importlib
 import json
+import time
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -43,6 +44,7 @@ def create_brainstorm_state(
         "turn_log": [],
         "consensus": _empty_consensus(),
         "plan_draft": _empty_plan_draft(str(direction or "")),
+        "pending_research_query": "",
         "pending_questions": [],
         "pending_decisions": [],
         "stop_policy": dict(brainstorm_cfg.get("stop_policy") or {}),
@@ -96,18 +98,32 @@ class BrainstormEngine:
         role_ended = on_role_end or (lambda _role, _round_index: None)
         stop_policy = dict(state.get("stop_policy") or {})
         max_rounds = int(stop_policy.get("max_rounds_per_run", 3) or 3)
+        max_messages = int(stop_policy.get("max_messages_per_run", 0) or 0)
+        max_seconds = int(stop_policy.get("max_seconds_per_run", 0) or 0)
         summary_interval_messages = int(stop_policy.get("summary_interval_messages", 4) or 4)
+        summary_interval_seconds = int(stop_policy.get("summary_interval_seconds", 0) or 0)
         pause_after_research = bool(stop_policy.get("pause_after_research_round", True))
         state["status"] = "running"
+        run_start = time.monotonic()
+        last_summary_time = run_start
 
         try:
             while int((state.get("progress") or {}).get("round_index", 0) or 0) < max_rounds:
+                if max_seconds > 0 and (time.monotonic() - run_start) >= max_seconds:
+                    break
                 state["progress"]["round_index"] = int(state["progress"].get("round_index", 0) or 0) + 1
                 round_index = int(state["progress"]["round_index"])
                 had_research_turn = False
+                budget_hit = False
                 for role in list(state.get("role_configs") or []):
                     if not role.get("enabled", True):
                         continue
+                    if max_seconds > 0 and (time.monotonic() - run_start) >= max_seconds:
+                        budget_hit = True
+                        break
+                    if max_messages > 0 and int(state["progress"].get("message_count", 0)) >= max_messages:
+                        budget_hit = True
+                        break
                     role_started(role, round_index)
                     try:
                         turn = self._run_role_turn(state, role, round_index)
@@ -119,11 +135,15 @@ class BrainstormEngine:
                         had_research_turn = True
                     emitter(self._render_turn(turn))
                     self._refresh_consensus(state)
-                    if summary_interval_messages > 0 and int(state["progress"]["message_count"]) % summary_interval_messages == 0:
+                    now = time.monotonic()
+                    time_summary_due = summary_interval_seconds > 0 and (now - last_summary_time) >= summary_interval_seconds
+                    message_summary_due = summary_interval_messages > 0 and int(state["progress"]["message_count"]) % summary_interval_messages == 0
+                    if time_summary_due or message_summary_due:
                         summary = render_consensus_summary(state)
                         state["last_summary"] = summary
                         emitter("\n[Current thinking]\n" + summary + "\n")
-                if pause_after_research and had_research_turn:
+                        last_summary_time = now
+                if budget_hit or (pause_after_research and had_research_turn):
                     break
             state["status"] = "awaiting_user"
             state["last_summary"] = render_consensus_summary(state)
@@ -163,16 +183,20 @@ class BrainstormEngine:
             text = str(cmd.get("text") or "").strip()
             if text:
                 state["user_intent_notes"] = list(state.get("user_intent_notes") or []) + [text]
-                state["current_goal"] = text
-                self._reset_deliberation_state(state, preserve_seed_evidence=True)
-                emitter("Direction updated. Previous brainstorm consensus was cleared.\n")
+                emitter("Feedback noted. Type `continue` to resume with updated context.\n")
             return state
         if cmd_type == "request_research":
+            query = str(cmd.get("query") or "").strip()
+            if query:
+                state["pending_research_query"] = query
             state["progress"]["round_index"] = 0
             return self.run_until_pause(state, emit=emit, on_role_start=on_role_start, on_role_end=on_role_end)
         if cmd_type == "draft_plan":
             self._draft_plan(state)
             emitter(self._render_plan(state) + "\n")
+            return state
+        if cmd_type == "edit_plan":
+            emitter("Plan editing requires an interactive terminal. Use the brainstorm CLI `edit_plan` command.\n")
             return state
         if cmd_type == "approve_plan":
             if state.get("plan_draft"):
@@ -189,6 +213,7 @@ class BrainstormEngine:
         if cmd_type == "exit":
             state["status"] = "cancelled"
             return state
+        state["progress"]["round_index"] = 0
         return self.run_until_pause(state, emit=emit, on_role_start=on_role_start, on_role_end=on_role_end)
 
     def _run_role_turn(self, state: BrainstormState, role: dict[str, Any], round_index: int) -> dict[str, Any]:
@@ -240,6 +265,8 @@ class BrainstormEngine:
         max_tools_per_round = int(((role.get("research_budget") or {}).get("max_tools_per_round") or 0))
         if max_tools_per_round > 0:
             tool_defs = tool_defs[:max_tools_per_round]
+        query_direction = self._research_query_for_round(state)
+        seen_ids = {str(item.get("artifact_id") or "") for item in (state.get("consensus", {}).get("evidence") or []) if item.get("artifact_id")}
         for tool_def in tool_defs:
             tool_path = str(tool_def.get("path") or "").strip()
             if not tool_path:
@@ -250,7 +277,7 @@ class BrainstormEngine:
             tool_cfg = dict(tool_def)
             tool_cfg.setdefault("name", str(tool_def.get("name") or tool_path.rsplit(".", 1)[-1]))
             try:
-                result = tool(str(state.get("current_goal") or ""), self.profile, tool_cfg, state)
+                result = tool(query_direction, self.profile, tool_cfg, state)
             except Exception as exc:
                 result = [{
                     "artifact_id": f"research_error:{tool_path}",
@@ -266,7 +293,7 @@ class BrainstormEngine:
         normalized = [
             _normalize_artifact(item, self._matching_tool_config(tool_defs, item))
             for item in capped
-            if isinstance(item, dict)
+            if isinstance(item, dict) and str(item.get("artifact_id") or "") not in seen_ids
         ]
         scored = self._score_brainstorm_research(state, role, normalized, tool_defs)
         selected = self._select_brainstorm_research(role, scored)
@@ -300,6 +327,22 @@ class BrainstormEngine:
             "citations": [{"title": item.get("title", ""), "url": item.get("url", "")} for item in selected[:5]],
             "created_at": _now_iso(),
         }
+
+    @staticmethod
+    def _research_query_for_round(state: BrainstormState) -> str:
+        pending = str(state.get("pending_research_query") or "").strip()
+        if pending:
+            state["pending_research_query"] = ""
+            return pending
+        goal = str(state.get("current_goal") or "").strip()
+        consensus = dict(state.get("consensus") or {})
+        open_questions = [str(q).strip() for q in (consensus.get("open_questions") or []) if str(q).strip()]
+        if open_questions:
+            return f"{goal} — {open_questions[0]}"
+        next_rec = str(consensus.get("next_recommendation") or "").strip()
+        if next_rec and next_rec.lower() != goal.lower():
+            return f"{goal} {next_rec}"
+        return goal
 
     def _matching_tool_config(self, tool_defs: list[dict[str, Any]], artifact: dict[str, Any]) -> dict[str, Any]:
         artifact_source = str(artifact.get("source") or "").strip()
@@ -390,14 +433,7 @@ class BrainstormEngine:
 
     def _draft_plan(self, state: BrainstormState) -> None:
         prompt_cfg = dict((state.get("prompt_config") or {}).get("plan") or {})
-        plan_input_json = json.dumps(
-            {
-                "goal": state.get("current_goal", ""),
-                "consensus": state.get("consensus") or {},
-                "user_notes": state.get("user_intent_notes") or [],
-            },
-            indent=2,
-        )
+        plan_input_json = json.dumps(_plan_prompt_payload(state, prompt_cfg), indent=2)
         system_prompt = self._render_template(
             str(prompt_cfg.get("system_template") or ""),
             {"plan_input_json": plan_input_json},
@@ -638,6 +674,72 @@ def _empty_consensus(*, evidence: list[dict[str, Any]] | None = None) -> dict[st
         "confidence": "low",
         "evidence": list(evidence or []),
     }
+
+
+def _plan_prompt_payload(state: BrainstormState, prompt_cfg: dict[str, Any]) -> dict[str, Any]:
+    max_items = int(prompt_cfg.get("max_consensus_items", 4) or 4)
+    max_evidence = int(prompt_cfg.get("max_evidence_items", 8) or 8)
+    max_text_chars = int(prompt_cfg.get("max_text_chars", 360) or 360)
+    max_summary_chars = int(prompt_cfg.get("max_summary_chars", 2500) or 2500)
+    max_notes = int(prompt_cfg.get("max_user_notes", 5) or 5)
+    consensus = dict(state.get("consensus") or {})
+    summary_state = dict(state)
+    summary_consensus = dict(consensus)
+    summary_consensus["evidence"] = []
+    summary_state["consensus"] = summary_consensus
+    return {
+        "goal": _compact_text(state.get("current_goal", ""), max_text_chars),
+        "current_summary": _compact_text(render_consensus_summary(summary_state), max_summary_chars),
+        "planning_inputs": {
+            "candidate_options": _compact_sequence(consensus.get("active_options") or [], max_items=max_items, max_text_chars=max_text_chars),
+            "risks_or_objections": _compact_sequence(consensus.get("objections") or [], max_items=max_items, max_text_chars=max_text_chars),
+            "open_questions": _compact_sequence(consensus.get("open_questions") or [], max_items=max_items, max_text_chars=max_text_chars),
+            "next_recommendation": _compact_text(consensus.get("next_recommendation", ""), max_text_chars),
+            "confidence": _compact_text(consensus.get("confidence", ""), 40),
+        },
+        "evidence": _compact_evidence(consensus.get("evidence") or [], max_items=max_evidence, max_text_chars=max_text_chars),
+        "user_notes": _compact_sequence(state.get("user_intent_notes") or [], max_items=max_notes, max_text_chars=max_text_chars),
+    }
+
+
+def _compact_evidence(items: list[Any], *, max_items: int, max_text_chars: int) -> list[dict[str, Any]]:
+    compacted: list[dict[str, Any]] = []
+    for item in items[:max_items]:
+        if isinstance(item, dict):
+            compacted.append({
+                "artifact_id": _compact_text(item.get("artifact_id", ""), 120),
+                "source": _compact_text(item.get("source", ""), 80),
+                "source_type": _compact_text(item.get("source_type", ""), 80),
+                "title": _compact_text(item.get("title", ""), 180),
+                "summary": _compact_text(item.get("summary", ""), max_text_chars),
+                "url": _compact_text(item.get("url", ""), 180),
+                "relevance_score": item.get("relevance_score", ""),
+                "relevance_reason": _compact_text(item.get("relevance_reason", ""), 240),
+            })
+        else:
+            compacted.append({"summary": _compact_text(item, max_text_chars)})
+    return compacted
+
+
+def _compact_sequence(items: list[Any], *, max_items: int, max_text_chars: int) -> list[Any]:
+    return [_compact_value(item, max_text_chars=max_text_chars) for item in items[:max_items]]
+
+
+def _compact_value(value: Any, *, max_text_chars: int) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _compact_value(item, max_text_chars=max_text_chars)
+            for key, item in list(value.items())[:12]
+            if key not in {"raw", "metadata", "content", "state"}
+        }
+    if isinstance(value, list):
+        return [_compact_value(item, max_text_chars=max_text_chars) for item in value[:8]]
+    return _compact_text(value, max_text_chars)
+
+
+def _compact_text(value: Any, max_chars: int) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= max_chars else text[:max_chars].rstrip() + "... [truncated]"
 
 
 def _empty_plan_draft(direction: str) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from argparse import Namespace
 from types import SimpleNamespace
@@ -83,6 +84,64 @@ def test_parse_args_accepts_config_alias():
     args = main.parse_args(["--mode", "brainstorm", "--profile", "trading", "--config", "configs/brainstorm/x.yaml"])
 
     assert args.brainstorm_config == "configs/brainstorm/x.yaml"
+
+
+def test_parse_args_accepts_resume_snapshot_without_value():
+    args = main.parse_args(["--profile", "neuralsignal", "--start-node", "check_experiment_jobs", "--resume-snapshot"])
+
+    assert args.resume_snapshot == "auto"
+
+
+def test_load_resume_snapshot_auto_uses_previous_node_snapshot(tmp_path, monkeypatch):
+    profile = {"pipeline": {"steps": ["research", "ideate", "implement"]}}
+    snapshot_dir = tmp_path / "state" / "p"
+    snapshot_dir.mkdir(parents=True)
+    snapshot = snapshot_dir / "after_ideate.json"
+    snapshot.write_text(json.dumps({"research_direction": "d", "implementation_plans": [{"x": 1}]}), encoding="utf-8")
+    monkeypatch.setattr(main, "dev_path", lambda *parts: tmp_path.joinpath(*parts))
+
+    state = main._load_resume_snapshot("p", profile, "implement", "auto")
+
+    assert state["research_direction"] == "d"
+    assert state["profile_name"] == "p"
+    assert state["errors"] == []
+
+
+def test_load_resume_snapshot_accepts_explicit_path(tmp_path):
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text(json.dumps({"research_direction": "d", "proposals": [{"name": "p"}]}), encoding="utf-8")
+
+    state = main._load_resume_snapshot("neuralsignal", {"pipeline": {"steps": ["research"]}}, "research", str(snapshot))
+
+    assert state["proposals"][0]["name"] == "p"
+
+
+def test_build_initial_state_preserves_resume_fields():
+    state = main.build_initial_state(
+        "neuralsignal",
+        "direction",
+        {
+            "research_direction": "direction",
+            "proposals": [{"name": "p"}],
+            "implementations": [{"proposal_name": "p"}],
+            "validation_results": [{"proposal_name": "p", "passed": True}],
+            "experiment_jobs": [{"job_id": "j"}],
+        },
+        continue_loop=False,
+    )
+
+    assert state["proposals"] == [{"name": "p"}]
+    assert state["implementations"] == [{"proposal_name": "p"}]
+    assert state["validation_results"] == [{"proposal_name": "p", "passed": True}]
+    assert state["experiment_jobs"] == [{"job_id": "j"}]
+
+
+def test_force_dataset_refresh_sets_all_datasets_to_overwrite():
+    profile = {"datasets": [{"name": "a", "overwrite_existing_dataset": False}, {"name": "b"}]}
+
+    main._force_dataset_refresh(profile)
+
+    assert [item["overwrite_existing_dataset"] for item in profile["datasets"]] == [True, True]
 
 
 def test_parse_args_help_command_exits_with_zero(capsys):

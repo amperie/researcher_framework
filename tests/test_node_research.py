@@ -291,4 +291,91 @@ def test_collect_arxiv_passes_categories_to_search():
         collect_arxiv("predict spy direction", profile, tool_cfg, {})
 
     assert mock_search.call_args.kwargs["categories"] == ["q-fin.TR", "cs.LG"]
+    assert mock_search.call_args.kwargs["match_any"] is False
+
+
+def test_collect_arxiv_builds_short_targeted_query():
+    profile = _make_profile()
+    profile["research"]["domain_context"] = (
+        "Focus on mechanistic interpretability, probing classifiers, activation analysis, "
+        "feature engineering over LLM internal representations, and hallucination detection."
+    )
+    direction = (
+        "Investigate whether claim-ratio and residual-entropy feature sweeps improve "
+        "hallucination onset detection across multiple model families with careful ablations."
+    )
+
+    with patch("core.tools.research_tools.search_arxiv", return_value=[]) as mock_search:
+        collect_arxiv(direction, profile, {"name": "arxiv", "max_results": 5}, {})
+
+    query = mock_search.call_args.args[0]
+    assert len(query) <= 96
+    assert "claim" in query
+    assert "ratio" in query
+    assert "residual" in query
+    assert "entropy" in query
+    assert "mechanistic interpretability" not in query
+
+
+def test_collect_arxiv_uses_configured_query_terms():
+    profile = _make_profile()
+    tool_cfg = {
+        "name": "arxiv",
+        "max_results": 5,
+        "query_terms": ["residual stream", "sparse probes", "hallucination"],
+    }
+
+    with patch("core.tools.research_tools.search_arxiv", return_value=[]) as mock_search:
+        collect_arxiv("ignore this long direction", profile, tool_cfg, {})
+
+    assert mock_search.call_args.args[0] == "residual stream sparse probes hallucination"
+
+
+def test_collect_arxiv_uses_llm_rewritten_queries():
+    profile = _make_profile()
+    profile["llm"] = {
+        "default_model": "test-model",
+        "step_overrides": {"arxiv_query_rewrite": "test-model"},
+    }
+    tool_cfg = {
+        "name": "arxiv",
+        "max_results": 3,
+        "llm_query_rewrite": True,
+        "query_llm_step": "arxiv_query_rewrite",
+        "max_queries": 2,
+    }
+    llm = MagicMock()
+    llm.invoke.return_value = MagicMock(
+        content='["uncertainty latent neural decoding", "cross subject neural decoding"]'
+    )
+
+    with patch("core.tools.research_tools.get_llm", return_value=llm) as mock_get_llm:
+        with patch("core.tools.research_tools.search_arxiv") as mock_search:
+            mock_search.side_effect = [
+                [{
+                    "title": "Paper A",
+                    "abstract": "A",
+                    "url": "u1",
+                    "arxiv_id": "1",
+                    "published": "2024-01-01",
+                }],
+                [{
+                    "title": "Paper B",
+                    "abstract": "B",
+                    "url": "u2",
+                    "arxiv_id": "2",
+                    "published": "2024-01-02",
+                }],
+            ]
+            artifacts = collect_arxiv("robust neural decoding direction", profile, tool_cfg, {})
+
+    mock_get_llm.assert_called_once()
+    assert [call.args[0] for call in mock_search.call_args_list] == [
+        "uncertainty latent neural decoding",
+        "cross subject neural decoding",
+    ]
+    assert [artifact["metadata"]["query"] for artifact in artifacts] == [
+        "uncertainty latent neural decoding",
+        "cross subject neural decoding",
+    ]
 

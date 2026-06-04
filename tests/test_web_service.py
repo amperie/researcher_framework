@@ -13,7 +13,9 @@ class _FakeMemoryService:
     def find_records(self, filters, limit=50):
         object_type = filters.get("object_type")
         if object_type == "experiment_result":
-            return list(self._records)[:limit]
+            return [record for record in self._records if str(record.get("object_type") or "") == "experiment_result"][:limit]
+        if object_type == "pipeline_run":
+            return [record for record in self._records if str(record.get("object_type") or "") == "pipeline_run"][:limit]
         if object_type == "run_handoff":
             source_id = filters.get("metadata.source_experiment_record_id")
             return [
@@ -468,6 +470,208 @@ def test_get_run_bundle_includes_proposed_next_steps_panel(monkeypatch):
     assert "Suggested Direction: Probe residual stream signals around hallucination onset" in panel["body"]
     assert bundle["run"]["next_steps"][0]["record_id"] == "next_step:1"
     assert bundle["run"]["next_steps"][0]["copy_command"] == 'uv run python main.py --profile neuralsignal --next-step "next_step:1"'
+
+
+def test_get_run_bundle_includes_all_original_ideas(monkeypatch):
+    profile = {
+        "name": "neuralsignal",
+        "storage": {},
+        "evaluation": {"primary_metric": "test_auc"},
+    }
+    run_record = {
+        "record_id": "exp-root",
+        "title": "proposal-root",
+        "object_type": "experiment_result",
+        "created_at": "2026-05-01T20:00:00+00:00",
+        "metadata": {
+            "experiment_id": "exp-root",
+            "proposal_name": "proposal-root",
+            "research_direction": "initial direction",
+        },
+        "entities": [],
+        "relations": [],
+    }
+    idea_a = {
+        "record_id": "idea:a",
+        "title": "Original idea A",
+        "object_type": "idea",
+        "kind": "idea",
+        "created_at": "2026-05-01T20:01:00+00:00",
+        "content": {"description": "Probe signal A", "hypothesis": "A works"},
+        "metadata": {"research_direction": "initial direction"},
+    }
+    idea_b = {
+        "record_id": "idea:b",
+        "title": "Original idea B",
+        "object_type": "idea",
+        "kind": "idea",
+        "created_at": "2026-05-01T20:02:00+00:00",
+        "content": {"description": "Probe signal B", "hypothesis": "B works"},
+        "metadata": {"research_direction": "initial direction"},
+    }
+    context = service.ProfileContext(
+        name="neuralsignal",
+        profile=profile,
+        memory_service=_FakeMemoryService(records=[run_record, idea_a, idea_b]),
+    )
+    context.memory_service.document_store = SimpleNamespace(get=lambda record_id: run_record if record_id == "exp-root" else None)
+
+    monkeypatch.setattr(service, "_load_context", lambda _profile_name: context)
+    monkeypatch.setattr(service, "_artifact_records", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(service, "_graph_bundle", lambda *_args, **_kwargs: {"backend_enabled": False, "nodes": [], "edges": []})
+    monkeypatch.setattr(service, "_mlflow_bundle", lambda *_args, **_kwargs: {"ui_url": ""})
+    monkeypatch.setattr(service, "list_run_handoffs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(service, "list_proposal_seeds", lambda *_args, **_kwargs: [])
+
+    bundle = service.get_run_bundle("neuralsignal", "exp-root")
+
+    panel = next(item for item in bundle["run"]["text_panels"] if item["title"] == "Ideas")
+    assert "Original idea A" in panel["body"]
+    assert "Probe signal A" in panel["body"]
+    assert "Original idea B" in panel["body"]
+    assert "Probe signal B" in panel["body"]
+
+
+def test_get_run_bundle_relates_ideas_by_run_family(monkeypatch):
+    profile = {
+        "name": "neuralsignal",
+        "storage": {},
+        "evaluation": {"primary_metric": "test_auc"},
+    }
+    run_record = {
+        "record_id": "exp-root",
+        "title": "proposal-root",
+        "object_type": "experiment_result",
+        "created_at": "2026-05-01T20:00:00+00:00",
+        "metadata": {
+            "experiment_id": "exp-root",
+            "proposal_name": "proposal-root",
+            "research_direction": "final execution direction",
+            "root_run_family_id": "family-1",
+        },
+        "entities": [],
+        "relations": [],
+    }
+    idea_record = {
+        "record_id": "idea:a",
+        "title": "Original family idea",
+        "object_type": "idea",
+        "kind": "idea",
+        "created_at": "2026-05-01T20:01:00+00:00",
+        "content": {"description": "This came from the original ideation pass"},
+        "metadata": {
+            "research_direction": "different seed wording",
+            "root_run_family_id": "family-1",
+        },
+    }
+    context = service.ProfileContext(
+        name="neuralsignal",
+        profile=profile,
+        memory_service=_FakeMemoryService(records=[run_record, idea_record]),
+    )
+    context.memory_service.document_store = SimpleNamespace(get=lambda record_id: run_record if record_id == "exp-root" else None)
+
+    monkeypatch.setattr(service, "_load_context", lambda _profile_name: context)
+    monkeypatch.setattr(service, "_artifact_records", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(service, "_graph_bundle", lambda *_args, **_kwargs: {"backend_enabled": False, "nodes": [], "edges": []})
+    monkeypatch.setattr(service, "_mlflow_bundle", lambda *_args, **_kwargs: {"ui_url": ""})
+    monkeypatch.setattr(service, "list_run_handoffs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(service, "list_proposal_seeds", lambda *_args, **_kwargs: [])
+
+    bundle = service.get_run_bundle("neuralsignal", "exp-root")
+
+    panel = next(item for item in bundle["run"]["text_panels"] if item["title"] == "Ideas")
+    assert "Original family idea" in panel["body"]
+
+
+def test_list_run_summaries_includes_pipeline_run_without_experiment_result(monkeypatch):
+    profile = {
+        "name": "trading",
+        "storage": {},
+        "evaluation": {"primary_metric": "test_auc"},
+    }
+    pipeline_run = {
+        "record_id": "pipeline_run:family-1",
+        "title": "use topology to model market movements",
+        "object_type": "pipeline_run",
+        "created_at": "2026-05-27T19:29:10+00:00",
+        "metadata": {
+            "research_direction": "use topology to model market movements",
+            "root_run_family_id": "family-1",
+            "n_ideas": 5,
+            "n_next_steps": 3,
+        },
+    }
+    context = service.ProfileContext(
+        name="trading",
+        profile=profile,
+        memory_service=_FakeMemoryService(records=[pipeline_run]),
+    )
+
+    monkeypatch.setattr(service, "load_profile_contexts", lambda: [context])
+    monkeypatch.setattr(service, "_raw_result_summaries", lambda *_args, **_kwargs: [])
+
+    runs = service.list_run_summaries(profile_name="trading", limit=10)
+
+    assert runs[0]["record_id"] == "pipeline_run:family-1"
+    assert runs[0]["source"] == "pipeline_memory"
+    assert runs[0]["assessment"] == "planning"
+
+
+def test_list_run_summaries_keeps_parent_pipeline_run_when_child_experiment_exists(monkeypatch):
+    profile = {
+        "name": "trading",
+        "storage": {},
+        "evaluation": {"primary_metric": "test_auc"},
+    }
+    child_experiment = {
+        "record_id": "exp-child",
+        "title": "child experiment",
+        "object_type": "experiment_result",
+        "created_at": "2026-05-27T22:00:00+00:00",
+        "metadata": {
+            "experiment_id": "exp-child",
+            "proposal_name": "child experiment",
+            "research_direction": "child direction",
+            "root_run_family_id": "family-1",
+        },
+    }
+    parent_pipeline = {
+        "record_id": "pipeline_run:parent",
+        "title": "parent topology direction",
+        "object_type": "pipeline_run",
+        "created_at": "2026-05-27T19:00:00+00:00",
+        "metadata": {
+            "research_direction": "parent topology direction",
+            "root_run_family_id": "family-1",
+        },
+    }
+    duplicate_child_pipeline = {
+        "record_id": "pipeline_run:child",
+        "title": "child direction",
+        "object_type": "pipeline_run",
+        "created_at": "2026-05-27T21:00:00+00:00",
+        "metadata": {
+            "research_direction": "child direction",
+            "root_run_family_id": "family-1",
+        },
+    }
+    context = service.ProfileContext(
+        name="trading",
+        profile=profile,
+        memory_service=_FakeMemoryService(records=[child_experiment, parent_pipeline, duplicate_child_pipeline]),
+    )
+
+    monkeypatch.setattr(service, "load_profile_contexts", lambda: [context])
+    monkeypatch.setattr(service, "_raw_result_summaries", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(service, "_mlflow_bundle", lambda *_args, **_kwargs: {"ui_url": ""})
+
+    runs = service.list_run_summaries(profile_name="trading", limit=10)
+    record_ids = {run["record_id"] for run in runs}
+
+    assert "exp-child" in record_ids
+    assert "pipeline_run:parent" in record_ids
+    assert "pipeline_run:child" not in record_ids
 
 
 def test_create_brainstorm_session_accepts_source_experiment_seed(monkeypatch):

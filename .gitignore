@@ -56,6 +56,8 @@ venv.bak/
 *.swo
 
 # pyenv / uv — .python-version is committed to pin the interpreter version
+uv-cache/
+dev/uv-cache/
 
 # mypy
 .mypy_cache/

@@ -146,3 +146,41 @@ def test_plan_command_normalizes_string_proposals_and_implementation_plans(minim
     assert state["plan_draft"]["proposals"][0]["description"] == "use macro regime filter"
     assert state["plan_draft"]["implementation_plans"][0]["class_name"] == "MacroRegimeFilter"
     assert any("coerced string proposal entry" in error for error in state["errors"])
+
+
+def test_plan_command_compacts_large_evidence_before_llm(minimal_profile):
+    cfg = {
+        "name": "test_brainstorm",
+        "roles": [{"name": "planner", "persona_type": "planner"}],
+        "stop_policy": {},
+        "summary": {},
+        "prompts": {"plan": {"max_evidence_items": 2, "max_text_chars": 120}},
+        "execution_handoff": {"default_start_node": "propose_experiments", "allow_direct_to_implement": True},
+    }
+    engine = BrainstormEngine(minimal_profile, cfg)
+    state = create_brainstorm_state(profile_name="test_profile", direction="direction", brainstorm_cfg=cfg)
+    huge = "x" * 100_000
+    state["consensus"]["evidence"] = [
+        {
+            "artifact_id": f"a-{idx}",
+            "source": "arxiv",
+            "title": f"paper {idx}",
+            "summary": huge,
+            "raw": {"full_text": huge},
+            "metadata": {"blob": huge},
+        }
+        for idx in range(4)
+    ]
+    fake_llm = MagicMock()
+    fake_llm.invoke.return_value = SimpleNamespace(
+        content='{"research_direction":"direction","proposals":[],"implementation_plans":[]}'
+    )
+
+    with patch("core.brainstorm.engine.get_llm", return_value=fake_llm):
+        engine.apply_command(state, "plan", emit=lambda _message: None)
+
+    human_prompt = fake_llm.invoke.call_args.args[0][1].content
+    assert len(human_prompt) < 5000
+    assert "full_text" not in human_prompt
+    assert "metadata" not in human_prompt
+    assert human_prompt.count("paper ") == 2

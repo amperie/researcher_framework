@@ -4,6 +4,9 @@ from __future__ import annotations
 import urllib.error
 from unittest.mock import MagicMock, patch
 
+import arxiv
+import requests
+
 from core.tools.arxiv_tool import (
     _build_query,
     _effective_max_results,
@@ -74,6 +77,11 @@ class TestCategories:
         assert "predict spy direction" in built
         assert "cat:q-fin.TR" in built
         assert "cat:cs.LG" in built
+
+    def test_build_query_can_relax_term_matching(self):
+        built = _build_query("persistent homology finance", ["q-fin.TR"], match_any=True)
+        assert "persistent OR homology OR finance" in built
+        assert "cat:q-fin.TR" in built
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +207,7 @@ class TestSearchArxiv:
         assert papers[0]["title"] == "Test Paper"
         assert papers[0]["arxiv_id"] == "2301.12345"
         assert papers[0]["published"] == "2023-01-01"
-        mock_client_ctor.assert_called_once_with(page_size=5)
+        assert mock_client_ctor.call_args.kwargs["page_size"] == 5
 
     def test_abstract_newlines_replaced(self):
         mock_result = self._make_arxiv_result(
@@ -232,7 +240,7 @@ class TestSearchArxiv:
 
         call_kwargs = mock_search.call_args
         assert call_kwargs.kwargs.get("max_results") == 10 or call_kwargs.args[1] == 10
-        mock_client_ctor.assert_called_once_with(page_size=10)
+        assert mock_client_ctor.call_args.kwargs["page_size"] == 10
 
     def test_uses_normalized_query(self):
         mock_client = MagicMock()
@@ -268,6 +276,29 @@ class TestSearchArxiv:
                 loaded = search_arxiv("test query", 5, categories=["q-fin.TR"])
         assert loaded == papers
         mock_search.assert_not_called()
+
+    def test_rate_limit_returns_empty_and_sets_cooldown_cache(self, tmp_path):
+        mock_client = MagicMock()
+        mock_client.results.side_effect = arxiv.HTTPError("url", 0, 429)
+        with patch("core.tools.arxiv_tool._SEARCH_CACHE_DIR", tmp_path):
+            with patch("arxiv.Client", return_value=mock_client):
+                papers = search_arxiv("test query", 5)
+            with patch("arxiv.Search") as mock_search:
+                cached = search_arxiv("test query", 5)
+
+        assert papers == []
+        assert cached == []
+        mock_search.assert_not_called()
+
+    def test_network_timeout_returns_empty(self):
+        mock_client = MagicMock()
+        mock_client.results.side_effect = requests.exceptions.ReadTimeout("timeout")
+        with patch("arxiv.Client", return_value=mock_client):
+            with patch("core.tools.arxiv_tool.save_rate_limited_search") as mock_cooldown:
+                papers = search_arxiv("test query", 5)
+
+        assert papers == []
+        assert mock_cooldown.call_args.kwargs["reason"] == "network_unavailable"
 
 
 # ---------------------------------------------------------------------------

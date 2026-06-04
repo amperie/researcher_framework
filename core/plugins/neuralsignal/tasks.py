@@ -9,6 +9,7 @@ import importlib.util
 import os
 import shutil
 import sys
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,13 @@ def create_dataset(payload: dict[str, Any]) -> dict[str, Any]:
         result["file_paths"] = _move_dataset_files(result.get("file_paths") or [], cfg)
         return result
 
-    file_paths = ns_create_dataset(cfg, create_dataset=True) or []
+    try:
+        file_paths = ns_create_dataset(cfg, create_dataset=True) or []
+    except Exception as exc:
+        recovered = _recover_partial_dataset_file(cfg, exc)
+        if not recovered:
+            raise
+        return recovered
     return {"file_paths": _move_dataset_files(file_paths, cfg)}
 
 
@@ -89,6 +96,16 @@ def run_proposal_branch(payload: dict[str, Any]) -> dict[str, Any]:
 
     if not dataset_path:
         return {"error": "Proposal branch produced no dataset path"}
+    if dataset_result.get("usable_for_model") is False:
+        return {
+            "proposal_name": payload.get("proposal_name", "unknown"),
+            "experiment_id": payload.get("experiment_id", ""),
+            "dataset_result": dataset_result,
+            "model_result": {
+                "error": dataset_result.get("unusable_reason") or "Dataset is not usable for model training",
+                "skipped_model_training": True,
+            },
+        }
 
     model_cfg = dict(payload.get("model_config_base") or {})
     model_cfg["dataset_path"] = dataset_path
@@ -112,8 +129,13 @@ def _automation_config(payload: dict[str, Any]) -> dict[str, Any]:
     """Merge task payload over NeuralSignal's packaged automation defaults."""
     from neuralsignal.automation import get_config  # type: ignore
 
-    cfg = get_config()
-    cfg.update(payload)
+    cfg = deepcopy(get_config())
+    payload_copy = deepcopy(payload)
+    default_backend = cfg.get("backend_config")
+    payload_backend = payload_copy.get("backend_config")
+    cfg.update(payload_copy)
+    if isinstance(default_backend, dict) and isinstance(payload_backend, dict):
+        cfg["backend_config"] = {**default_backend, **payload_backend}
     return cfg
 
 
@@ -144,8 +166,30 @@ def _create_balanced_dataset(cfg: dict[str, Any], ns_create_dataset: Any) -> dic
         class_cfg["overwrite_dataset_file"] = idx == 0
         class_cfg["write_header"] = idx == 0
 
-        file_paths = ns_create_dataset(class_cfg, create_dataset=True) or []
-        str_paths = [str(path) for path in file_paths]
+        try:
+            file_paths = ns_create_dataset(class_cfg, create_dataset=True) or []
+            str_paths = [str(path) for path in file_paths]
+        except Exception as exc:
+            recovered = _recover_partial_dataset_file(class_cfg, exc)
+            if not recovered:
+                raise
+            str_paths = [str(path) for path in recovered.get("file_paths") or []]
+            if str_paths:
+                class_cfg["file_out"] = str_paths[0]
+                cfg["file_out"] = str_paths[0]
+            pulls.append({
+                "field": field,
+                "value": value,
+                "row_limit": limit,
+                "query": class_cfg["query"],
+                "file_paths": str_paths,
+                "partial": True,
+                "error": recovered.get("partial_error", ""),
+            })
+            all_paths.extend(str_paths)
+            if _should_continue_balanced_after_partial(recovered, values):
+                continue
+            break
         all_paths.extend(str_paths)
         pulls.append({
             "field": field,
@@ -155,8 +199,16 @@ def _create_balanced_dataset(cfg: dict[str, Any], ns_create_dataset: Any) -> dic
             "file_paths": str_paths,
         })
 
+    target_counts = _merged_target_counts(all_paths)
+    missing_targets = [str(value) for value in values if target_counts.get(str(value), 0) == 0]
     return {
         "file_paths": _dedupe_preserve_order(all_paths),
+        "target_counts": target_counts,
+        "usable_for_model": not missing_targets,
+        "unusable_reason": (
+            f"Partial dataset is missing target classes: {', '.join(missing_targets)}"
+            if missing_targets else ""
+        ),
         "balanced_target": {
             "enabled": True,
             "field": field,
@@ -210,6 +262,90 @@ def _move_dataset_files(file_paths: list[Any], cfg: dict[str, Any]) -> list[str]
             shutil.move(str(src), str(dest))
         moved.append(str(dest))
     return moved
+
+
+def _recover_partial_dataset_file(cfg: dict[str, Any], exc: Exception) -> dict[str, Any] | None:
+    if exc.__class__.__name__ != "CursorNotFound":
+        return None
+
+    path = _partial_dataset_path(cfg)
+    if not path.exists() or _csv_line_count(path) <= 1:
+        return None
+
+    moved = _move_dataset_files([path], cfg)
+    moved_path = Path(moved[0]) if moved else path
+    target_counts = _csv_value_counts(moved_path, "target")
+    required_targets = [str(item) for item in (cfg.get("balanced_target") or {}).get("values") or []]
+    missing_targets = [target for target in required_targets if target_counts.get(target, 0) == 0]
+    usable_for_model = not missing_targets
+    return {
+        "file_paths": moved,
+        "partial": True,
+        "partial_error": f"{type(exc).__name__}: {exc}",
+        "partial_rows": max(0, _csv_line_count(moved_path) - 1),
+        "target_counts": target_counts,
+        "usable_for_model": usable_for_model,
+        "unusable_reason": (
+            f"Partial dataset is missing target classes: {', '.join(missing_targets)}"
+            if missing_targets else ""
+        ),
+    }
+
+
+def _partial_dataset_path(cfg: dict[str, Any]) -> Path:
+    file_out = Path(str(cfg.get("file_out") or ""))
+    return file_out if file_out.is_absolute() else Path.cwd() / file_out
+
+
+def _csv_line_count(path: Path) -> int:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
+def _csv_value_counts(path: Path, column: str) -> dict[str, int]:
+    import csv
+
+    counts: dict[str, int] = {}
+    try:
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as fh:
+            for row in csv.DictReader(fh):
+                value = str(row.get(column, ""))
+                counts[value] = counts.get(value, 0) + 1
+    except OSError:
+        return {}
+    return counts
+
+
+def _should_continue_balanced_after_partial(result: dict[str, Any], required_targets: list[Any]) -> bool:
+    counts = {k: v for k, v in _as_int_counts(result.get("target_counts")).items() if v > 0}
+    required = [str(value) for value in required_targets]
+    missing = [target for target in required if counts.get(target, 0) == 0]
+    if not missing or len(counts) != 1:
+        return False
+    return next(iter(counts.values())) > 99
+
+
+def _merged_target_counts(paths: list[str]) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for path in _dedupe_preserve_order(paths):
+        for target, count in _csv_value_counts(Path(path), "target").items():
+            merged[target] = merged.get(target, 0) + count
+    return merged
+
+
+def _as_int_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, count in value.items():
+        try:
+            counts[str(key)] = int(count)
+        except (TypeError, ValueError):
+            continue
+    return counts
 
 
 def _enable_mongo_no_cursor_timeout() -> None:

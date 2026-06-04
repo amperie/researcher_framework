@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from core.memory.defaults import (
     build_experiment_memory_records,
+    build_idea_memory_records,
     build_next_step_memory_records,
+    build_pipeline_run_memory_records,
     build_proposal_memory_records,
     next_step_record_id,
 )
@@ -22,6 +24,59 @@ def test_next_step_record_id_matches_built_record(minimal_profile):
     records = build_next_step_memory_records(minimal_profile, state)
 
     assert records[0]["record_id"] == next_step_record_id("test_profile", "current direction", step)
+
+
+def test_pipeline_run_record_exists_without_experiment_results(minimal_profile):
+    state = {
+        "research_direction": "current direction",
+        "root_run_family_id": "family-1",
+        "ideas": [{"name": "idea_a"}],
+        "next_steps": [{"title": "next"}],
+        "experiment_results": [],
+    }
+
+    record = build_pipeline_run_memory_records(minimal_profile, state)[0]
+
+    assert record["record_id"].startswith("pipeline_run:")
+    assert record["object_type"] == "pipeline_run"
+    assert record["metadata"]["n_ideas"] == 1
+    assert record["metadata"]["n_next_steps"] == 1
+    assert record["metadata"]["n_experiment_results"] == 0
+
+
+def test_pipeline_run_record_id_distinguishes_follow_up_runs(minimal_profile):
+    parent = {
+        "research_direction": "topology parent",
+        "root_run_family_id": "family-1",
+    }
+    child = {
+        "research_direction": "topology child",
+        "root_run_family_id": "family-1",
+        "source_next_step_record_id": "next_step:abc",
+    }
+
+    parent_record = build_pipeline_run_memory_records(minimal_profile, parent)[0]
+    child_record = build_pipeline_run_memory_records(minimal_profile, child)[0]
+
+    assert parent_record["record_id"] != child_record["record_id"]
+    assert child_record["metadata"]["source_next_step_record_id"] == "next_step:abc"
+
+
+def test_idea_records_include_run_lineage(minimal_profile):
+    state = {
+        "research_direction": "current direction",
+        "root_run_family_id": "family-1",
+        "root_research_direction": "root direction",
+        "source_next_step_record_id": "next_step:abc",
+        "source_next_step_title": "Try the residual path idea",
+        "ideas": [{"name": "idea_a", "description": "desc"}],
+    }
+
+    record = build_idea_memory_records(minimal_profile, state)[0]
+
+    assert record["metadata"]["root_run_family_id"] == "family-1"
+    assert record["metadata"]["root_research_direction"] == "root direction"
+    assert record["metadata"]["source_next_step_record_id"] == "next_step:abc"
 
 
 def test_proposal_records_include_next_step_lineage(minimal_profile):

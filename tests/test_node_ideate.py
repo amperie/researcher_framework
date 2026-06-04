@@ -48,6 +48,17 @@ class TestIdeateNodeHappy:
             )
         assert result["ideas"][0]["name"] == "idea1"
 
+    def test_persists_generated_ideas(self):
+        llm = _make_llm(IDEAS_JSON)
+        state = {"research_direction": "test", "research_summary": "Summary."}
+        with patch("core.graph.nodes.ideate.get_llm", return_value=llm):
+            with patch("core.graph.nodes.ideate.persist_memory_records_for_state") as persist_memory:
+                result = ideate_node(state, PROFILE)
+
+        persist_memory.assert_called_once()
+        persisted_state = persist_memory.call_args.args[1]
+        assert persisted_state["ideas"] == result["ideas"]
+
     def test_uses_paper_digests_when_available(self):
         llm = _make_llm(IDEAS_JSON)
         state = {

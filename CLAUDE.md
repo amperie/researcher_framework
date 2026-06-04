@@ -43,7 +43,7 @@ requires only a new profile and (if needed) a thin plugin adapter.
 
 6. **Plugin adapters for execution** — `profile['experiment_adapter']` names a Python module.
    `plugins/loader.py::load_adapter(profile)` imports it and calls `get_adapter()` if present,
-�   +-- task_runner.py         # generic subprocess runner for dotted Python callables
+|   +-- task_runner.py         # generic subprocess runner for dotted Python callables
    returning a `ResearchAdapter` instance; otherwise falls back to legacy module-level functions.
    Node code only calls `load_adapter()` — it never imports plugin internals directly.
 
@@ -90,14 +90,14 @@ NeuralSignalResearcher/
 │       └── propose_next_steps.py  # suggest follow-up directions
 │
 +-- plugins/                   # domain adapters, thin, no orchestration logic
-�   +-- base.py                # ResearchAdapter Protocol (adapter contract)
-�   +-- loader.py              # load_adapter(profile), resolves get_adapter() or legacy module
-�   +-- task_runner.py         # generic subprocess runner for dotted Python callables
-�   +-- neuralsignal/
-�   �   +-- adapter.py          # ResearchAdapter skeleton for neuralsignal
-�   �   +-- tasks.py           # NeuralSignal task callables for subprocess execution
-�   �   +-- bridge.py          # compatibility wrapper around task_runner.py
-�   +-- trading/               # trading adapter scaffold
+|   +-- base.py                # ResearchAdapter Protocol (adapter contract)
+|   +-- loader.py              # load_adapter(profile), resolves get_adapter() or legacy module
+|   +-- task_runner.py         # generic subprocess runner for dotted Python callables
+|   +-- neuralsignal/
+|   |   +-- adapter.py          # ResearchAdapter skeleton for neuralsignal
+|   |   +-- tasks.py           # NeuralSignal task callables for subprocess execution
+|   |   +-- bridge.py          # compatibility wrapper around task_runner.py
+|   +-- trading/               # trading adapter scaffold
 │
 ├── tools/                     # reusable external-service wrappers
 │   ├── arxiv_tool.py          # search_arxiv, download_paper_text, digest cache
@@ -121,7 +121,7 @@ NeuralSignalResearcher/
 │   └── papers/                # arxiv digest cache (<arxiv_id>.digest)
 │
 ├── tests/
-├── main.py                    # --profile <name> --direction "..."  [--loop] [--list-profiles]
+├── main.py                    # main CLI: pipeline, brainstorm, discovery, seeded/resume runs
 └── run_node.py                # dev: run one step against a saved state snapshot
 ```
 
@@ -305,11 +305,26 @@ for each implementation:
 ## Running the System
 
 ```bash
-# Full pipeline
+# Help and discovery
+uv run python main.py help
+uv run python main.py --list-profiles
+uv run python main.py --profile neuralsignal --list-nodes
+
+# Pipeline from a fresh direction
 uv run python main.py --profile neuralsignal --direction "attention head specialization"
 
-# List available profiles
-uv run python main.py --list-profiles
+# Pipeline run modes
+uv run python main.py --profile trading --direction "SPY intraday momentum" --run-next-steps-once
+uv run python main.py --profile neuralsignal --direction "residual entropy features" --loop
+
+# Seeded and resumed pipeline runs
+uv run python main.py --profile neuralsignal --next-step "next_step:..."
+uv run python main.py --profile neuralsignal --resume-from "experiment_result:..." --start-node implement
+uv run python main.py --profile neuralsignal --start-node check_experiment_jobs --resume-snapshot
+
+# Brainstorm mode
+uv run python main.py --mode brainstorm --profile trading --direction "SPY regime filters"
+uv run python main.py --mode brainstorm --profile trading --config configs/brainstorm/default.trading.brainstorm.yaml
 
 # Run a single step against a saved state snapshot
 uv run python run_node.py implement --profile neuralsignal \

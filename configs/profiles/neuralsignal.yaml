@@ -26,11 +26,10 @@ pipeline:
     - evaluate
     - store_results
     - propose_next_steps
-    - rank_next_steps
 
 execution:
   mode: async
-  runner: ray   # local_process | ray
+  runner: local_process   # local_process | ray
   max_parallel_jobs: 8
   auto_submit_next_stage: true
   poll_interval_seconds: 30
@@ -88,41 +87,44 @@ knowledge_graph:
 
 # ── LLM Model Selection ────────────────────────────────────────────────────────
 llm:
-  default_model: claude-haiku-4-6
+  default_model: claude-haiku-4-5
   default_max_output_tokens: 1800
   prompt_context:
     ideate_max_digests: 2
     ideate_max_artifacts: 5
   step_overrides:
+    arxiv_query_rewrite:
+      model: claude-haiku-4-5
+      max_output_tokens: 500
     research:
-      model: claude-haiku-4-6
+      model: claude-haiku-4-5
       max_output_tokens: 1400
     ideate:
-      model: claude-haiku-4-6
-      max_output_tokens: 1200
+      model: claude-sonnet-4-6
+      max_output_tokens: 4000
     refine:
-      model: claude-haiku-4-6
-      max_output_tokens: 1400
+      model: claude-haiku-4-5
+      max_output_tokens: 5000
     propose_experiments:
-      model: claude-haiku-4-6
-      max_output_tokens: 1400
+      model: claude-haiku-4-5
+      max_output_tokens: 3000
     plan_implementation:
-      model: claude-haiku-4-6
-      max_output_tokens: 1600
+      model: claude-haiku-4-5
+      max_output_tokens: 3500
     implement:
-      model: claude-haiku-4-6
-      max_output_tokens: 2800
+      model: claude-haiku-4-5
+      max_output_tokens: 8000
     validate:
-      model: claude-haiku-4-6
-      max_output_tokens: 2200
+      model: claude-haiku-4-5
+      max_output_tokens: 5000
     evaluate:
-      model: claude-haiku-4-6
+      model: claude-haiku-4-5
       max_output_tokens: 1400
     propose_next_steps:
-      model: claude-haiku-4-6
+      model: claude-haiku-4-5
       max_output_tokens: 1000
     rank_next_steps:
-      model: claude-haiku-4-6
+      model: claude-haiku-4-5
       max_output_tokens: 900
 
 # ── Research Sources ──────────────────────────────────────────────────────────
@@ -132,8 +134,12 @@ research:
   tools:
     - name: arxiv
       tool: core.tools.research_tools.collect_arxiv
-      categories: [cs.LG, cs.AI, cs.CL]
-      max_results: 10
+      categories: [cs.LG, cs.AI, cs.CL, math]
+      max_results: 30
+      llm_query_rewrite: true
+      query_llm_step: arxiv_query_rewrite
+      max_queries: 4
+      match_any: false
       relevance_score_threshold: 6
       max_papers_to_digest: 2
     - name: memory
@@ -356,24 +362,15 @@ prompts:
 
   refine:
     system: |
-      Review these feature extraction ideas for feasibility.
+      Filter these feature extraction ideas for feasibility. Return ONLY valid JSON with no preamble.
 
-      Constraints:
-      - Only scan fields 'outputs', 'inputs', 'layer_id_to_name', 'layer_order',
-        'layer_passes', 'zone_size', 'ground_truth' are available.
-      - NO external files, probe weights, concept means, patched logits, or attention scores.
-      - Layer patterns are read from self.config, e.g. self.config.get('ffn_layer_patterns', [])
-        and self.config.get('attn_layer_patterns', []).
-      - Features must be extractable from Tensor values: mean, std, norm, cosine similarity,
-        directional statistics - no cross-attention or patching operations.
-      - process_feature_set(scan) must process one scan and return the configured output format.
+      ACCEPT an idea if it uses only: outputs, inputs, layer_id_to_name, layer_order,
+      layer_passes, zone_size, ground_truth. Tensor ops allowed: mean, std, norm, cosine similarity.
+      REJECT silently (omit from output) if it needs: external files, probe weights, concept means,
+      patched logits, attention scores, or cross-attention operations.
 
-      For each idea:
-      1. Accept if it only uses available data.
-      2. Reject (and explain) if it requires unavailable fields.
-      3. Improve accepted ideas with more specific process_feature_set implementation guidance.
-
-      Return a JSON array of refined ideas (same schema as input, with improved descriptions).
+      Return a JSON array containing only the accepted ideas. Keep each field to 1-2 sentences.
+      Same schema as input: name, description, hypothesis, rationale. No extra fields.
 
   propose_experiments:
     system: |
@@ -408,13 +405,14 @@ prompts:
         (e.g. "1. Iterate layer_order or outputs keys, filter by configured layer patterns",
               "2. For each matching layer, get outputs[layer_id]",
               "3. Compute mean activation across token/hidden dimensions",
-              "4. Append self.make_column_name(...) names to cols and float values to vals")
+              "4. Append self.make_column_name(full_name_string) names to cols and float values to vals; make_column_name takes exactly one concatenated string argument")
         Assume outputs is normally dict[str, torch.Tensor] and layer_order is list[str].
         Do not plan outputs[0] indexing unless explicitly handling a detected nested compatibility shape.
       - output_keys: list of feature column name patterns this class will return
       - imports_needed: list of Python import statements required
 
-      Return a JSON array of plans.
+      Return ONLY a valid JSON array of plan objects. No prose, no markdown, no explanation before or
+      after the JSON. Every element must be a JSON object with the fields above — never a string.
 
   implement:
     system: |
@@ -445,12 +443,18 @@ prompts:
         layer_passes, zone_size, ground_truth
       - Read layer patterns from self.config, e.g. self.config.get('ffn_layer_patterns', [])
         and self.config.get('attn_layer_patterns', [])
-      - Use self.make_column_name(...) for output column names when appropriate
+      - Use self.make_column_name(name) for output column names; it accepts exactly ONE positional
+        string argument — concatenate any prefix, layer, and suffix into one string before calling it
+        (e.g. self.make_column_name(f"{layer_id}_mean"), never self.make_column_name(a, b))
       - Default output_format is "name_and_value_columns": return (cols, vals)
       - If output_format == "tensor_dict", return None unless explicitly implementing tensor output
       - If output_format == "pandas", return pd.DataFrame([vals], columns=cols)
       - Otherwise raise ValueError for invalid output_format
       - Never return NaN or None values in vals; include error handling and skip layers where tensor operations fail
+      - NEVER use bare `except: pass` or `except Exception: pass` — catch only specific exceptions per
+        operation, log them (print is fine), and continue; swallowing all exceptions hides bugs and
+        returns empty cols/vals which fails every contract test
+      - Ensure any arrays passed to scipy.stats or numpy correlation functions have the same length
       - Include a standalone if __name__ == '__main__': block with a synthetic test
         (creates a mock scan dict and prints the result)
 
@@ -530,11 +534,13 @@ prompts:
 
   propose_next_steps:
     system: |
-      Based on the experiment results and original research direction, propose 3
-      high-value follow-up research directions.
+      Propose 3 high-value follow-up research directions based on the experiment results and
+      original research direction. If no results are available, propose directions grounded
+      in the research direction alone — do NOT ask for more information.
 
       Prioritize:
-      1. Directions that build on the most promising result (highest AUC)
+      1. Directions that build on the most promising result (highest AUC), or on the
+         research direction if no results exist
       2. Directions that address unexpected findings or failures
       3. Directions that combine complementary feature sets
 
@@ -544,7 +550,7 @@ prompts:
       - suggested_direction: the research question to investigate (used as next iteration's direction)
       - priority: 1 (highest) to 3 (lowest)
 
-      Return a JSON array of 3 next step proposals.
+      Return ONLY a valid JSON array of exactly 3 objects. No prose, no markdown.
 
   rank_next_steps:
     system: |

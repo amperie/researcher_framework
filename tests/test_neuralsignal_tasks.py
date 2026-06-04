@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import ModuleType
 
 from core.plugins.neuralsignal import tasks
@@ -17,6 +18,29 @@ def test_automation_config_merges_payload_over_neuralsignal_defaults(monkeypatch
     assert cfg["dataset_row_limit"] == 5
     assert cfg["seed"] == 43
     assert cfg["custom"] is True
+
+
+def test_automation_config_deep_merges_backend_config(monkeypatch):
+    automation = ModuleType("neuralsignal.automation")
+    automation.get_config = lambda: {
+        "backend_config": {
+            "backend_type": "neuralsignal_v1",
+            "mongo_url": "mongodb://default",
+            "scan_cache_size": 1000,
+            "scan_hd_cache_size": 2000,
+            "scan_cache_directory": "E:/cache",
+            "cache_scan_on_load": True,
+        }
+    }
+    monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
+
+    cfg = tasks._automation_config({"backend_config": {"mongo_url": "mongodb://override"}})
+
+    assert cfg["backend_config"]["mongo_url"] == "mongodb://override"
+    assert cfg["backend_config"]["scan_cache_size"] == 1000
+    assert cfg["backend_config"]["scan_hd_cache_size"] == 2000
+    assert cfg["backend_config"]["scan_cache_directory"] == "E:/cache"
+    assert cfg["backend_config"]["cache_scan_on_load"] is True
 
 
 def test_create_dataset_uses_public_automation_api_and_defaults(monkeypatch):
@@ -127,6 +151,101 @@ def test_create_dataset_moves_output_to_dataset_dir(tmp_path, monkeypatch):
     assert result["file_paths"] == [str(expected)]
     assert expected.read_text(encoding="utf-8") == "target,a\n1,2\n"
     assert not source.exists()
+
+
+def test_create_dataset_recovers_partial_file_on_cursor_loss(tmp_path, monkeypatch):
+    class CursorNotFound(Exception):
+        pass
+
+    output_dir = tmp_path / "datasets"
+    automation = ModuleType("neuralsignal.automation")
+    automation.get_config = lambda: {
+        "file_out": "partial.csv",
+        "dataset_output_dir": str(output_dir),
+        "balanced_target": {"values": [0, 1]},
+    }
+
+    def create_dataset(cfg, create_dataset):
+        (tmp_path / "partial.csv").write_text("target,feature\n1,0.2\n", encoding="utf-8")
+        raise CursorNotFound("cursor died")
+
+    automation.create_dataset = create_dataset
+    monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
+    monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+    monkeypatch.setattr(tasks, "_enable_mongo_no_cursor_timeout", lambda: None)
+    monkeypatch.chdir(tmp_path)
+
+    result = tasks.create_dataset({})
+
+    expected = output_dir / "partial.csv"
+    assert result["partial"] is True
+    assert result["partial_rows"] == 1
+    assert result["target_counts"] == {"1": 1}
+    assert result["usable_for_model"] is False
+    assert result["unusable_reason"] == "Partial dataset is missing target classes: 0"
+    assert result["file_paths"] == [str(expected)]
+    assert expected.read_text(encoding="utf-8") == "target,feature\n1,0.2\n"
+
+
+def test_balanced_dataset_continues_next_class_after_strong_partial(tmp_path, monkeypatch):
+    class CursorNotFound(Exception):
+        pass
+
+    output_dir = tmp_path / "datasets"
+    automation = ModuleType("neuralsignal.automation")
+    automation.get_config = lambda: {
+        "dataset_row_limit": 200,
+        "row_limit": 200,
+        "query": {},
+        "file_out": "balanced.csv",
+        "dataset_output_dir": str(output_dir),
+    }
+
+    def create_dataset(cfg, create_dataset):
+        path = tmp_path / cfg["file_out"] if not Path(cfg["file_out"]).is_absolute() else Path(cfg["file_out"])
+        if cfg["query"]["ground_truth"] == 0:
+            path.write_text("target,feature\n" + ("0,0.1\n" * 100), encoding="utf-8")
+            raise CursorNotFound("cursor died")
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("1,0.2\n" * 100)
+        return [str(path)]
+
+    automation.create_dataset = create_dataset
+    monkeypatch.setitem(sys.modules, "neuralsignal.automation", automation)
+    monkeypatch.setattr(tasks, "_inject_feature_processor", lambda cfg: None)
+    monkeypatch.setattr(tasks, "_enable_mongo_no_cursor_timeout", lambda: None)
+    monkeypatch.chdir(tmp_path)
+
+    result = tasks.create_dataset({
+        "balanced_target": {"enabled": True, "field": "ground_truth", "values": [0, 1]},
+    })
+
+    expected = output_dir / "balanced.csv"
+    assert result["file_paths"] == [str(expected)]
+    assert result["target_counts"] == {"0": 100, "1": 100}
+    assert result["usable_for_model"] is True
+
+
+def test_run_proposal_branch_skips_model_for_single_class_partial(monkeypatch, tmp_path):
+    dataset_path = tmp_path / "partial.csv"
+    dataset_path.write_text("target,feature\n0,0.1\n", encoding="utf-8")
+    monkeypatch.setattr(tasks, "create_dataset", lambda payload: {
+        "file_paths": [str(dataset_path)],
+        "partial": True,
+        "usable_for_model": False,
+        "unusable_reason": "Partial dataset is missing target classes: 1",
+    })
+    monkeypatch.setattr(tasks, "create_s1_model", lambda payload: {"metrics": {"test_auc": 1.0}})
+
+    result = tasks.run_proposal_branch({
+        "proposal_name": "p",
+        "dataset_config": {},
+        "model_config_base": {},
+    })
+
+    assert result["dataset_result"]["file_paths"] == [str(dataset_path)]
+    assert result["model_result"]["skipped_model_training"] is True
+    assert result["model_result"]["error"] == "Partial dataset is missing target classes: 1"
 
 
 def test_create_s1_model_uses_public_automation_api_and_normalizes_best_model(monkeypatch):

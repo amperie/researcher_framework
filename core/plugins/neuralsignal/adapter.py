@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -934,7 +935,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             "dataset": dataset_name,
             "application_name": app_name,
             "sub_application_name": sub_app_name,
-            "backend_config": _backend_config(cfg),
+            "backend_config": _dataset_backend_config(cfg, profile, dataset_meta, proposal),
             "zone_size": hyperparameters.get("zone_size", 1024),
             "dataset_row_limit": int(hyperparameters.get("dataset_row_limit", hyperparameters.get("row_limit", dataset_meta.get("row_limit", 0))) or 0),
             "row_limit": int(hyperparameters.get("dataset_row_limit", hyperparameters.get("row_limit", dataset_meta.get("row_limit", 0))) or 0),
@@ -2353,6 +2354,75 @@ def _backend_config(cfg: Any) -> dict[str, Any]:
         "mlflow_uri": getattr(cfg, "mlflow_uri", "http://hp.lan:8899/"),
         "mlflow_register_model": False,
     }
+
+
+def _dataset_backend_config(
+    cfg: Any,
+    profile: dict[str, Any],
+    dataset_meta: dict[str, Any],
+    proposal: dict[str, Any],
+) -> dict[str, Any]:
+    storage = dataset_meta.get("storage") or {}
+    hyperparameters = proposal.get("hyperparameters") or {}
+    backend = _backend_config(cfg)
+    for source in (profile, storage, dataset_meta, hyperparameters):
+        backend.update(_scan_cache_config(source))
+        backend.update(_as_dict(source.get("backend_config")))
+    _ensure_valid_scan_cache_directory(backend, profile)
+    return backend
+
+
+def _scan_cache_config(source: dict[str, Any]) -> dict[str, Any]:
+    direct_keys = (
+        "cache_scan_on_load",
+        "cache_scan_on_write",
+        "scan_cache_size",
+        "scan_hd_cache_size",
+        "scan_cache_directory",
+    )
+    config = {key: source[key] for key in direct_keys if key in source}
+    scan_cache = _as_dict(source.get("scan_cache"))
+    if not scan_cache:
+        return config
+    if "enabled" in scan_cache and not bool(scan_cache["enabled"]):
+        config["scan_cache_size"] = 0
+        config["scan_hd_cache_size"] = 0
+    aliases = {
+        "cache_scan_on_load": ("cache_scan_on_load", "on_load"),
+        "cache_scan_on_write": ("cache_scan_on_write", "on_write"),
+        "scan_cache_size": ("scan_cache_size", "memory_size", "ram_size"),
+        "scan_hd_cache_size": ("scan_hd_cache_size", "disk_size", "hd_size"),
+        "scan_cache_directory": ("scan_cache_directory", "directory", "path"),
+    }
+    for target, keys in aliases.items():
+        for key in keys:
+            if key in scan_cache:
+                config[target] = scan_cache[key]
+                break
+    return config
+
+
+def _ensure_valid_scan_cache_directory(backend: dict[str, Any], profile: dict[str, Any]) -> None:
+    path_value = str(backend.get("scan_cache_directory") or "").strip()
+    if not path_value or not _path_root_exists(path_value):
+        path = _default_scan_cache_directory(profile)
+        path.mkdir(parents=True, exist_ok=True)
+        backend["scan_cache_directory"] = str(path)
+
+
+def _default_scan_cache_directory(profile: dict[str, Any]) -> Path:
+    for preferred in (Path("F:/temp"), Path("/tmp")):
+        if _path_root_exists(preferred.as_posix()):
+            return preferred
+    return dev_path("scan_cache", str(profile.get("name") or "neuralsignal")).resolve()
+
+
+def _path_root_exists(path_value: str) -> bool:
+    path = Path(path_value).expanduser()
+    anchor = path.anchor
+    if anchor:
+        return Path(anchor).exists()
+    return True
 
 
 def _neuralsignal_workdir(cfg: Any) -> Path:

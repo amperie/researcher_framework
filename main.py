@@ -1,10 +1,10 @@
-"""Research Pipeline — CLI entry point.
+"""Research pipeline CLI entry point.
 
 Usage:
-    uv run python main.py --profile neuralsignal --direction "attention head specialization"
-    uv run python main.py --profile neuralsignal          # prompts for direction
-    uv run python main.py --profile neuralsignal --loop   # loop using top next_step
+    uv run python main.py help
     uv run python main.py --list-profiles
+    uv run python main.py --profile neuralsignal --direction "attention head specialization"
+    uv run python main.py --mode brainstorm --profile trading --direction "SPY regime filters"
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import json
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -22,18 +23,29 @@ from core.graph.builder import pipeline_steps
 from core.maintenance.dev_cleanup import run_periodic_dev_cleanup
 from core.pipeline_resume import build_resume_state, ensure_resume_state_for_node
 from core.utils.logger import setup_logging, get_logger, temporarily_raise_console_log_level
+from core.utils import terminal_progress
 
 setup_logging()
 log = get_logger(__name__)
 
 _CLI_EPILOG = """Examples:
-  Pipeline mode:
+  Help and discovery:
+    uv run python main.py help
+    uv run python main.py --list-profiles
+    uv run python main.py --profile neuralsignal --list-nodes
+
+  Pipeline from a direction:
     uv run python main.py --profile neuralsignal --direction "attention head specialization"
-    uv run python main.py --profile neuralsignal --loop
-    uv run python main.py --profile neuralsignal --run-next-steps-once
+    uv run python main.py --profile trading --direction "SPY regime filters" --run-next-steps-once
+    uv run python main.py --profile neuralsignal --direction "residual entropy features" --loop
+
+  Pipeline from saved work:
     uv run python main.py --profile neuralsignal --next-step "next_step:1"
-    uv run python main.py --profile neuralsignal --proposal-seed "proposal_seed:1"
+    uv run python main.py --profile neuralsignal --source-experiment "exp-123" --proposal-seed "proposal_seed:1"
+    uv run python main.py --profile neuralsignal --source-experiment "exp-123" --handoff "run_handoff:1"
     uv run python main.py --profile neuralsignal --resume-from "experiment_result:123" --start-node implement
+    uv run python main.py --profile neuralsignal --start-node check_experiment_jobs --resume-snapshot
+    uv run python main.py --profile neuralsignal --start-node submit_experiment_jobs --resume-snapshot --force-dataset-refresh
 
   Brainstorm mode:
     uv run python main.py --mode brainstorm --profile neuralsignal --direction "new detector direction"
@@ -42,12 +54,17 @@ _CLI_EPILOG = """Examples:
     uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123"
     uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123" --proposal-seed "proposal_seed:123"
     uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123" --handoff "run_handoff:123"
-    uv run python main.py --mode brainstorm --profile trading --next-step "next_step:123" --source-experiment "exp-123"
+    uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123" --next-step "next_step:123"
 
-  Discovery:
-    uv run python main.py --list-profiles
-    uv run python main.py --profile neuralsignal --list-nodes
-    uv run python main.py help
+  Campaign metadata:
+    uv run python main.py --profile trading --direction "factor rotation" --campaign-id "camp-1" --campaign-title "Macro rotation" --campaign-variant-id "v1" --campaign-variant-title "Baseline" --campaign-variant-index 1 --campaign-size 3
+
+Notes:
+  --mode defaults to pipeline.
+  Omit --direction in pipeline mode to be prompted.
+  --config is an alias for --brainstorm-config.
+  Use --resume-snapshot with no value to load dev/state/<profile>/after_<previous-node>.json.
+  Use --force-dataset-refresh only for NeuralSignal dataset regeneration.
 
 Interactive brainstorm commands after pause:
   help, continue, summary, research, plan, feedback <text>, approve_plan, execute, exit
@@ -98,6 +115,30 @@ _BRAINSTORM_ROLE_COLORS = {
     "seed": "\x1b[38;5;141m",
 }
 _ANSI_RESET = "\x1b[0m"
+_ANSI_CHECKPOINT = "\x1b[1;38;5;82m"    # bold bright green
+_ANSI_INTERRUPTED = "\x1b[1;38;5;214m"  # bold orange
+_ANSI_MARKER = "\x1b[38;5;67m"          # steel blue — subtle section markers
+_ANSI_LABEL = "\x1b[38;5;244m"          # medium gray — summary/plan labels
+
+_BRAINSTORM_BANNERS: dict[str, tuple[str, str]] = {
+    "[checkpoint]":      (_ANSI_CHECKPOINT, "CHECKPOINT"),
+    "[interrupted]":     (_ANSI_INTERRUPTED, "INTERRUPTED"),
+    "[current thinking]": (_ANSI_MARKER,    "Current thinking"),
+    "[plan]":            (_ANSI_MARKER,      "Plan"),
+}
+
+_SUMMARY_LABELS = {
+    "goal", "agreed", "ideas", "risks", "evidence", "questions", "next",
+    "direction", "refined ideas", "proposals", "implementation plans",
+    "constraints", "exclusions", "success criteria", "unresolved questions",
+}
+
+
+def _brainstorm_banner(label: str, color: str, width: int = 68) -> str:
+    inner = f" {label} "
+    pad = max(2, (width - len(inner)) // 2)
+    right_pad = width - pad - len(inner)
+    return f"{color}{'─' * pad}{inner}{'─' * right_pad}{_ANSI_RESET}"
 
 
 def _write_state_snapshot(profile_name: str, step_name: str, state: dict[str, Any]) -> None:
@@ -126,19 +167,35 @@ def _format_brainstorm_cli_output(text: str) -> str:
 
 
 def _colorize_brainstorm_role_line(line: str) -> str:
-    stripped = str(line or "")
-    if not stripped.startswith("["):
-        return stripped
-    closing = stripped.find("]")
-    if closing <= 1:
-        return stripped
-    role_name = stripped[1:closing].strip().lower()
-    color = _BRAINSTORM_ROLE_COLORS.get(role_name)
-    if not color:
-        return stripped
-    prefix = stripped[: closing + 1]
-    rest = stripped[closing + 1 :]
-    return f"{color}{prefix}{_ANSI_RESET}{rest}"
+    raw = str(line or "")
+    key = raw.strip().lower()
+
+    # Checkpoint / section banners
+    if key in _BRAINSTORM_BANNERS:
+        color, label = _BRAINSTORM_BANNERS[key]
+        return _brainstorm_banner(label, color)
+
+    # Role-name tags: [facilitator] ..., [skeptic] ..., etc.
+    if raw.lstrip().startswith("["):
+        stripped = raw.lstrip()
+        closing = stripped.find("]")
+        if closing > 1:
+            role_name = stripped[1:closing].strip().lower()
+            color = _BRAINSTORM_ROLE_COLORS.get(role_name)
+            if color:
+                leading = raw[: len(raw) - len(stripped)]
+                prefix = stripped[: closing + 1]
+                rest = stripped[closing + 1:]
+                return f"{leading}{color}{prefix}{_ANSI_RESET}{rest}"
+
+    # Summary / plan section labels: "Goal: text", "Agreed:", "Risks:", etc.
+    colon = raw.find(":")
+    if colon > 0:
+        label_text = raw[:colon].strip().lower()
+        if label_text in _SUMMARY_LABELS:
+            return f"{_ANSI_LABEL}{raw[:colon + 1]}{_ANSI_RESET}{raw[colon + 1:]}"
+
+    return raw
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -148,78 +205,94 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--profile", type=str, default=None,
-                        help="Research profile name (e.g. 'neuralsignal', 'trading').")
+                        help="Profile name from configs/profiles, e.g. neuralsignal or trading. If omitted, the CLI prompts when multiple profiles exist.")
     parser.add_argument(
         "--mode",
         type=str,
         default="pipeline",
         choices=["pipeline", "brainstorm"],
-        help="Execution mode.",
+        help="Runner mode. pipeline executes the graph; brainstorm starts an interactive planning session.",
     )
     parser.add_argument("--direction", type=str, default=None,
-                        help="Research direction / question to investigate.")
+                        help="Fresh research direction or question. In pipeline mode, omit it to be prompted.")
     parser.add_argument(
         "--brainstorm-config",
         "--config",
         type=str,
         default=None,
-        help="Path to brainstorm.yaml config for brainstorm mode.",
+        help="Brainstorm YAML config path. --config is the short alias.",
     )
     parser.add_argument(
         "--resume-brainstorm",
         type=str,
         default=None,
-        help="Brainstorm session id to resume.",
+        help="Existing brainstorm session id to resume.",
     )
     parser.add_argument(
         "--source-experiment",
         type=str,
         default=None,
-        help="Source experiment record id used to seed pipeline execution or import prior run context into brainstorm mode.",
+        help="Prior experiment_result id. Used with seeds in pipeline mode or imported as context in brainstorm mode.",
     )
     parser.add_argument(
         "--handoff",
         type=str,
         default=None,
-        help="Explicit saved run_handoff record id. In pipeline mode it launches from that handoff; in brainstorm mode it imports that handoff context.",
+        help="Saved run_handoff id. Pipeline launches from it; brainstorm imports it as editable context.",
     )
     parser.add_argument(
         "--proposal-seed",
         type=str,
         default=None,
-        help="Explicit saved proposal_seed record id. In pipeline mode it launches from proposal stage; in brainstorm mode it imports that proposal into the session.",
+        help="Saved proposal_seed id. Pipeline starts from proposed experiments; brainstorm imports it.",
     )
     parser.add_argument(
         "--next-step",
         type=str,
         default=None,
-        help="Explicit persisted next_step record id. In pipeline mode it launches that next step; in brainstorm mode it imports that next-step proposal into the session.",
+        help="Persisted next_step id. Pipeline runs the recommendation; brainstorm imports it.",
     )
     parser.add_argument(
         "--resume-from",
         type=str,
         default=None,
-        help="Persisted memory record id to hydrate state from before restarting at a later node.",
+        help="Memory record id used to rebuild pipeline state for resume.",
+    )
+    parser.add_argument(
+        "--resume-snapshot",
+        nargs="?",
+        const="auto",
+        default=None,
+        help=(
+            "Load resume state from a JSON snapshot. With no value, loads "
+            "dev/state/<profile>/after_<previous-node>.json for --start-node."
+        ),
     )
     parser.add_argument(
         "--start-node",
         type=str,
         default=None,
-        help="Pipeline node to start from, then continue through all remaining nodes.",
+        help="Pipeline node to start at, then continue through remaining profile steps.",
     )
-    parser.add_argument("--campaign-id", type=str, default=None, help="Optional campaign id for grouped runs.")
-    parser.add_argument("--campaign-title", type=str, default=None, help="Optional campaign title for grouped runs.")
-    parser.add_argument("--campaign-variant-id", type=str, default=None, help="Optional campaign variant id.")
-    parser.add_argument("--campaign-variant-title", type=str, default=None, help="Optional campaign variant title.")
-    parser.add_argument("--campaign-variant-index", type=int, default=0, help="1-based campaign variant index.")
-    parser.add_argument("--campaign-size", type=int, default=0, help="Planned campaign size.")
+    parser.add_argument(
+        "--force-dataset-refresh",
+        action="store_true",
+        default=False,
+        help="NeuralSignal only: regenerate datasets instead of reusing memory records or local CSVs.",
+    )
+    parser.add_argument("--campaign-id", type=str, default=None, help="Campaign id to attach to stored results.")
+    parser.add_argument("--campaign-title", type=str, default=None, help="Human-readable campaign title.")
+    parser.add_argument("--campaign-variant-id", type=str, default=None, help="Variant id within the campaign.")
+    parser.add_argument("--campaign-variant-title", type=str, default=None, help="Human-readable variant title.")
+    parser.add_argument("--campaign-variant-index", type=int, default=0, help="1-based variant index within the campaign.")
+    parser.add_argument("--campaign-size", type=int, default=0, help="Total planned variants in the campaign.")
     parser.add_argument("--loop", action="store_true", default=False,
-                        help="Auto-loop: use top next_step as the next direction.")
+                        help="After each pipeline run, continue with the top proposed next_step until no new step remains.")
     parser.add_argument(
         "--run-next-steps-once",
         action="store_true",
         default=False,
-        help="Run the initial direction once, then run each proposed next step once and stop.",
+        help="Run the initial pipeline once, then run each proposed next_step once and stop.",
     )
     parser.add_argument("--list-profiles", action="store_true",
                         help="List available profiles and exit.")
@@ -288,6 +361,11 @@ def build_initial_state(
         "root_research_direction": root_research_direction,
         "errors": [],
     }
+    for key, value in seed.items():
+        if key in {"profile_name", "research_direction", "continue_loop", "root_run_family_id", "root_research_direction"}:
+            continue
+        if value not in (None, "", [], {}):
+            initial_state[key] = value
     for key in (
         "source_next_step_record_id",
         "source_next_step_title",
@@ -303,8 +381,6 @@ def build_initial_state(
     ):
         if seed.get(key) not in (None, "", 0):
             initial_state[key] = seed[key]
-    if seed.get("proposals"):
-        initial_state["proposals"] = list(seed["proposals"])
     if extra_state:
         for key, value in extra_state.items():
             if value not in (None, "", 0):
@@ -323,7 +399,11 @@ def run_pipeline_graph(
     from core.graph.builder import build_graph
 
     graph = build_graph(profile, start_node=start_node)
-    final_step = pipeline_steps(profile)[-1]
+    steps = pipeline_steps(profile)
+    if start_node in steps:
+        steps = steps[steps.index(start_node):]
+    final_step = steps[-1]
+    terminal_progress.configure_pipeline(steps)
     log.info(
         "Invoking pipeline graph profile=%r start_node=%r direction=%r family=%r campaign=%r",
         profile_name,
@@ -332,11 +412,15 @@ def run_pipeline_graph(
         initial_state.get("root_run_family_id"),
         initial_state.get("campaign_id"),
     )
-    final_state = graph.invoke(initial_state)
-    _write_state_snapshot(profile_name, final_step, final_state)
-    if print_results:
-        _print_results(final_state, profile_name)
-    return final_state
+    try:
+        final_state = graph.invoke(initial_state)
+        terminal_progress.finish_stage(final_step)
+        _write_state_snapshot(profile_name, final_step, final_state)
+        return final_state
+    finally:
+        terminal_progress.clear()
+        if "final_state" in locals() and print_results:
+            _print_results(final_state, profile_name)
 
 
 def main() -> None:
@@ -382,6 +466,8 @@ def main() -> None:
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error loading profile {profile_name!r}: {exc}", file=sys.stderr)
         sys.exit(1)
+    if args.force_dataset_refresh:
+        _force_dataset_refresh(profile)
 
     if args.mode == "brainstorm":
         _run_brainstorm_mode(args, profile_name, profile)
@@ -395,9 +481,15 @@ def main() -> None:
 
     _add_plugin_to_path(profile)
 
-    if args.resume_from and (args.direction or args.source_experiment or args.handoff or args.proposal_seed or args.next_step):
+    if args.resume_from and args.resume_snapshot:
+        print("Error: --resume-from and --resume-snapshot cannot be used together.", file=sys.stderr)
+        sys.exit(1)
+
+    if (args.resume_from or args.resume_snapshot) and (
+        args.direction or args.source_experiment or args.handoff or args.proposal_seed or args.next_step
+    ):
         print(
-            "Error: --resume-from cannot be used together with --direction, --source-experiment, --handoff, --proposal-seed, or --next-step.",
+            "Error: resume options cannot be used together with --direction, --source-experiment, --handoff, --proposal-seed, or --next-step.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -408,9 +500,9 @@ def main() -> None:
 
     start_node = _resolve_start_node(profile_name, profile, args)
     profile_steps = pipeline_steps(profile)
-    if not args.resume_from and start_node != profile_steps[0]:
+    if not (args.resume_from or args.resume_snapshot) and start_node != profile_steps[0]:
         print(
-            f"Error: --start-node {start_node!r} requires --resume-from because it is not the pipeline entry node.",
+            f"Error: --start-node {start_node!r} requires --resume-from or --resume-snapshot because it is not the pipeline entry node.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -427,6 +519,20 @@ def main() -> None:
             "Resolved resume state profile=%r source_record=%r start_node=%r direction=%r",
             profile_name,
             args.resume_from,
+            start_node,
+            seed.get("research_direction"),
+        )
+    elif args.resume_snapshot:
+        try:
+            seed = _load_resume_snapshot(profile_name, profile, start_node, str(args.resume_snapshot or "auto"))
+            ensure_resume_state_for_node(start_node, seed)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        log.info(
+            "Resolved snapshot resume state profile=%r snapshot=%r start_node=%r direction=%r",
+            profile_name,
+            args.resume_snapshot,
             start_node,
             seed.get("research_direction"),
         )
@@ -644,7 +750,7 @@ def _resolve_start_node(profile_name: str, profile: dict[str, Any], args: argpar
             sys.exit(1)
         return str(args.start_node)
 
-    if args.resume_from:
+    if args.resume_from or args.resume_snapshot:
         print("\nStart node options:")
         for index, step in enumerate(steps, 1):
             print(f"  {index}. {step}")
@@ -661,6 +767,50 @@ def _resolve_start_node(profile_name: str, profile: dict[str, Any], args: argpar
         sys.exit(1)
 
     return steps[0]
+
+
+def _load_resume_snapshot(
+    profile_name: str,
+    profile: dict[str, Any],
+    start_node: str,
+    snapshot: str,
+) -> dict[str, Any]:
+    path = _resume_snapshot_path(profile_name, profile, start_node, snapshot)
+    if not path.exists():
+        raise ValueError(f"Resume snapshot not found: {path}")
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Resume snapshot is not valid JSON: {path}: {exc}") from exc
+    if not isinstance(state, dict):
+        raise ValueError(f"Resume snapshot must contain a JSON object: {path}")
+    state.setdefault("profile_name", profile_name)
+    state.setdefault("errors", [])
+    return state
+
+
+def _resume_snapshot_path(profile_name: str, profile: dict[str, Any], start_node: str, snapshot: str) -> Path:
+    if snapshot and snapshot != "auto":
+        return Path(snapshot).expanduser().resolve()
+    steps = pipeline_steps(profile)
+    if start_node not in steps:
+        raise ValueError(f"Start node {start_node!r} is not in pipeline: {steps}")
+    index = steps.index(start_node)
+    if index <= 0:
+        raise ValueError("--resume-snapshot auto requires --start-node to be after the first pipeline node")
+    previous = _canonical_step_name(steps[index - 1])
+    return dev_path("state", profile_name, f"after_{previous}.json")
+
+
+def _canonical_step_name(node_name: str) -> str:
+    raw = str(node_name or "").strip().lower()
+    return raw.replace(" ", "_").replace("-", "_") if raw else "unknown"
+
+
+def _force_dataset_refresh(profile: dict[str, Any]) -> None:
+    for dataset in profile.get("datasets") or []:
+        if isinstance(dataset, dict):
+            dataset["overwrite_existing_dataset"] = True
 
 
 def _resolve_initial_seed(profile: dict[str, Any], profile_name: str, args: argparse.Namespace) -> dict[str, Any]:
@@ -759,6 +909,65 @@ def _next_step_seeds(profile_name: str, current_direction: str, state: dict[str,
     return seeds
 
 
+def _edit_brainstorm_plan(state: dict[str, Any], brainstorm_cfg: dict[str, Any]) -> dict[str, Any]:
+    import os
+    import shlex
+    import subprocess
+    import tempfile
+    from pathlib import Path as _Path
+    from core.brainstorm.handoff import build_execution_handoff
+    from core.brainstorm.summaries import render_consensus_summary
+
+    plan = dict(state.get("plan_draft") or {})
+    plan_text = json.dumps(plan, indent=2, ensure_ascii=False)
+
+    editor = (
+        os.environ.get("EDITOR")
+        or os.environ.get("VISUAL")
+        or ("notepad" if sys.platform == "win32" else "vi")
+    )
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="brainstorm_plan_",
+        delete=False, encoding="utf-8",
+    ) as tmp:
+        tmp.write(plan_text)
+        tmp_path = tmp.name
+
+    print(f"Opening plan in {editor!r} — save and close to apply changes.")
+    try:
+        subprocess.run(shlex.split(editor) + [tmp_path], check=False)
+        edited_text = _Path(tmp_path).read_text(encoding="utf-8")
+    except Exception as exc:
+        print(f"Editor error: {exc}", file=sys.stderr)
+        return state
+    finally:
+        try:
+            _Path(tmp_path).unlink()
+        except OSError:
+            pass
+
+    if edited_text.strip() == plan_text.strip():
+        print("No changes.")
+        return state
+
+    try:
+        edited = json.loads(edited_text)
+    except json.JSONDecodeError as exc:
+        print(f"Invalid JSON — changes discarded: {exc}", file=sys.stderr)
+        return state
+
+    if not isinstance(edited, dict):
+        print("Plan must be a JSON object — changes discarded.", file=sys.stderr)
+        return state
+
+    state["plan_draft"] = edited
+    state["execution_handoff"] = build_execution_handoff(state, brainstorm_cfg)
+    state["last_summary"] = render_consensus_summary(state)
+    print("Plan updated.")
+    return state
+
+
 def _run_brainstorm_mode(args: argparse.Namespace, profile_name: str, profile: dict[str, Any]) -> None:
     from core.brainstorm import (
         BrainstormEngine,
@@ -854,6 +1063,10 @@ def _run_brainstorm_mode(args: argparse.Namespace, profile_name: str, profile: d
                 command = "continue"
             if command == "help":
                 print(HELP_TEXT.rstrip())
+                continue
+            if command == "edit_plan":
+                state = _edit_brainstorm_plan(state, brainstorm_cfg)
+                persist_brainstorm_session(profile, brainstorm_cfg, state)
                 continue
             if command == "execute":
                 state = engine.apply_command(

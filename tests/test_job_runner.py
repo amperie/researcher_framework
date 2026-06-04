@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from core.plugins.job_runner import LocalProcessRunner, RayRunner, _ensure_ray, get_runner, run_job
+from core.plugins.job_runner import LocalProcessRunner, RayRunner, _ensure_ray, _worker_command, get_runner, run_job
 
 
 def echo_task(payload):
@@ -68,9 +68,31 @@ def test_local_process_submit_writes_job_files_and_launches_module(tmp_path):
     cmd = popen.call_args.args[0]
     assert cmd[-4:-1] == ["-m", "core.plugins.job_runner", "run"]
     assert cmd[-1] == str(job_dir.resolve())
-    assert popen.call_args.kwargs["cwd"] == str(tmp_path)
+    assert Path(popen.call_args.kwargs["cwd"]).name == "NeuralSignalResearcher"
     assert popen.call_args.kwargs["env"]["PYTHONPATH"] == "x"
     assert popen.call_args.kwargs["env"]["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
+    assert popen.call_args.kwargs["env"]["RESEARCH_LOG_CONFIG"].endswith("configs\\config.yaml")
+
+
+def test_local_process_check_ignores_stderr_while_submitted(tmp_path):
+    job_dir = tmp_path / "job1"
+    job_dir.mkdir()
+    (job_dir / "status.json").write_text(
+        json.dumps({"job_id": "job1", "job_dir": str(job_dir), "status": "submitted"}),
+        encoding="utf-8",
+    )
+    (job_dir / "stderr.log").write_text("[logger] config not found\n", encoding="utf-8")
+
+    job = LocalProcessRunner().check({"job_id": "job1", "job_dir": str(job_dir)})
+
+    assert job["status"] == "submitted"
+    assert job["stderr_path"] == str(job_dir / "stderr.log")
+
+
+def test_worker_command_pins_uv_run_to_plugin_project(tmp_path):
+    cmd = _worker_command({"python": "uv run python", "cwd": str(tmp_path)}, tmp_path / "job")
+
+    assert cmd[:5] == ["uv", "run", "--project", str(tmp_path), "python"]
 
 
 def test_get_runner_returns_ray_runner():

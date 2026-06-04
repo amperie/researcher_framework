@@ -7,11 +7,81 @@ from typing import Any
 
 
 def extract_json_array(text: str) -> list:
-    """Extract the first parseable JSON array found in *text*."""
-    result = _extract_json_block(text, opener="[", closer="]", expected_type=list)
-    if not isinstance(result, list):
-        raise ValueError(f"No JSON array found in LLM response: {text!r}")
-    return result
+    """Extract the first parseable JSON array found in *text*.
+
+    If the array is truncated (unmatched '['), salvages complete JSON objects
+    from within the partial array rather than raising.
+    """
+    try:
+        result = _extract_json_block(text, opener="[", closer="]", expected_type=list)
+        if not isinstance(result, list):
+            raise ValueError(f"No JSON array found in LLM response: {text!r}")
+        return result
+    except ValueError as exc:
+        if "Unmatched '['" not in str(exc):
+            raise
+        # Response was truncated — recover any complete top-level objects inside the array.
+        recovered = _recover_objects_from_truncated_array(text)
+        if recovered:
+            import logging
+            logging.getLogger(__name__).warning(
+                "extract_json_array: truncated response; recovered %d complete item(s)", len(recovered)
+            )
+            return recovered
+        raise
+
+
+def _recover_objects_from_truncated_array(text: str) -> list:
+    """Return a list of complete JSON objects parsed from a truncated array string."""
+    # Find the opening '[' of the outermost array.
+    array_start = text.find("[")
+    if array_start == -1:
+        return []
+    items: list = []
+    pos = array_start + 1
+    n = len(text)
+    while pos < n:
+        # Skip whitespace and commas between items.
+        while pos < n and text[pos] in " \t\n\r,":
+            pos += 1
+        if pos >= n or text[pos] != "{":
+            break
+        # Scan for the matching closing '}'.
+        depth = 0
+        in_string = False
+        escape_next = False
+        end = pos
+        for j in range(pos, n):
+            ch = text[j]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        else:
+            break  # Object was not closed — truncated; stop here.
+        candidate = text[pos: end + 1]
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                items.append(obj)
+        except json.JSONDecodeError:
+            break
+        pos = end + 1
+    return items
 
 
 def extract_json_object(text: str) -> dict:

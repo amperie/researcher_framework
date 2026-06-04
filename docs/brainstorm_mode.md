@@ -81,11 +81,12 @@ Current CLI usage:
 
 ```text
 uv run python main.py --mode brainstorm --profile <profile> --direction "..."
+uv run python main.py --mode brainstorm --profile <profile> --config configs/brainstorm/default.<profile>.brainstorm.yaml
 uv run python main.py --mode brainstorm --profile <profile> --resume-brainstorm "<session-id>"
 uv run python main.py --mode brainstorm --profile <profile> --source-experiment "exp-123"
 uv run python main.py --mode brainstorm --profile <profile> --source-experiment "exp-123" --proposal-seed "proposal_seed:123"
 uv run python main.py --mode brainstorm --profile <profile> --source-experiment "exp-123" --handoff "run_handoff:123"
-uv run python main.py --mode brainstorm --profile <profile> --next-step "next_step:123" --source-experiment "exp-123"
+uv run python main.py --mode brainstorm --profile <profile> --source-experiment "exp-123" --next-step "next_step:123"
 ```
 
 Seed behavior:
@@ -97,6 +98,7 @@ Seed behavior:
 - `--handoff` imports a saved run handoff into a new brainstorm session
 - `--next-step` imports a persisted next-step recommendation into a new
   brainstorm session
+- `--config` is an alias for `--brainstorm-config`
 
 When seeded from prior work, brainstorm mode carries the imported proposal,
 evidence, lineage, and campaign metadata in session state so the user can edit
@@ -109,7 +111,8 @@ profile YAML.
 
 Suggested default location:
 
-- `configs/brainstorm/default.brainstorm.yaml`
+- `configs/brainstorm/default.<profile>.brainstorm.yaml`, for example
+  `configs/brainstorm/default.trading.brainstorm.yaml`
 
 ## Architecture Layers
 
@@ -261,7 +264,7 @@ Recommended config-loading precedence:
 
 1. explicit `--brainstorm-config`
 2. per-profile default mapping if one exists
-3. fallback default such as `configs/brainstorm/default.brainstorm.yaml`
+3. fallback default such as `configs/brainstorm/default.<profile>.brainstorm.yaml`
 
 Suggested file:
 
@@ -704,7 +707,7 @@ This aligns with the current seeded-entry behavior already used by
 Recommended commands:
 
 ```text
-uv run python main.py --mode brainstorm --profile neuralsignal --direction "..." --brainstorm-config configs/brainstorm/default.brainstorm.yaml
+uv run python main.py --mode brainstorm --profile neuralsignal --direction "..." --brainstorm-config configs/brainstorm/default.neuralsignal.brainstorm.yaml
 uv run python main.py --mode brainstorm --profile trading --resume-brainstorm "<session-id>" --brainstorm-config configs/brainstorm/trading_panel.brainstorm.yaml
 uv run python main.py --mode brainstorm --profile neuralsignal --brainstorm-config configs/brainstorm/research_heavy.brainstorm.yaml
 ```

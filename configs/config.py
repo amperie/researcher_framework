@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
@@ -162,3 +163,24 @@ def resolve_dev_path(path: str | Path) -> Path:
     if candidate.parts[0] == "dev":
         return dev_path(*candidate.parts[1:])
     return candidate
+
+
+def platform_key() -> str:
+    """Return the config key for the current operating system."""
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def cache_path(name: str) -> Path:
+    """Return the configured cache path for *name* on the current platform."""
+    locations = getattr(get_config(), "cache_locations", {}) or {}
+    entry = locations.get(name)
+    if not isinstance(entry, dict):
+        raise KeyError(f"No cache location configured for {name!r}")
+    value = entry.get(platform_key()) or entry.get("default")
+    if not value:
+        raise KeyError(f"No {platform_key()!r} or default cache location configured for {name!r}")
+    return resolve_dev_path(Path(str(value)).expanduser())

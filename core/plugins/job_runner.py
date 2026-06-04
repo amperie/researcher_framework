@@ -36,6 +36,10 @@ from core.utils.logger import get_logger, setup_plugin_file_logging, setup_loggi
 TERMINAL_STATUSES = {"succeeded", "failed", "timed_out", "cancelled"}
 log = get_logger("core.plugins.job_runner")
 _JOB_STORE_ACTOR_NAME = "researcher_framework_job_store"
+# NeuralSignalResearcher project root — always use this as the worker cwd so that
+# configs/config.yaml is resolvable and the framework's Python packages are importable.
+_NSR_ROOT = Path(__file__).resolve().parents[2]
+_LOG_CONFIG_PATH = str((_NSR_ROOT / "configs" / "config.yaml").resolve())
 
 
 class JobRunner(Protocol):
@@ -68,11 +72,12 @@ class LocalProcessRunner:
         cmd = _worker_command(job_spec, job_dir)
         env = os.environ.copy()
         env.update(job_spec.get("env") or {})
+        env.setdefault("RESEARCH_LOG_CONFIG", _LOG_CONFIG_PATH)
         stdout = (job_dir / "stdout.log").open("a", encoding="utf-8")
         stderr = (job_dir / "stderr.log").open("a", encoding="utf-8")
         subprocess.Popen(
             cmd,
-            cwd=job_spec.get("cwd") or None,
+            cwd=str(_NSR_ROOT),  # NSR root so configs/config.yaml and core.* modules resolve
             env=env,
             stdout=stdout,
             stderr=stderr,
@@ -87,24 +92,7 @@ class LocalProcessRunner:
         return self.check({"job_id": job_id, "job_dir": str(job_dir)})
 
     def check(self, job: dict[str, Any]) -> dict[str, Any]:
-        job_dir = Path(job["job_dir"])
-        status_path = job_dir / "status.json"
-        status = _read_durable_status(job)
-        result_path = job_dir / "result.json"
-        if status.get("status") == "submitted" and not result_path.exists():
-            stderr_path = job_dir / "stderr.log"
-            if stderr_path.exists():
-                stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
-                if stderr_text:
-                    failed = {
-                        **status,
-                        "status": "failed",
-                        "updated_at": datetime.now(UTC).isoformat(),
-                        "error": stderr_text.splitlines()[-1][:1000],
-                    }
-                    _write_json(status_path, failed)
-                    status = failed
-        return status
+        return _read_durable_status(job)
 
 
 class RayRunner:
@@ -168,7 +156,7 @@ def get_runner(name: str | None = None) -> JobRunner:
 
 def run_job(job_dir: str) -> None:
     """Worker entry point. Runs one job and writes durable status/result files."""
-    setup_logging()
+    setup_logging(os.environ.get("RESEARCH_LOG_CONFIG") or _LOG_CONFIG_PATH)
     root = Path(job_dir).resolve()
     spec = _read_json(root / "job.json")
     payload = _read_json(root / "payload.json")
@@ -188,6 +176,8 @@ def run_job(job_dir: str) -> None:
     try:
         log.info("Running plugin job id=%s task=%s plugin=%s", job_id, spec.get("task_path"), plugin_name or "unknown")
         task = load_callable(spec["task_path"])
+        if spec.get("cwd"):
+            os.chdir(str(spec["cwd"]))
         result = task(payload)
         _write_json(root / "result.json", result)
         _write_json(root / "status.json", _status(job_id, "succeeded", spec))
@@ -277,6 +267,10 @@ def _ray_execute_task(spec: dict[str, Any], payload: dict[str, Any], actor_name:
 def _worker_command(spec: dict[str, Any], job_dir: Path) -> list[str]:
     python = spec.get("python") or sys.executable
     parts = str(python).split()
+    # When using `uv run` and the spec carries a plugin cwd, pin the project so the
+    # correct venv is used regardless of the subprocess cwd (which is _NSR_ROOT).
+    if len(parts) >= 2 and parts[0] == "uv" and parts[1] == "run" and spec.get("cwd"):
+        parts = ["uv", "run", "--project", str(spec["cwd"])] + parts[2:]
     return parts + ["-u", "-m", "core.plugins.job_runner", "run", str(job_dir)]
 
 

@@ -73,6 +73,7 @@ class BrainstormState(TypedDict, total=False):
     turn_log: list[BrainstormTurn]
     consensus: ConsensusSnapshot
     plan_draft: PlanDraft
+    pending_research_query: str
     pending_questions: list[str]
     pending_decisions: list[str]
     stop_policy: dict

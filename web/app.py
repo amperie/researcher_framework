@@ -30,7 +30,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_ROOT)), name="static")
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC_ROOT / "index.html")
+    return FileResponse(STATIC_ROOT / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/runs")

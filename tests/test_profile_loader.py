@@ -113,6 +113,31 @@ class TestLoadProfile:
         assert profile["research"]["tools"][0]["max_results"] == 8
         assert profile["research"]["tools"][0]["relevance_score_threshold"] == 6
 
+    def test_builtin_arxiv_q_bio_ref_resolves(self):
+        profile = {
+            **_VALID_PROFILE,
+            "research": {"tools": [{"ref": "arxiv-q-bio"}]},
+        }
+        resolved = research_tool_catalog.resolve_research_tool_refs(
+            list(profile["research"]["tools"]),
+            path_key="tool",
+        )
+
+        assert resolved[0]["name"] == "arxiv-q-bio"
+        assert resolved[0]["tool"] == "core.tools.research_tools.collect_arxiv"
+        assert resolved[0]["categories"] == [
+            "q-bio.BM",
+            "q-bio.CB",
+            "q-bio.GN",
+            "q-bio.MN",
+            "q-bio.NC",
+            "q-bio.OT",
+            "q-bio.PE",
+            "q-bio.QM",
+            "q-bio.SC",
+            "q-bio.TO",
+        ]
+
 
 # ---------------------------------------------------------------------------
 # load_profile_cached

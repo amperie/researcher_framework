@@ -32,8 +32,11 @@
 
     .app {
       display: grid;
-      grid-template-columns: 360px 1fr;
-      min-height: 100vh;
+      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+      width: 100vw;
+      height: 100vh;
+      min-width: 0;
+      overflow: hidden;
     }
 
     .sidebar {
@@ -42,11 +45,14 @@
       backdrop-filter: blur(10px);
       padding: 20px;
       overflow: auto;
+      min-width: 0;
     }
 
     .main {
       padding: 24px;
       overflow: auto;
+      min-width: 0;
+      max-width: 100%;
     }
 
     h1, h2, h3 { margin: 0 0 12px; }
@@ -55,6 +61,9 @@
     h3 { font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
     .muted { color: var(--muted); }
     .stack { display: grid; gap: 16px; }
+    .stack, .panel, .tab-pane, .accordion, .run-list, .run-card, .record, .artifact {
+      min-width: 0;
+    }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -71,6 +80,26 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
+    }
+    .checkbox-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .checkbox-row label {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      width: auto;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .checkbox-row input[type="checkbox"] {
+      width: auto;
+      margin: 0;
     }
     input, select, button, textarea {
       width: 100%;
@@ -115,6 +144,7 @@
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 12px;
+      min-width: 0;
     }
     .accordion-stack {
       display: grid;
@@ -167,6 +197,7 @@
       flex-wrap: wrap;
       gap: 8px;
       margin-bottom: 14px;
+      min-width: 0;
     }
     .tab {
       border: 1px solid var(--line);
@@ -214,8 +245,9 @@
     }
     .field-row {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
       gap: 12px;
+      min-width: 0;
     }
     .button-row {
       display: flex;
@@ -302,6 +334,7 @@
     }
     svg {
       width: 100%;
+      max-width: 100%;
       min-height: 420px;
       background: #fff;
       border-radius: 16px;
@@ -313,7 +346,12 @@
       color: var(--muted);
     }
     @media (max-width: 980px) {
-      .app { grid-template-columns: 1fr; }
+      .app {
+        grid-template-columns: minmax(0, 1fr);
+        height: auto;
+        min-height: 100vh;
+        overflow: visible;
+      }
       .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
     }
   </style>
@@ -332,6 +370,10 @@
           <div class="toolbar-row">
             <input id="minAucFilter" type="number" min="0" max="1" step="0.001" placeholder="Min AUC">
             <input id="maxAucFilter" type="number" min="0" max="1" step="0.001" placeholder="Max AUC">
+          </div>
+          <div class="checkbox-row">
+            <label><input id="showFinishedRuns" type="checkbox" checked> Finished</label>
+            <label><input id="showUnfinishedRuns" type="checkbox" checked> Unfinished</label>
           </div>
           <button id="refreshRuns">Refresh Runs</button>
           <button id="loadDiagnostics" class="secondary">Show Diagnostics</button>
@@ -586,6 +628,8 @@
     const searchFilterEl = document.getElementById("searchFilter");
     const minAucFilterEl = document.getElementById("minAucFilter");
     const maxAucFilterEl = document.getElementById("maxAucFilter");
+    const showFinishedRunsEl = document.getElementById("showFinishedRuns");
+    const showUnfinishedRunsEl = document.getElementById("showUnfinishedRuns");
     const emptyStateEl = document.getElementById("emptyState");
     const runViewEl = document.getElementById("runView");
     const diagnosticsPanelEl = document.getElementById("diagnosticsPanel");
@@ -647,6 +691,8 @@
       const search = searchFilterEl.value.trim().toLowerCase();
       const minAuc = parseNumericFilter(minAucFilterEl.value);
       const maxAuc = parseNumericFilter(maxAucFilterEl.value);
+      const showFinished = showFinishedRunsEl.checked;
+      const showUnfinished = showUnfinishedRunsEl.checked;
       const filtered = state.runs.filter((run) => {
         const matchesProfile = !profileFilter || (run.profile_name || "").toLowerCase().includes(profileFilter);
         const haystack = [
@@ -654,7 +700,8 @@
         ].join(" ").toLowerCase();
         const matchesSearch = !search || haystack.includes(search);
         const matchesAuc = aucMatches(run, minAuc, maxAuc);
-        return matchesProfile && matchesSearch && matchesAuc;
+        const matchesStatus = runStatusMatches(run, showFinished, showUnfinished);
+        return matchesProfile && matchesSearch && matchesAuc && matchesStatus;
       });
 
       runListEl.innerHTML = "";
@@ -1364,6 +1411,15 @@
       return true;
     }
 
+    function isFinishedRun(run) {
+      return (run.source || "") !== "pipeline_memory";
+    }
+
+    function runStatusMatches(run, showFinished, showUnfinished) {
+      if (!showFinished && !showUnfinished) return false;
+      return isFinishedRun(run) ? showFinished : showUnfinished;
+    }
+
     function hasOrphans(totals) {
       return [
         totals.orphan_chroma_records,
@@ -1410,6 +1466,8 @@
     searchFilterEl.addEventListener("input", renderRunList);
     minAucFilterEl.addEventListener("input", renderRunList);
     maxAucFilterEl.addEventListener("input", renderRunList);
+    showFinishedRunsEl.addEventListener("input", renderRunList);
+    showUnfinishedRunsEl.addEventListener("input", renderRunList);
     document.getElementById("textPanels").addEventListener("click", async (event) => {
       const button = event.target.closest("[data-copy-next-step-command]");
       if (!button || !state.detail || !state.detail.run) return;

@@ -37,13 +37,18 @@ def run_tests(payload: dict[str, Any]) -> dict[str, Any]:
                     candidate = Path(env[key])
                     if not candidate.is_absolute():
                         env[key] = str((root / candidate).resolve())
+            # Add tmpdir to PYTHONPATH so staged files (generated impl) are importable
+            # when running in base_cwd (the plugin project dir) for correct venv resolution.
+            existing_pythonpath = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = str(root) + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
+            run_cwd = base_cwd if base_cwd else str(root)
             try:
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     timeout=timeout if timeout > 0 else None,
-                    cwd=str(root),
+                    cwd=run_cwd,
                     env=env,
                     check=False,
                 )

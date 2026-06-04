@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -16,6 +17,7 @@ def run_trading_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     from core.plugins.trading.adapter import (
         TradingAdapter,
         _json_default,
+        _deep_merge,
         _normalize_runtime_config,
         _public_runtime_config,
         _summarize_variant_results,
@@ -31,6 +33,7 @@ def run_trading_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     script_source = str(payload.get("script_source") or "")
     runtime_cfg = _normalize_runtime_config(dict(artifact.get("runtime_config") or {}))
     variant_specs = list(artifact.get("variant_specs") or [{"name": "base", "overrides": {}}])
+    trial_offset = int(os.environ.get("RESEARCH_HPO_TRIAL_OFFSET") or 0)
 
     with temporary_directory(prefix="rf_trading_", category="trading") as tmpdir:
         script_path = Path(tmpdir) / f"{class_name}.py"
@@ -42,8 +45,11 @@ def run_trading_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             script_source=script_source,
             runtime_cfg=runtime_cfg,
         )
-        variant_results = [
-            adapter._run_variant(
+        variant_results = []
+        for variant_spec in variant_specs:
+            variant_runtime = _normalize_runtime_config(_deep_merge(runtime_cfg, dict(variant_spec.get("overrides") or {})))
+            os.environ["RESEARCH_HPO_TRIAL_OFFSET"] = str(trial_offset)
+            result = adapter._run_variant(
                 profile=profile,
                 proposal_name=proposal_name,
                 class_name=class_name,
@@ -52,8 +58,9 @@ def run_trading_artifact(payload: dict[str, Any]) -> dict[str, Any]:
                 variant_spec=variant_spec,
                 config_artifact_paths=config_artifact_paths,
             )
-            for variant_spec in variant_specs
-        ]
+            variant_results.append(result)
+            if str(variant_runtime.get("mode") or "backtest") != "walk-forward":
+                trial_offset += int((variant_runtime.get("hpo") or {}).get("num_samples") or 50)
     summary = _summarize_variant_results(variant_results)
     experiment_id = str(artifact.get("experiment_id") or uuid4())
     primary_mlflow = _primary_mlflow_metadata(variant_results)

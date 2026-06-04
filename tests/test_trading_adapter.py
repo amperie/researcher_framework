@@ -334,8 +334,7 @@ def test_build_hpo_config_preserves_explicit_search_space_and_keys(tmp_path: Pat
     assert hpo["num_samples"] == 80
     assert hpo["algorithm_param_keys"] == ["fast_period"]
     assert hpo["portfolio_param_keys"] == ["stop_pct", "profit_pct"]
-    assert hpo["search_space"]["fast_period"]["low"] == 1
-    assert hpo["search_space"]["fast_period"]["high"] == 12001
+    assert hpo["search_space"]["fast_period"] == {"type": "randint", "low": 4, "high": 40}
     assert hpo["search_space"]["stop_pct"] == {"type": "uniform", "low": 0.5, "high": 20.0}
     assert hpo["search_space"]["profit_pct"] == {"type": "uniform", "low": 0.5, "high": 20.0}
 
@@ -356,8 +355,7 @@ def test_build_hpo_config_infers_wide_search_space_for_backtest(tmp_path: Path):
 
     assert "lookback" in hpo["algorithm_param_keys"]
     assert hpo["search_space"]["lookback"]["type"] == "randint"
-    assert hpo["search_space"]["lookback"]["low"] == 1
-    assert hpo["search_space"]["lookback"]["high"] == 15001
+    assert hpo["search_space"]["lookback"] == {"type": "randint", "low": 5, "high": 46}
     assert "threshold" in hpo["algorithm_param_keys"]
     assert hpo["search_space"]["threshold"]["type"] == "uniform"
     assert "stop_pct" in hpo["portfolio_param_keys"]

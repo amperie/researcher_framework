@@ -14,6 +14,8 @@ import threading
 import time
 from typing import Any
 
+from core.utils import terminal_progress
+
 
 def _default_log_config_path() -> str:
     return str((Path(__file__).resolve().parents[2] / "configs" / "config.yaml").resolve())
@@ -90,6 +92,8 @@ def call_external_task(
         for line in iter(proc.stdout.readline, ""):
             stdout_chunks.append(line)
             stripped = line.rstrip("\n")
+            if terminal_progress.handle_progress_line(stripped):
+                continue
             if stripped and log is not None and not _looks_like_json_line(stripped):
                 log.info("[%s bridge] %s", plugin_name, stripped)
 
@@ -99,6 +103,8 @@ def call_external_task(
         for line in iter(proc.stderr.readline, ""):
             stripped = line.rstrip("\n")
             stderr_chunks.append(line)
+            if terminal_progress.handle_progress_line(stripped):
+                continue
             if stripped and log is not None:
                 log.info("[%s bridge] %s", plugin_name, stripped)
 

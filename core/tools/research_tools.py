@@ -20,15 +20,29 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 import urllib.request
 
 from configs.config import dev_path
+from core.llm.factory import get_llm
 from core.memory import MemoryService, default_memory_record_to_artifact
 from core.plugins.loader import adapter_has, load_adapter
 from core.tools.arxiv_tool import search_arxiv
 from core.utils.logger import get_logger
+from core.utils.utils import extract_json_array
 
 log = get_logger(__name__)
 _WEB_CACHE_DIR = dev_path("web_research")
 _WEB_TIMEOUT = 20
 _USER_AGENT = "NeuralSignalResearcher/1.0"
+_ARXIV_QUERY_MAX_TERMS = 8
+_ARXIV_QUERY_MAX_CHARS = 96
+_ARXIV_STOPWORDS = {
+    "about", "across", "after", "against", "also", "analysis", "and", "around",
+    "based", "before", "between", "build", "can", "compare", "could", "does",
+    "detect", "detection", "direction", "each", "effect", "evaluate", "feature",
+    "features", "find", "for", "from", "how", "into", "investigate", "is",
+    "method", "model", "models", "more", "not", "only", "over", "probe",
+    "probing", "research", "should", "signal", "signals", "than", "that",
+    "the", "their", "these", "this", "through", "using", "what", "when",
+    "via", "where", "whether", "which", "with", "without",
+}
 
 
 def collect_arxiv(
@@ -42,9 +56,10 @@ def collect_arxiv(
     domain_context = research_cfg.get("domain_context", "")
     max_results = int(tool_cfg.get("max_results", 20))
     categories = [str(item) for item in (tool_cfg.get("categories") or []) if str(item).strip()]
-    query = tool_cfg.get("query") or f"{direction} {domain_context}"[:300]
+    queries = _build_arxiv_queries(direction, domain_context, profile, tool_cfg)
+    match_any = bool(tool_cfg.get("match_any", False))
 
-    papers = search_arxiv(query, max_results, categories=categories)
+    papers = _search_arxiv_queries(queries, max_results, categories, match_any=match_any)
     artifacts: list[dict[str, Any]] = []
     for paper in papers:
         artifacts.append({
@@ -58,10 +73,138 @@ def collect_arxiv(
             "metadata": {
                 "arxiv_id": paper.get("arxiv_id", ""),
                 "categories": paper.get("categories") or categories,
+                "query": paper.get("query", ""),
             },
             "raw": paper,
         })
     return artifacts
+
+
+def _build_arxiv_queries(
+    direction: str,
+    domain_context: str,
+    profile: dict[str, Any],
+    tool_cfg: dict[str, Any],
+) -> list[str]:
+    explicit = str(tool_cfg.get("query") or "").strip()
+    configured = [str(term).strip() for term in tool_cfg.get("query_terms") or [] if str(term).strip()]
+    if explicit or configured or not tool_cfg.get("llm_query_rewrite"):
+        return [_build_arxiv_query(direction, domain_context, tool_cfg)]
+
+    llm_queries = _llm_arxiv_queries(direction, domain_context, profile, tool_cfg)
+    return llm_queries or [_build_arxiv_query(direction, domain_context, tool_cfg)]
+
+
+def _build_arxiv_query(direction: str, domain_context: str, tool_cfg: dict[str, Any]) -> str:
+    explicit = str(tool_cfg.get("query") or "").strip()
+    if explicit:
+        return explicit
+    configured = [str(term).strip() for term in tool_cfg.get("query_terms") or [] if str(term).strip()]
+    if configured:
+        terms = configured
+    else:
+        terms = _targeted_query_terms(direction)
+        if len(terms) < 4:
+            terms.extend(term for term in _targeted_query_terms(domain_context) if term not in terms)
+    query = " ".join(terms[:_ARXIV_QUERY_MAX_TERMS])
+    if len(query) <= _ARXIV_QUERY_MAX_CHARS:
+        return query or "arxiv"
+    trimmed = query[:_ARXIV_QUERY_MAX_CHARS]
+    return trimmed[:trimmed.rfind(" ")].strip() or trimmed.strip() or "arxiv"
+
+
+def _llm_arxiv_queries(
+    direction: str,
+    domain_context: str,
+    profile: dict[str, Any],
+    tool_cfg: dict[str, Any],
+) -> list[str]:
+    max_queries = max(1, min(int(tool_cfg.get("max_queries", 4)), 5))
+    step_name = str(tool_cfg.get("query_llm_step") or "arxiv_query_rewrite")
+    try:
+        llm = get_llm(step_name, profile)
+        resp = llm.invoke([
+            ("system", (
+                "Rewrite the research direction into compact arXiv search queries. "
+                "Return only a JSON array of 2-5 strings. Each query should be 3-8 "
+                "important technical terms, with no boolean operators, punctuation-heavy "
+                "syntax, explanations, or category filters."
+            )),
+            ("human", (
+                f"Research direction:\n{direction}\n\n"
+                f"Domain context:\n{domain_context}\n\n"
+                f"Return at most {max_queries} queries."
+            )),
+        ])
+        return _normalize_llm_queries(getattr(resp, "content", str(resp)), max_queries=max_queries)
+    except Exception as exc:
+        log.warning("research_tools | arXiv LLM query rewrite failed: %s", exc)
+        return []
+
+
+def _normalize_llm_queries(text: str, *, max_queries: int) -> list[str]:
+    try:
+        raw_items = extract_json_array(text)
+    except Exception:
+        raw_items = [line.strip("-* \t") for line in str(text or "").splitlines()]
+
+    queries: list[str] = []
+    for item in raw_items:
+        query = item.get("query") if isinstance(item, dict) else item
+        query = _clean_arxiv_query_string(str(query or ""))
+        if query and query.lower() != "arxiv" and query not in queries:
+            queries.append(query)
+        if len(queries) >= max_queries:
+            break
+    return queries
+
+
+def _clean_arxiv_query_string(query: str) -> str:
+    query = re.sub(r"\b(AND|OR|NOT)\b", " ", str(query or ""), flags=re.IGNORECASE)
+    query = re.sub(r"[^\w\s\-]", " ", query)
+    query = " ".join(query.split())
+    if len(query) <= _ARXIV_QUERY_MAX_CHARS:
+        return query
+    trimmed = query[:_ARXIV_QUERY_MAX_CHARS]
+    return trimmed[:trimmed.rfind(" ")].strip() or trimmed.strip()
+
+
+def _search_arxiv_queries(
+    queries: list[str],
+    max_results: int,
+    categories: list[str],
+    *,
+    match_any: bool,
+) -> list[dict[str, Any]]:
+    papers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for query in queries:
+        for paper in search_arxiv(query, max_results, categories=categories, match_any=match_any):
+            key = str(paper.get("arxiv_id") or paper.get("url") or paper.get("title") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            paper = dict(paper)
+            paper["query"] = query
+            papers.append(paper)
+            if len(papers) >= max_results:
+                return papers
+    return papers
+
+
+def _targeted_query_terms(text: str) -> list[str]:
+    normalized = re.sub(r"[^A-Za-z0-9]+", " ", str(text or "").replace("-", " "))
+    terms: list[str] = []
+    for token in normalized.split():
+        term = token.lower()
+        if len(term) < 3 and term not in {"ai", "ml"}:
+            continue
+        if term in _ARXIV_STOPWORDS or term in terms:
+            continue
+        terms.append(term)
+        if len(terms) >= _ARXIV_QUERY_MAX_TERMS:
+            break
+    return terms
 
 
 def collect_prior_experiments(

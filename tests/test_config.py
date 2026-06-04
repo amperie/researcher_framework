@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from configs.config import _interpolate, _walk, get_config
+from configs.config import _interpolate, _walk, cache_path, get_config, platform_key
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +120,16 @@ class TestGetConfig:
     def test_ray_mode_is_normalized(self):
         cfg = get_config()
         assert cfg.ray_mode in {"local", "remote"}
+
+    def test_cache_locations_available(self):
+        cfg = get_config()
+        assert "uv" in cfg.cache_locations
+        assert platform_key() in cfg.cache_locations["uv"]
+
+    def test_cache_path_resolves_current_platform(self):
+        path = cache_path("uv")
+        assert isinstance(path, Path)
+        assert path.name == "uv-cache"
 
 
 # ---------------------------------------------------------------------------

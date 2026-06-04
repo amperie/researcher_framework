@@ -7,7 +7,9 @@ HELP_TEXT = """Available commands:
   continue       Resume the brainstorm session
   summary        Show the latest checkpoint summary
   research       Ask the researcher role to gather more evidence
+  research <q>   Ask the researcher to search for a specific topic or question
   plan           Draft or refresh the current plan
+  edit_plan      Open the current plan in $EDITOR for direct editing
   feedback ...   Add feedback, constraints, or direction
   approve_plan   Approve the current plan draft without executing it
   execute        Start downstream execution from the approved plan
@@ -30,9 +32,11 @@ def parse_brainstorm_command(text: str) -> dict[str, Any]:
     if command == "summary":
         return {"type": "summary"}
     if command == "research":
-        return {"type": "request_research"}
+        return {"type": "request_research", "query": rest}
     if command == "plan":
         return {"type": "draft_plan"}
+    if command == "edit_plan":
+        return {"type": "edit_plan"}
     if command == "approve_plan":
         return {"type": "approve_plan"}
     if command == "execute":
