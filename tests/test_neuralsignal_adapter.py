@@ -172,6 +172,31 @@ def test_build_dataset_config_forwards_scan_cache_backend_options(tmp_path):
     assert backend["scan_cache_directory"] == str(tmp_path / "scan-cache")
 
 
+def test_build_dataset_config_uses_platform_scan_cache_directory(tmp_path):
+    adapter = NeuralSignalPlugin()
+    profile = _profile()
+    profile["datasets"][0]["scan_cache"] = {
+        "enabled": True,
+        "memory_size": 8,
+        "disk_size": 64,
+        "directories": {"windows": "F:/temp", "linux": "/tmp"},
+        "on_load": True,
+        "on_write": False,
+    }
+
+    with patch("core.plugins.neuralsignal.adapter._scan_cache_platform", return_value="windows"):
+        with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path in {"F:/temp", "F:\\temp"}):
+            with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+                payload = adapter._build_dataset_config(profile, _proposal(), _implementation(tmp_path))
+
+    backend = payload["backend_config"]
+    assert backend["scan_cache_directory"] == "F:/temp"
+    assert backend["scan_cache_size"] == 8
+    assert backend["scan_hd_cache_size"] == 64
+    assert backend["cache_scan_on_load"] is True
+    assert backend["cache_scan_on_write"] is False
+
+
 def test_build_dataset_config_replaces_missing_drive_scan_cache_directory_with_f_temp(tmp_path):
     adapter = NeuralSignalPlugin()
     profile = _profile()
@@ -192,10 +217,20 @@ def test_build_dataset_config_replaces_missing_drive_scan_cache_directory_with_f
     assert payload["backend_config"]["scan_hd_cache_size"] == 64
 
 
-def test_default_scan_cache_directory_uses_tmp_when_f_drive_missing():
+def test_default_scan_cache_directory_uses_windows_temp_on_windows():
     profile = _profile()
-    with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path == "/tmp"):
-        cache_dir = ns_adapter._default_scan_cache_directory(profile)
+    with patch("core.plugins.neuralsignal.adapter._scan_cache_platform", return_value="windows"):
+        with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path in {"F:/temp", "F:\\temp"}):
+            cache_dir = ns_adapter._default_scan_cache_directory(profile)
+
+    assert cache_dir == Path("F:/temp")
+
+
+def test_default_scan_cache_directory_uses_tmp_on_linux():
+    profile = _profile()
+    with patch("core.plugins.neuralsignal.adapter._scan_cache_platform", return_value="linux"):
+        with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path == "/tmp"):
+            cache_dir = ns_adapter._default_scan_cache_directory(profile)
 
     assert cache_dir == Path("/tmp")
 

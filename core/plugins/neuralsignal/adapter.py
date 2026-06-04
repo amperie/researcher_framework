@@ -2399,6 +2399,12 @@ def _scan_cache_config(source: dict[str, Any]) -> dict[str, Any]:
             if key in scan_cache:
                 config[target] = scan_cache[key]
                 break
+    if "scan_cache_directory" not in config:
+        directories = _as_dict(scan_cache.get("directories") or scan_cache.get("directory_by_platform"))
+        platform = _scan_cache_platform()
+        directory = directories.get(platform) or directories.get("default")
+        if directory:
+            config["scan_cache_directory"] = directory
     return config
 
 
@@ -2411,10 +2417,14 @@ def _ensure_valid_scan_cache_directory(backend: dict[str, Any], profile: dict[st
 
 
 def _default_scan_cache_directory(profile: dict[str, Any]) -> Path:
-    for preferred in (Path("F:/temp"), Path("/tmp")):
-        if _path_root_exists(preferred.as_posix()):
-            return preferred
+    preferred = Path("F:/temp") if _scan_cache_platform() == "windows" else Path("/tmp")
+    if _path_root_exists(preferred.as_posix()):
+        return preferred
     return dev_path("scan_cache", str(profile.get("name") or "neuralsignal")).resolve()
+
+
+def _scan_cache_platform() -> str:
+    return "windows" if os.name == "nt" else "linux"
 
 
 def _path_root_exists(path_value: str) -> bool:

@@ -231,6 +231,15 @@ datasets:
       type: mongodb
       application_name: HaluBench              # MongoDB database name
       sub_application_name: GranularAttentioAndWO  # MongoDB collection name
+    scan_cache:
+      enabled: true
+      memory_size: 1000
+      disk_size: 1000
+      directories:
+        windows: F:/temp
+        linux: /tmp
+      on_load: true
+      on_write: false
     available_detectors:
       - hallucination
     available_scan_fields:
