@@ -27,8 +27,10 @@ def _canonical_step_name(node_name: str) -> str:
     return raw.replace(" ", "_").replace("-", "_")
 
 
-def _wrap_node(fn: Callable, profile: dict, step_name: str) -> Callable:
+def _wrap_node(fn: Callable, profile: dict, step_name: str | None = None) -> Callable:
     """Wrap a node function to inject the profile dict as a second argument."""
+    step_name = step_name or _canonical_step_name(getattr(fn, "__name__", "unknown"))
+
     @functools.wraps(fn)
     def wrapper(state: ResearchState) -> dict:
         terminal_progress.start_stage(step_name)
