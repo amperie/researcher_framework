@@ -14,6 +14,9 @@ def test_create_idea_batch_returns_reviewable_ideas():
     assert len(batch["ideas"]) == 3
     assert batch["ideas"][0]["proposedSymbols"] == ["SPY", "VIX"]
     assert batch["ideas"][0]["name"] == "volatility_filtered_mean_reversion"
+    assert batch["ideas"][0]["optimizationParameters"][0]["key"] == "lookback"
+    assert batch["ideas"][0]["optimizationParameters"][0]["bounds"] == {"min": 10, "max": 200}
+    assert batch["ideas"][0]["optimizationParameters"][-1]["target"] == "portfolio"
     assert batch["provenance"]["profile"] == "trading_platform_ideas"
     assert batch["usage"] == {
         "provider": None,

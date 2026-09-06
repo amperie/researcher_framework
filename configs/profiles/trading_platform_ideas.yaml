@@ -141,6 +141,7 @@ prompts:
       - Include explicit warmup, symbol, timeframe, and data-field requirements
       - Leave position sizing, exits, stops, cash, and order behavior to a Portfolio
       - Be testable later through Quant Crucible smoke and research backtest stages
+      - Propose concrete optimization parameters and value ranges for later HPO
 
       Return a JSON array of exactly 3 objects:
       [
@@ -148,7 +149,18 @@ prompts:
           "name": "snake_case_strategy_name",
           "description": "What the signal measures",
           "hypothesis": "Why it may produce risk-adjusted returns",
-          "rationale": "What research or context inspired this"
+          "rationale": "What research or context inspired this",
+          "optimizationParameters": [
+            {
+              "key": "lookback",
+              "label": "Lookback bars",
+              "target": "algorithm",
+              "type": "randint",
+              "defaultValue": 40,
+              "bounds": {"min": 10, "max": 200},
+              "rationale": "Why this parameter should be optimized"
+            }
+          ]
         }
       ]
 
@@ -159,5 +171,8 @@ prompts:
 
       Reject or revise ideas that require future data, unavailable fields,
       vague symbol handling, portfolio/order behavior inside the algorithm, or
-      assumptions the platform cannot test. Keep the same schema and return only
-      valid JSON.
+      assumptions the platform cannot test. Ensure each accepted idea includes
+      optimizationParameters with realistic ranges: percentiles in [1, 99],
+      quantiles in [0.01, 0.99], moving-average windows <= 500, z-score
+      thresholds around [-4, 4], and risk fractions in [0.001, 1.0].
+      Keep the same schema and return only valid JSON.

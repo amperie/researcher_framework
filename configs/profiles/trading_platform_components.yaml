@@ -118,7 +118,9 @@ prompts:
       optimization_target "algorithm", symbol, symbols, timeframe,
       history_length, hyperparameters, hpo with algorithm_param_keys and
       search_space, benchmark, and success_criterion describing later smoke
-      validation. Return a JSON array.
+      validation. Preserve the approved idea's optimizationParameters as the
+      source of truth for hpo.search_space ranges unless they conflict with the
+      platform constraints. Return a JSON array.
 
   plan_implementation:
     system: |

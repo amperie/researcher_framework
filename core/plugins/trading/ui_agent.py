@@ -196,7 +196,88 @@ def _idea(direction: str, symbols: list[str], index: int, template: dict[str, st
         "risks": ["overfitting", "lookahead leakage", "insufficient trade count", "transaction-cost sensitivity"],
         "complexity": "medium" if index == 1 else "high",
         "score": max(0, 9 - index),
+        "optimizationParameters": _optimization_parameters(template["name"]),
     }
+
+
+def _optimization_parameters(strategy_name: str) -> list[dict[str, Any]]:
+    common = [
+        {
+            "key": "lookback",
+            "label": "Lookback bars",
+            "target": "algorithm",
+            "type": "randint",
+            "defaultValue": 40,
+            "bounds": {"min": 10, "max": 200},
+            "rationale": "Controls the rolling history used by the signal.",
+        },
+        {
+            "key": "signal_threshold",
+            "label": "Signal threshold",
+            "target": "algorithm",
+            "type": "uniform",
+            "defaultValue": 1.5,
+            "bounds": {"min": 0.5, "max": 4.0},
+            "rationale": "Controls how extreme the setup must be before emitting a signal.",
+        },
+    ]
+    strategy_specific = {
+        "volatility_filtered_mean_reversion": {
+            "key": "volatility_percentile",
+            "label": "Volatility percentile gate",
+            "target": "algorithm",
+            "type": "uniform",
+            "defaultValue": 70.0,
+            "bounds": {"min": 40.0, "max": 95.0},
+            "rationale": "Tests whether mean reversion works only in selected volatility regimes.",
+        },
+        "regime_confirmed_momentum": {
+            "key": "trend_confirmation_bars",
+            "label": "Trend confirmation bars",
+            "target": "algorithm",
+            "type": "randint",
+            "defaultValue": 20,
+            "bounds": {"min": 5, "max": 80},
+            "rationale": "Controls how persistent a trend must be before momentum signals fire.",
+        },
+        "breakout_failure_reversal": {
+            "key": "breakout_window",
+            "label": "Breakout window",
+            "target": "algorithm",
+            "type": "randint",
+            "defaultValue": 30,
+            "bounds": {"min": 10, "max": 120},
+            "rationale": "Controls the range used to identify failed breakouts.",
+        },
+        "adaptive_range_expansion": {
+            "key": "range_multiplier",
+            "label": "Range expansion multiplier",
+            "target": "algorithm",
+            "type": "uniform",
+            "defaultValue": 1.25,
+            "bounds": {"min": 0.75, "max": 3.0},
+            "rationale": "Controls how large a move must be relative to recent range.",
+        },
+        "benchmark_relative_strength_filter": {
+            "key": "relative_strength_window",
+            "label": "Relative strength window",
+            "target": "algorithm",
+            "type": "randint",
+            "defaultValue": 60,
+            "bounds": {"min": 15, "max": 240},
+            "rationale": "Controls the benchmark-relative comparison horizon.",
+        },
+    }
+    portfolio = {
+        "key": "risk_per_trade",
+        "label": "Risk per trade",
+        "target": "portfolio",
+        "type": "uniform",
+        "defaultValue": 0.01,
+        "bounds": {"min": 0.001, "max": 0.05},
+        "rationale": "Lets later validation separate signal quality from sizing aggressiveness.",
+    }
+    return [*common, strategy_specific.get(strategy_name, strategy_specific["regime_confirmed_momentum"]), portfolio]
 
 
 def _algorithm_source(*, class_name: str, description: str, symbols: list[str]) -> str:

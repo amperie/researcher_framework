@@ -33,7 +33,9 @@ def reset_usage() -> None:
 
 
 def get_usage_report() -> dict[str, Any]:
-    providers = sorted({str(item.get("provider") or "") for item in _TOKEN_EVENTS if item.get("provider")})
+    providers = sorted(
+        {str(item.get("provider") or "") for item in _TOKEN_EVENTS if item.get("provider")}
+    )
     models = sorted({str(item.get("model") or "") for item in _TOKEN_EVENTS if item.get("model")})
     return {
         "provider": providers[0] if len(providers) == 1 else None,
