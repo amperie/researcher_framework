@@ -444,8 +444,8 @@ def _build_contract_test(
     class_name: str,
     expected_feature_set_name: str,
 ) -> str:
-    if contract_test == "neuralsignal_feature_set":
-        return _build_neuralsignal_feature_set_contract_test(
+    if contract_test == "trading_researcher_feature_set":
+        return _build_trading_researcher_feature_set_contract_test(
             script_path=script_path,
             class_name=class_name,
             expected_feature_set_name=expected_feature_set_name,
@@ -460,7 +460,7 @@ def _build_contract_test(
     raise ValueError(f"Unknown validation contract_test: {contract_test!r}")
 
 
-def _build_neuralsignal_feature_set_contract_test(
+def _build_trading_researcher_feature_set_contract_test(
     script_path: str,
     class_name: str,
     expected_feature_set_name: str,
@@ -488,7 +488,7 @@ EXPECTED_FEATURE_SET_NAME = {expected_name_json}
 def test_implementation_does_not_install_runtime_stubs():
     source = open(SCRIPT_PATH, "r", encoding="utf-8").read()
     assert "class FeatureSetBase" not in source, "Implementation must import FeatureSetBase, not define a local stub"
-    assert "sys.modules" not in source, "Implementation must not create fake neuralsignal modules"
+    assert "sys.modules" not in source, "Implementation must not create fake trading_researcher modules"
 
 
 class FeatureSetBase:
@@ -504,28 +504,28 @@ def is_layer_string_match_in_list(layer_name, patterns):
     return any(str(pattern) in str(layer_name) for pattern in patterns)
 
 
-def _install_neuralsignal_stubs():
+def _install_trading_researcher_stubs():
     modules = {{
-        "neuralsignal": types.ModuleType("neuralsignal"),
-        "neuralsignal.core": types.ModuleType("neuralsignal.core"),
-        "neuralsignal.core.modules": types.ModuleType("neuralsignal.core.modules"),
-        "neuralsignal.core.modules.feature_sets": types.ModuleType("neuralsignal.core.modules.feature_sets"),
-        "neuralsignal.core.modules.feature_sets.feature_set_base": types.ModuleType(
-            "neuralsignal.core.modules.feature_sets.feature_set_base"
+        "trading_researcher": types.ModuleType("trading_researcher"),
+        "trading_researcher.core": types.ModuleType("trading_researcher.core"),
+        "trading_researcher.core.modules": types.ModuleType("trading_researcher.core.modules"),
+        "trading_researcher.core.modules.feature_sets": types.ModuleType("trading_researcher.core.modules.feature_sets"),
+        "trading_researcher.core.modules.feature_sets.feature_set_base": types.ModuleType(
+            "trading_researcher.core.modules.feature_sets.feature_set_base"
         ),
-        "neuralsignal.core.modules.feature_sets.feature_utils": types.ModuleType(
-            "neuralsignal.core.modules.feature_sets.feature_utils"
+        "trading_researcher.core.modules.feature_sets.feature_utils": types.ModuleType(
+            "trading_researcher.core.modules.feature_sets.feature_utils"
         ),
     }}
-    modules["neuralsignal.core.modules.feature_sets.feature_set_base"].FeatureSetBase = FeatureSetBase
-    modules["neuralsignal.core.modules.feature_sets.feature_utils"].is_layer_string_match_in_list = (
+    modules["trading_researcher.core.modules.feature_sets.feature_set_base"].FeatureSetBase = FeatureSetBase
+    modules["trading_researcher.core.modules.feature_sets.feature_utils"].is_layer_string_match_in_list = (
         is_layer_string_match_in_list
     )
     sys.modules.update(modules)
 
 
 def _load_class():
-    _install_neuralsignal_stubs()
+    _install_trading_researcher_stubs()
     spec = importlib.util.spec_from_file_location("generated_feature_set", SCRIPT_PATH)
     module = importlib.util.module_from_spec(spec)
     try:
@@ -776,6 +776,22 @@ def test_generated_algorithm_is_algorithm_subclass():
     assert issubclass(cls, Algorithm)
 
 
+def test_generated_algorithm_crucible_metadata_contract():
+    cls = _load_class()
+    metadata = getattr(cls, "crucible_metadata", None)
+    assert isinstance(metadata, dict), "Generated trading algorithms must define class-level crucible_metadata"
+    assert metadata.get("schema_version") == 1
+    assert metadata.get("role") == "algorithm"
+    assert isinstance(metadata.get("tunables"), dict)
+    assert isinstance(metadata.get("fixed_parameters"), list)
+    assert isinstance(metadata.get("required_symbols"), list)
+    assert isinstance(metadata.get("required_timeframes"), list)
+    assert isinstance(metadata.get("required_fields"), list)
+    assert isinstance(metadata.get("signal_contract"), dict)
+    assert isinstance(metadata.get("statefulness"), dict)
+    assert isinstance(metadata.get("dependencies"), list)
+
+
 def test_generated_algorithm_reconfigure_contract():
     class_node = _algorithm_class_def()
     init_node = _method_node(class_node, "__init__")
@@ -874,3 +890,4 @@ def _preflight_validation_error(code: str) -> str:
                 "combine name parts first and call self.make_column_name(full_name)."
             )
     return ""
+

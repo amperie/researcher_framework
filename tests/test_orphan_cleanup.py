@@ -74,33 +74,33 @@ def test_orphan_cleanup_scan_and_delete_derived_storage():
     )
     metadata_store.put({
         "artifact_id": "artifact-1",
-        "storage_key": "neuralsignal/dataset/artifact-1/file.csv",
+        "storage_key": "trading_researcher/dataset/artifact-1/file.csv",
         "storage_backend": "s3",
         "storage_bucket": "artifacts",
         "file_name": "file.csv",
-        "uri": "http://minio/artifacts/neuralsignal/dataset/artifact-1/file.csv",
+        "uri": "http://minio/artifacts/trading_researcher/dataset/artifact-1/file.csv",
     })
     metadata_store.put({
         "artifact_id": "artifact-2",
-        "storage_key": "neuralsignal/dataset/artifact-2/file.csv",
+        "storage_key": "trading_researcher/dataset/artifact-2/file.csv",
         "storage_backend": "s3",
         "storage_bucket": "artifacts",
         "file_name": "file.csv",
-        "uri": "http://minio/artifacts/neuralsignal/dataset/artifact-2/file.csv",
+        "uri": "http://minio/artifacts/trading_researcher/dataset/artifact-2/file.csv",
     })
 
     service = OrphanCleanupService(
-        profile_name="neuralsignal",
-        profile={"name": "neuralsignal"},
+        profile_name="trading_researcher",
+        profile={"name": "trading_researcher"},
         document_store=document_store,
         vector_store=FakeVectorStore(ids={"record-1", "record-2"}),
         graph_store=FakeGraphStore(ids={"record-1", "record-3"}),
         artifact_metadata_store=metadata_store,
         artifact_backend=FakeArtifactBackend(
             keys={
-                "neuralsignal/dataset/artifact-1/file.csv",
-                "neuralsignal/dataset/artifact-2/file.csv",
-                "neuralsignal/dataset/dangling/file.csv",
+                "trading_researcher/dataset/artifact-1/file.csv",
+                "trading_researcher/dataset/artifact-2/file.csv",
+                "trading_researcher/dataset/dangling/file.csv",
             }
         ),
     )
@@ -116,10 +116,10 @@ def test_orphan_cleanup_scan_and_delete_derived_storage():
     assert scan["orphans"]["neo4j_record_ids"] == ["record-3"]
     assert [item["artifact_id"] for item in scan["orphans"]["artifact_metadata_records"]] == ["artifact-2"]
     assert scan["orphans"]["artifact_storage_keys"] == [
-        "neuralsignal/dataset/artifact-2/file.csv",
+        "trading_researcher/dataset/artifact-2/file.csv",
     ]
     assert scan["untracked"]["artifact_storage_keys"] == [
-        "neuralsignal/dataset/dangling/file.csv",
+        "trading_researcher/dataset/dangling/file.csv",
     ]
 
     deleted = service.delete()
@@ -135,7 +135,7 @@ def test_orphan_cleanup_scan_and_delete_derived_storage():
     assert service.graph_store.deleted == ["record-3"]
     assert service.graph_store.pruned is True
     assert service.artifact_backend.deleted == [
-        "neuralsignal/dataset/artifact-2/file.csv",
+        "trading_researcher/dataset/artifact-2/file.csv",
     ]
     assert metadata_store.get("artifact-1") is not None
     assert metadata_store.get("artifact-2") is None

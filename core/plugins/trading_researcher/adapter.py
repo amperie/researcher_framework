@@ -1,14 +1,14 @@
-"""NeuralSignal research plugin.
+"""TradingResearcher research plugin.
 
 This module is the domain adapter for the generic research graph. It should own
-all NeuralSignal-specific experiment preparation and execution:
+all TradingResearcher-specific experiment preparation and execution:
 
-- converting proposals into NeuralSignal dataset/model configs
+- converting proposals into TradingResearcher dataset/model configs
 - loading generated ``FeatureSetBase`` implementations
-- calling generic subprocess tasks in a separate NeuralSignal-capable process
+- calling generic subprocess tasks in a separate TradingResearcher-capable process
 - normalizing dataset/model outputs into graph state keys
 
-Heavy NeuralSignal imports live in ``plugins/neuralsignal/tasks.py``. This
+Heavy TradingResearcher imports live in ``plugins/trading_researcher/tasks.py``. This
 plugin should mostly orchestrate config, paths, state deltas, and error handling.
 """
 from __future__ import annotations
@@ -41,12 +41,12 @@ log = get_logger(__name__)
 
 _BRIDGE_SCRIPT = Path(__file__).parent / "bridge.py"
 _TASK_RUNNER = Path(__file__).resolve().parents[1] / "task_runner.py"
-_CREATE_DATASET_TASK = "core.plugins.neuralsignal.tasks.create_dataset"
-_CREATE_S1_MODEL_TASK = "core.plugins.neuralsignal.tasks.create_s1_model"
-_RUN_PROPOSAL_BRANCH_TASK = "core.plugins.neuralsignal.tasks.run_proposal_branch"
-_PLUGIN_NAME = "neuralsignal"
+_CREATE_DATASET_TASK = "core.plugins.trading_researcher.tasks.create_dataset"
+_CREATE_S1_MODEL_TASK = "core.plugins.trading_researcher.tasks.create_s1_model"
+_RUN_PROPOSAL_BRANCH_TASK = "core.plugins.trading_researcher.tasks.run_proposal_branch"
+_PLUGIN_NAME = "trading_researcher"
 _PLUGIN_LOGGER_PREFIXES = [
-    "core.plugins.neuralsignal",
+    "core.plugins.trading_researcher",
     "core.plugins.task_runner",
     "core.plugins.job_runner",
 ]
@@ -56,8 +56,8 @@ def _ensure_plugin_logging() -> None:
     setup_plugin_file_logging(_PLUGIN_NAME, logger_prefixes=_PLUGIN_LOGGER_PREFIXES)
 
 
-class NeuralSignalPlugin(ResearchAdapter):
-    """ResearchAdapter implementation for NeuralSignal experiments.
+class TradingResearcherPlugin(ResearchAdapter):
+    """ResearchAdapter implementation for TradingResearcher experiments.
 
     The generic graph calls this plugin as:
 
@@ -66,7 +66,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         generated FeatureSetBase implementations.
 
     ``execute_experiment(profile, state)``
-        Train/evaluate NeuralSignal models from prepared artifacts and return
+        Train/evaluate TradingResearcher models from prepared artifacts and return
         normalized experiment results.
     """
 
@@ -74,7 +74,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         """Return cheap diagnostics for research context and troubleshooting."""
         _ensure_plugin_logging()
         cfg = get_config()
-        ns_src = Path(cfg.neuralsignal_src_path).resolve()
+        ns_src = Path(cfg.trading_researcher_src_path).resolve()
         return {
             "bridge_script": str(_BRIDGE_SCRIPT.resolve()),
             "bridge_exists": _BRIDGE_SCRIPT.exists(),
@@ -83,14 +83,14 @@ class NeuralSignalPlugin(ResearchAdapter):
             "dataset_task": _CREATE_DATASET_TASK,
             "model_task": _CREATE_S1_MODEL_TASK,
             "proposal_branch_task": _RUN_PROPOSAL_BRANCH_TASK,
-            "neuralsignal_python": cfg.neuralsignal_python,
-            "neuralsignal_src_path": str(ns_src),
-            "neuralsignal_src_exists": ns_src.exists(),
+            "trading_researcher_python": cfg.trading_researcher_python,
+            "trading_researcher_src_path": str(ns_src),
+            "trading_researcher_src_exists": ns_src.exists(),
             "experiments_dir": cfg.experiments_dir,
         }
 
     def build_context(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Expose NeuralSignal constraints to research/ideation tools."""
+        """Expose TradingResearcher constraints to research/ideation tools."""
         _ensure_plugin_logging()
         return {
             "datasets": profile.get("datasets") or [],
@@ -102,15 +102,15 @@ class NeuralSignalPlugin(ResearchAdapter):
     def external_runtime_spec(self, profile: dict[str, Any], purpose: str) -> dict[str, Any]:
         cfg = get_config()
         return {
-            "python": cfg.neuralsignal_python,
-            "cwd": str(_neuralsignal_workdir(cfg)),
+            "python": cfg.trading_researcher_python,
+            "cwd": str(_trading_researcher_workdir(cfg)),
             "pythonpath_entries": [str(path) for path in _pythonpath_entries(cfg)],
             "plugin_name": _PLUGIN_NAME,
             "logger_prefixes": list(_PLUGIN_LOGGER_PREFIXES),
         }
 
     def knowledge_graph_config(self, profile: dict[str, Any]) -> dict[str, Any]:
-        """Return NeuralSignal-specific KG defaults while staying profile-driven."""
+        """Return TradingResearcher-specific KG defaults while staying profile-driven."""
         evaluation = profile.get("evaluation") or {}
         primary_metric = str(evaluation.get("primary_metric") or "test_auc")
         return {
@@ -149,11 +149,11 @@ class NeuralSignalPlugin(ResearchAdapter):
         }
 
     def prepare_experiment(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Prepare NeuralSignal dataset artifacts from proposals.
+        """Prepare TradingResearcher dataset artifacts from proposals.
 
         Each proposal is paired with its generated ``FeatureSetBase``
-        implementation, converted to a NeuralSignal dataset-automation payload,
-        executed in the NeuralSignal subprocess, and normalized into dataset
+        implementation, converted to a TradingResearcher dataset-automation payload,
+        executed in the TradingResearcher subprocess, and normalized into dataset
         artifacts that downstream graph nodes can consume.
         """
         _ensure_plugin_logging()
@@ -165,7 +165,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         datasets: list[dict[str, Any]] = []
         errors = list(state.get("errors") or [])
         cfg = get_config()
-        cwd = str(_neuralsignal_workdir(cfg))
+        cwd = str(_trading_researcher_workdir(cfg))
 
         for proposal in proposals:
             proposal_name = proposal.get("name", "unknown")
@@ -200,7 +200,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                     continue
                 if expected_dataset_path.exists() and not _should_overwrite_existing_dataset(dataset_cfg):
                     log.info(
-                        "NeuralSignalPlugin.prepare_experiment | %s reusing existing dataset %s",
+                        "TradingResearcherPlugin.prepare_experiment | %s reusing existing dataset %s",
                         proposal_name,
                         expected_dataset_path,
                     )
@@ -248,7 +248,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                             f"prepare_experiment: {proposal_name} returned missing dataset file {artifact.get('dataset_path')}"
                         )
             except Exception as exc:
-                log.error("NeuralSignalPlugin.prepare_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
+                log.error("TradingResearcherPlugin.prepare_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
                 errors.append(f"prepare_experiment: {proposal_name} failed: {exc}")
 
         return {
@@ -258,10 +258,10 @@ class NeuralSignalPlugin(ResearchAdapter):
         }
 
     def execute_experiment(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Execute NeuralSignal experiments from prepared artifacts.
+        """Execute TradingResearcher experiments from prepared artifacts.
 
-        For each ready dataset artifact, build a NeuralSignal S1 model payload,
-        execute it in the NeuralSignal subprocess, and normalize metrics,
+        For each ready dataset artifact, build a TradingResearcher S1 model payload,
+        execute it in the TradingResearcher subprocess, and normalize metrics,
         feature importance, and model metadata for generic evaluation/storage.
         """
         _ensure_plugin_logging()
@@ -270,7 +270,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         results: list[dict[str, Any]] = []
         models: list[dict[str, Any]] = []
         cfg = get_config()
-        cwd = str(_neuralsignal_workdir(cfg))
+        cwd = str(_trading_researcher_workdir(cfg))
 
         for artifact in artifacts:
             proposal_name = artifact.get("proposal_name", "unknown")
@@ -354,7 +354,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                     },
                 )
             except Exception as exc:
-                log.error("NeuralSignalPlugin.execute_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
+                log.error("TradingResearcherPlugin.execute_experiment | %s failed: %s", proposal_name, exc, exc_info=True)
                 errors.append(f"execute_experiment: {proposal_name} failed: {exc}")
 
         return {
@@ -364,7 +364,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         }
 
     def submit_experiment_jobs(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Submit proposal-branch NeuralSignal jobs and return immediately."""
+        """Submit proposal-branch TradingResearcher jobs and return immediately."""
         _ensure_plugin_logging()
         jobs = list(state.get("experiment_jobs") or [])
         errors = list(state.get("errors") or [])
@@ -406,7 +406,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                 submitted.append(job)
                 active_count += 1
             except Exception as exc:
-                log.error("NeuralSignalPlugin.submit_experiment_jobs | branch %s failed: %s", proposal_name, exc, exc_info=True)
+                log.error("TradingResearcherPlugin.submit_experiment_jobs | branch %s failed: %s", proposal_name, exc, exc_info=True)
                 errors.append(f"submit_experiment_jobs: branch {proposal_name} failed: {exc}")
 
         return {
@@ -416,7 +416,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         }
 
     def check_experiment_jobs(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Poll NeuralSignal jobs and collect completed proposal-branch outputs."""
+        """Poll TradingResearcher jobs and collect completed proposal-branch outputs."""
         _ensure_plugin_logging()
         jobs = list(state.get("experiment_jobs") or [])
         artifacts = list(state.get("experiment_artifacts") or [])
@@ -475,7 +475,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                     checked["collected"] = True
                     _write_job_status(checked)
                 except Exception as exc:
-                    log.error("NeuralSignalPlugin.check_experiment_jobs | collect %s failed: %s", checked.get("job_id"), exc, exc_info=True)
+                    log.error("TradingResearcherPlugin.check_experiment_jobs | collect %s failed: %s", checked.get("job_id"), exc, exc_info=True)
                     checked["collected"] = True
                     _write_job_status(checked)
                     errors.append(f"check_experiment_jobs: collect {checked.get('job_id')} failed: {exc}")
@@ -522,7 +522,7 @@ class NeuralSignalPlugin(ResearchAdapter):
                     reused_artifact = _dataset_artifact(
                         proposal_name=proposal_name,
                         file_path=str(expected_path),
-                        cwd=str(_neuralsignal_workdir(get_config())),
+                        cwd=str(_trading_researcher_workdir(get_config())),
                         dataset_cfg=dataset_cfg,
                         task_result={"skipped_existing_dataset": True, "file_paths": [str(expected_path)]},
                         idx=0,
@@ -565,7 +565,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         dataset_result = _as_dict(result.get("dataset_result"))
         model_result = _as_dict(result.get("model_result"))
         reused_artifact = _as_dict(payload.get("reused_dataset_artifact"))
-        cwd = str(_neuralsignal_workdir(get_config()))
+        cwd = str(_trading_researcher_workdir(get_config()))
 
         artifact: dict[str, Any]
         if dataset_result.get("file_paths") or dataset_result.get("paths"):
@@ -624,7 +624,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         return {"artifact": artifact, "experiment_result": experiment_result, "model": model}
 
     def summarize_result(self, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Return a compact NeuralSignal-specific result summary."""
+        """Return a compact TradingResearcher-specific result summary."""
         primary_metric = (profile.get("evaluation") or {}).get("primary_metric", "test_auc")
         results = state.get("experiment_results") or []
         return {
@@ -642,7 +642,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         }
 
     def build_memory_records(self, profile: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
-        """Build NeuralSignal-specific canonical memory records."""
+        """Build TradingResearcher-specific canonical memory records."""
         direction = str(state.get("research_direction", ""))
         evaluation_summary = state.get("evaluation_summary") or {}
         results = state.get("experiment_results") or []
@@ -677,7 +677,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             detector = str(proposal.get("detector") or "")
             feature_set_fingerprint = _implementation_fingerprint(implementation)
             if feature_set_fingerprint and feature_set_fingerprint not in emitted_featureset_keys:
-                records.append(_neuralsignal_featureset_memory_record(
+                records.append(_trading_researcher_featureset_memory_record(
                     profile=profile,
                     proposal_name=proposal_name,
                     implementation=implementation,
@@ -705,7 +705,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             implementation = implementations_by_name.get(proposal_name)
             dataset_fingerprint = _dataset_config_fingerprint(dataset_config) if dataset_config else ""
             if dataset_fingerprint and dataset_fingerprint not in emitted_dataset_keys:
-                records.append(_neuralsignal_dataset_memory_record(
+                records.append(_trading_researcher_dataset_memory_record(
                     profile=profile,
                     proposal_name=proposal_name,
                     artifact=artifact,
@@ -755,14 +755,14 @@ class NeuralSignalPlugin(ResearchAdapter):
 
             record = {
                 "record_id": record_id,
-                "domain": profile.get("name", "neuralsignal"),
-                "kind": "neuralsignal_experiment",
+                "domain": profile.get("name", "trading_researcher"),
+                "kind": "trading_researcher_experiment",
                 "object_type": "experiment_result",
                 "object_key": record_id,
                 "object_role": "result",
                 "schema_version": "1",
                 "title": proposal_name,
-                "summary": _neuralsignal_memory_summary(
+                "summary": _trading_researcher_memory_summary(
                     direction=direction,
                     proposal_name=proposal_name,
                     dataset_name=dataset_name,
@@ -792,8 +792,8 @@ class NeuralSignalPlugin(ResearchAdapter):
                     "root_research_direction": root_research_direction,
                 },
                 "metadata": {
-                    "profile": profile.get("name", "neuralsignal"),
-                    "memory_kind": "neuralsignal_experiment",
+                    "profile": profile.get("name", "trading_researcher"),
+                    "memory_kind": "trading_researcher_experiment",
                     "experiment_id": result.get("experiment_id", ""),
                     "proposal_name": proposal_name,
                     "research_direction": direction,
@@ -818,21 +818,21 @@ class NeuralSignalPlugin(ResearchAdapter):
                     **{k: float(v) for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
                 },
                 "tags": [
-                    "neuralsignal",
+                    "trading_researcher",
                     dataset_name or "dataset_unknown",
                     detector or "detector_unknown",
                 ],
                 "created_at": _now_iso(),
                 "source_run_id": result.get("mlflow_run_id") or model.get("mlflow_run_id"),
-                "blob_refs": _neuralsignal_blob_refs(artifact),
-                "entities": _neuralsignal_entities(
+                "blob_refs": _trading_researcher_blob_refs(artifact),
+                "entities": _trading_researcher_entities(
                     proposal_name=proposal_name,
                     dataset_name=dataset_name,
                     detector=detector,
                     class_name=class_name,
                     model_name=str(model.get("model_id") or model_config.get("model_name") or ""),
                 ),
-                "relations": _neuralsignal_relations(
+                "relations": _trading_researcher_relations(
                     experiment_id=record_id,
                     proposal_name=proposal_name,
                     dataset_name=dataset_name,
@@ -853,13 +853,16 @@ class NeuralSignalPlugin(ResearchAdapter):
             *(self.build_memory_records(profile, merged) or []),
         ])
         if not records:
-            log.debug("NeuralSignalPlugin | No memory records to persist for incremental state")
+            log.debug("TradingResearcherPlugin | No memory records to persist for incremental state")
             return
         log.info(
-            "NeuralSignalPlugin | Persisting %d memory record(s) immediately for available results",
+            "TradingResearcherPlugin | Persisting %d memory record(s) immediately for available results",
             len(records),
         )
-        MemoryService.for_profile(profile).persist_records(records)
+        try:
+            MemoryService.for_profile(profile).persist_records(records)
+        except Exception as exc:
+            log.warning("TradingResearcherPlugin | memory persistence failed: %s", exc)
 
     def memory_record_to_artifact(
         self,
@@ -867,7 +870,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         record: dict[str, Any],
         state: dict[str, Any],
     ) -> dict[str, Any]:
-        """Render a NeuralSignal memory record into research-artifact form."""
+        """Render a TradingResearcher memory record into research-artifact form."""
         artifact = default_memory_record_to_artifact(record, source_name="memory")
         metadata = dict(artifact.get("metadata") or {})
         dataset = metadata.get("dataset")
@@ -891,7 +894,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         if metadata.get("mlflow_run_id"):
             summary_lines.append(f"MLflow run: {metadata['mlflow_run_id']}")
         artifact["summary"] = "\n".join(line for line in summary_lines if line)
-        artifact["source_type"] = record.get("kind", "neuralsignal_experiment")
+        artifact["source_type"] = record.get("kind", "trading_researcher_experiment")
         artifact.pop("source", None)
         artifact["metadata"] = metadata
         artifact["raw"] = record
@@ -903,7 +906,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         proposal: dict[str, Any],
         implementation: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        """Build the ``plugins.neuralsignal.tasks.create_dataset`` payload."""
+        """Build the ``plugins.trading_researcher.tasks.create_dataset`` payload."""
         cfg = get_config()
         dataset_meta = _dataset_for_proposal(profile, proposal)
         detector = proposal.get("detector") or _first(dataset_meta.get("available_detectors") or [])
@@ -917,7 +920,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         class_name = (implementation or {}).get("class_name", "")
         feature_set_name = proposal_name
         layer_patterns = dataset_meta.get("layer_name_patterns") or {}
-        dataset_output_dir = Path(cfg.experiments_dir) / profile.get("name", "neuralsignal") / "datasets"
+        dataset_output_dir = Path(cfg.experiments_dir) / profile.get("name", "trading_researcher") / "datasets"
         dataset_output_dir.mkdir(parents=True, exist_ok=True)
 
         return {
@@ -968,7 +971,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         artifact: dict[str, Any],
         experiment_id: str | None = None,
     ) -> dict[str, Any]:
-        """Build the ``plugins.neuralsignal.tasks.create_s1_model`` payload."""
+        """Build the ``plugins.trading_researcher.tasks.create_s1_model`` payload."""
         cfg = get_config()
         dataset_cfg = artifact.get("dataset_config") or {}
         experiment_id = experiment_id or str(uuid4())
@@ -995,7 +998,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             "dataset": dataset_cfg.get("dataset") or artifact.get("dataset", ""),
             "zone_size": dataset_cfg.get("zone_size", 1024),
             "use_full_zone_names": False,
-            # NeuralSignal's current create_s1_model implementation overwrites
+            # TradingResearcher's current create_s1_model implementation overwrites
             # cfg["dataset_path"] from cfg["file_out"] after sanitizing it with
             # get_name_from_template(..., file_safe=True). Pass only the dataset
             # filename here and run the task from the dataset directory.
@@ -1032,7 +1035,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         cwd: str | None = None,
     ) -> dict[str, Any]:
         cfg = get_config()
-        jobs_dir = Path(cfg.experiments_dir) / profile.get("name", "neuralsignal") / "jobs"
+        jobs_dir = Path(cfg.experiments_dir) / profile.get("name", "trading_researcher") / "jobs"
         job_id = _slug("_".join(item for item in (stage, proposal_name, artifact_id or experiment_id or str(uuid4())[:8]) if item))
         runtime = self.external_runtime_spec(profile, "experiment")
         return {
@@ -1054,7 +1057,7 @@ class NeuralSignalPlugin(ResearchAdapter):
 
     def _dataset_artifacts_from_job(self, job: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
         cfg = get_config()
-        cwd = str(_neuralsignal_workdir(cfg))
+        cwd = str(_trading_researcher_workdir(cfg))
         file_paths = _as_list(result.get("file_paths") or result.get("paths"))
         if not file_paths:
             raise RuntimeError("dataset job returned no file_paths")
@@ -1117,7 +1120,7 @@ class NeuralSignalPlugin(ResearchAdapter):
         timeout: int | None = None,
         cwd: str | None = None,
     ) -> dict[str, Any]:
-        """Run a dotted task path in a NeuralSignal-capable subprocess."""
+        """Run a dotted task path in a TradingResearcher-capable subprocess."""
         _ensure_plugin_logging()
         cfg = get_config()
         timeout = timeout or cfg.experiment_timeout_seconds
@@ -1125,7 +1128,7 @@ class NeuralSignalPlugin(ResearchAdapter):
             {
                 "task_path": task_path,
                 "payload": payload,
-                "python": cfg.neuralsignal_python,
+                "python": cfg.trading_researcher_python,
                 "timeout": timeout,
                 "plugin_name": _PLUGIN_NAME,
                 "logger_prefixes": list(_PLUGIN_LOGGER_PREFIXES),
@@ -1140,9 +1143,9 @@ class NeuralSignalPlugin(ResearchAdapter):
         )
 
 
-def get_adapter() -> NeuralSignalPlugin:
+def get_adapter() -> TradingResearcherPlugin:
     """Factory used by ``plugins.loader.load_adapter``."""
-    return NeuralSignalPlugin()
+    return TradingResearcherPlugin()
 
 
 def _implementations_by_proposal(implementations: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -1252,7 +1255,7 @@ def _proposal_lessons_from_evaluation(
     return lessons
 
 
-def _neuralsignal_memory_summary(
+def _trading_researcher_memory_summary(
     *,
     direction: str,
     proposal_name: str,
@@ -1279,7 +1282,7 @@ def _neuralsignal_memory_summary(
     return "\n".join(line for line in lines if line and line.strip())
 
 
-def _neuralsignal_blob_refs(artifact: dict[str, Any]) -> list[dict[str, Any]]:
+def _trading_researcher_blob_refs(artifact: dict[str, Any]) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     uri = artifact.get("stored_artifact_uri")
     artifact_id = artifact.get("stored_artifact_id")
@@ -1293,7 +1296,7 @@ def _neuralsignal_blob_refs(artifact: dict[str, Any]) -> list[dict[str, Any]]:
     return refs
 
 
-def _neuralsignal_entities(
+def _trading_researcher_entities(
     *,
     proposal_name: str,
     dataset_name: str,
@@ -1305,40 +1308,40 @@ def _neuralsignal_entities(
         "entity_type": "proposal",
         "key": proposal_name,
         "name": proposal_name,
-        "metadata": {"domain": "neuralsignal"},
+        "metadata": {"domain": "trading_researcher"},
     }]
     if dataset_name:
         entities.append({
             "entity_type": "dataset",
             "key": dataset_name,
             "name": dataset_name,
-            "metadata": {"domain": "neuralsignal"},
+            "metadata": {"domain": "trading_researcher"},
         })
     if detector:
         entities.append({
             "entity_type": "detector",
             "key": detector,
             "name": detector,
-            "metadata": {"domain": "neuralsignal"},
+            "metadata": {"domain": "trading_researcher"},
         })
     if class_name:
         entities.append({
             "entity_type": "feature_set",
             "key": class_name,
             "name": class_name,
-            "metadata": {"domain": "neuralsignal"},
+            "metadata": {"domain": "trading_researcher"},
         })
     if model_name:
         entities.append({
             "entity_type": "model",
             "key": model_name,
             "name": model_name,
-            "metadata": {"domain": "neuralsignal"},
+            "metadata": {"domain": "trading_researcher"},
         })
     return entities
 
 
-def _neuralsignal_relations(
+def _trading_researcher_relations(
     *,
     experiment_id: str,
     proposal_name: str,
@@ -1358,7 +1361,7 @@ def _neuralsignal_relations(
             "target_type": "proposal",
             "target_key": proposal_name,
             "metadata": {
-                "domain": "neuralsignal",
+                "domain": "trading_researcher",
                 "source_next_step_record_id": source_next_step_record_id,
             },
         })
@@ -1369,7 +1372,7 @@ def _neuralsignal_relations(
             "source_key": proposal_name,
             "target_type": "experiment_result",
             "target_key": experiment_id,
-            "metadata": {"domain": "neuralsignal"},
+            "metadata": {"domain": "trading_researcher"},
         })
     if dataset_name:
         relations.append({
@@ -1378,7 +1381,7 @@ def _neuralsignal_relations(
             "source_key": proposal_name,
             "target_type": "dataset",
             "target_key": dataset_name,
-            "metadata": {"domain": "neuralsignal"},
+            "metadata": {"domain": "trading_researcher"},
         })
     if detector:
         relations.append({
@@ -1387,7 +1390,7 @@ def _neuralsignal_relations(
             "source_key": proposal_name,
             "target_type": "detector",
             "target_key": detector,
-            "metadata": {"domain": "neuralsignal"},
+            "metadata": {"domain": "trading_researcher"},
         })
     if class_name:
         relations.append({
@@ -1396,7 +1399,7 @@ def _neuralsignal_relations(
             "source_key": proposal_name,
             "target_type": "feature_set",
             "target_key": class_name,
-            "metadata": {"domain": "neuralsignal"},
+            "metadata": {"domain": "trading_researcher"},
         })
     if model_name:
         relations.append({
@@ -1405,7 +1408,7 @@ def _neuralsignal_relations(
             "source_key": proposal_name,
             "target_type": "model",
             "target_key": model_name,
-            "metadata": {"domain": "neuralsignal"},
+            "metadata": {"domain": "trading_researcher"},
         })
     return relations
 
@@ -1476,7 +1479,7 @@ def _dataset_artifact_from_memory(
         fingerprint = _dataset_config_fingerprint(dataset_cfg)
         reuse_lookup = getattr(service, "find_reusable", None)
         reuse = reuse_lookup(
-            domain=str(profile.get("name", "neuralsignal")),
+            domain=str(profile.get("name", "trading_researcher")),
             object_type="dataset",
             fingerprint=fingerprint,
             fingerprint_metadata_key="dataset_config_fingerprint",
@@ -1487,13 +1490,13 @@ def _dataset_artifact_from_memory(
             record = reuse.get("record") if reuse.get("reusable") else None
         else:
             record = service.find_one_record({
-                "domain": profile.get("name", "neuralsignal"),
+                "domain": profile.get("name", "trading_researcher"),
                 "object_type": "dataset",
                 "metadata.dataset_config_fingerprint": fingerprint,
                 "metadata.dataset_status": "ready",
             })
     except Exception as exc:
-        log.debug("NeuralSignalPlugin | memory dataset lookup failed for %s: %s", proposal_name, exc)
+        log.debug("TradingResearcherPlugin | memory dataset lookup failed for %s: %s", proposal_name, exc)
         return None
 
     if not record:
@@ -1546,7 +1549,7 @@ def _dataset_artifact_from_memory(
     }
 
 
-def _neuralsignal_dataset_memory_record(
+def _trading_researcher_dataset_memory_record(
     *,
     profile: dict[str, Any],
     proposal_name: str,
@@ -1565,8 +1568,8 @@ def _neuralsignal_dataset_memory_record(
     stored_artifact_uri = artifact.get("stored_artifact_uri") or artifact.get("dataset_path") or artifact.get("file_path") or ""
     return {
         "record_id": f"dataset:{dataset_fingerprint}",
-        "domain": profile.get("name", "neuralsignal"),
-        "kind": "neuralsignal_dataset",
+        "domain": profile.get("name", "trading_researcher"),
+        "kind": "trading_researcher_dataset",
         "object_type": "dataset",
         "object_key": dataset_fingerprint,
         "object_role": "artifact",
@@ -1585,8 +1588,8 @@ def _neuralsignal_dataset_memory_record(
             "implementation": _implementation_summary(implementation),
         },
         "metadata": {
-            "profile": profile.get("name", "neuralsignal"),
-            "memory_kind": "neuralsignal_dataset",
+            "profile": profile.get("name", "trading_researcher"),
+            "memory_kind": "trading_researcher_dataset",
             "dataset": dataset_name,
             "detector": detector,
             "proposal_name": proposal_name,
@@ -1599,17 +1602,17 @@ def _neuralsignal_dataset_memory_record(
             "stored_artifact_id": artifact.get("stored_artifact_id", ""),
             "stored_artifact_uri": stored_artifact_uri,
         },
-        "tags": ["neuralsignal", "dataset", dataset_name or "dataset_unknown", detector or "detector_unknown"],
+        "tags": ["trading_researcher", "dataset", dataset_name or "dataset_unknown", detector or "detector_unknown"],
         "created_at": _now_iso(),
         "blob_refs": _memory_blob_refs_from_artifact("dataset_artifact", artifact),
-        "entities": _neuralsignal_entities(
+        "entities": _trading_researcher_entities(
             proposal_name=proposal_name,
             dataset_name=dataset_name,
             detector=detector,
             class_name=class_name,
             model_name="",
         ),
-        "relations": _neuralsignal_relations(
+        "relations": _trading_researcher_relations(
             experiment_id="",
             proposal_name=proposal_name,
             dataset_name=dataset_name,
@@ -1620,7 +1623,7 @@ def _neuralsignal_dataset_memory_record(
     }
 
 
-def _neuralsignal_featureset_memory_record(
+def _trading_researcher_featureset_memory_record(
     *,
     profile: dict[str, Any],
     proposal_name: str,
@@ -1632,8 +1635,8 @@ def _neuralsignal_featureset_memory_record(
     class_name = str(implementation.get("class_name") or proposal_name)
     return {
         "record_id": f"featureset:{feature_set_fingerprint}",
-        "domain": profile.get("name", "neuralsignal"),
-        "kind": "neuralsignal_featureset",
+        "domain": profile.get("name", "trading_researcher"),
+        "kind": "trading_researcher_featureset",
         "object_type": "featureset",
         "object_key": class_name,
         "object_role": "implementation",
@@ -1650,8 +1653,8 @@ def _neuralsignal_featureset_memory_record(
             "implementation": _implementation_summary(implementation),
         },
         "metadata": {
-            "profile": profile.get("name", "neuralsignal"),
-            "memory_kind": "neuralsignal_featureset",
+            "profile": profile.get("name", "trading_researcher"),
+            "memory_kind": "trading_researcher_featureset",
             "proposal_name": proposal_name,
             "dataset": dataset_name,
             "detector": detector,
@@ -1662,17 +1665,17 @@ def _neuralsignal_featureset_memory_record(
             "stored_artifact_id": implementation.get("stored_artifact_id", ""),
             "stored_artifact_uri": implementation.get("stored_artifact_uri", ""),
         },
-        "tags": ["neuralsignal", "featureset", dataset_name or "dataset_unknown", detector or "detector_unknown"],
+        "tags": ["trading_researcher", "featureset", dataset_name or "dataset_unknown", detector or "detector_unknown"],
         "created_at": _now_iso(),
         "blob_refs": _memory_blob_refs_from_artifact("implementation_artifact", implementation),
-        "entities": _neuralsignal_entities(
+        "entities": _trading_researcher_entities(
             proposal_name=proposal_name,
             dataset_name=dataset_name,
             detector=detector,
             class_name=class_name,
             model_name="",
         ),
-        "relations": _neuralsignal_relations(
+        "relations": _trading_researcher_relations(
             experiment_id="",
             proposal_name=proposal_name,
             dataset_name=dataset_name,
@@ -1683,7 +1686,7 @@ def _neuralsignal_featureset_memory_record(
     }
 
 
-def _neuralsignal_model_memory_record(
+def _trading_researcher_model_memory_record(
     *,
     profile: dict[str, Any],
     proposal_name: str,
@@ -1698,8 +1701,8 @@ def _neuralsignal_model_memory_record(
     model_name = str(model.get("model_id") or model_config.get("model_name") or proposal_name)
     return {
         "record_id": f"model:{model_fingerprint or model_name}",
-        "domain": profile.get("name", "neuralsignal"),
-        "kind": "neuralsignal_model",
+        "domain": profile.get("name", "trading_researcher"),
+        "kind": "trading_researcher_model",
         "object_type": "model",
         "object_key": model_name,
         "object_role": "artifact",
@@ -1719,8 +1722,8 @@ def _neuralsignal_model_memory_record(
             "stored_figure_artifacts": _json_safe(_as_list(model.get("stored_figure_artifacts"))),
         },
         "metadata": {
-            "profile": profile.get("name", "neuralsignal"),
-            "memory_kind": "neuralsignal_model",
+            "profile": profile.get("name", "trading_researcher"),
+            "memory_kind": "trading_researcher_model",
             "proposal_name": proposal_name,
             "dataset": dataset_name,
             "detector": detector,
@@ -1732,20 +1735,20 @@ def _neuralsignal_model_memory_record(
             "figure_artifact_ids": [item.get("artifact_id", "") for item in _as_list(model.get("stored_figure_artifacts")) if isinstance(item, dict)],
             **{k: float(v) for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
         },
-        "tags": ["neuralsignal", "model", dataset_name or "dataset_unknown", detector or "detector_unknown"],
+        "tags": ["trading_researcher", "model", dataset_name or "dataset_unknown", detector or "detector_unknown"],
         "created_at": _now_iso(),
         "blob_refs": (
             _memory_blob_refs_from_artifact("model_artifact", model)
             + _blob_refs_from_artifact_records(_as_list(model.get("stored_figure_artifacts")))
         ),
-        "entities": _neuralsignal_entities(
+        "entities": _trading_researcher_entities(
             proposal_name=proposal_name,
             dataset_name=dataset_name,
             detector=detector,
             class_name="",
             model_name=model_name,
         ),
-        "relations": _neuralsignal_relations(
+        "relations": _trading_researcher_relations(
             experiment_id="",
             proposal_name=proposal_name,
             dataset_name=dataset_name,
@@ -1866,7 +1869,7 @@ def _register_dataset_artifact(profile: dict[str, Any], artifact: dict[str, Any]
         artifact["stored_artifact_bucket"] = record.get("storage_bucket", "")
         artifact["stored_artifact_endpoint_url"] = record.get("storage_endpoint_url", "")
     except Exception as exc:
-        log.warning("NeuralSignalPlugin | dataset artifact storage failed for %s: %s", artifact.get("proposal_name"), exc)
+        log.warning("TradingResearcherPlugin | dataset artifact storage failed for %s: %s", artifact.get("proposal_name"), exc)
         errors.append(f"artifact_store: dataset {artifact.get('proposal_name', 'unknown')} failed: {exc}")
 
 
@@ -1904,7 +1907,7 @@ def _register_model_artifact(
         result["stored_artifact_bucket"] = record.get("storage_bucket", "")
         result["stored_artifact_endpoint_url"] = record.get("storage_endpoint_url", "")
     except Exception as exc:
-        log.warning("NeuralSignalPlugin | model artifact storage failed for %s: %s", result.get("proposal_name"), exc)
+        log.warning("TradingResearcherPlugin | model artifact storage failed for %s: %s", result.get("proposal_name"), exc)
         errors.append(f"artifact_store: model {result.get('proposal_name', 'unknown')} failed: {exc}")
 
 
@@ -1951,7 +1954,7 @@ def _register_model_sidecar_artifacts(
             })
         except Exception as exc:
             log.warning(
-                "NeuralSignalPlugin | model figure artifact storage failed for %s (%s): %s",
+                "TradingResearcherPlugin | model figure artifact storage failed for %s (%s): %s",
                 result.get("proposal_name"),
                 figure_name,
                 exc,
@@ -2018,7 +2021,7 @@ def _log_result_to_mlflow(
             mlflow.set_tags({
                 "experiment_id": experiment_id,
                 "profile": profile.get("name", ""),
-                "source": "neuralsignal_execute_experiment",
+                "source": "trading_researcher_execute_experiment",
                 "proposal_name": proposal_name,
                 **_string_tags(model_config_payload.get("tags")),
             })
@@ -2045,7 +2048,7 @@ def _log_result_to_mlflow(
             _log_mlflow_dataset_artifacts(artifact)
             return run.info.run_id
     except Exception as exc:
-        log.warning("NeuralSignalPlugin | MLflow logging failed for %s: %s", proposal_name, exc)
+        log.warning("TradingResearcherPlugin | MLflow logging failed for %s: %s", proposal_name, exc)
         return ""
 
 
@@ -2111,7 +2114,7 @@ def _log_mlflow_figure_files(figure_paths: dict[str, Any]) -> set[str]:
             mlflow.log_artifact(str(path), artifact_path="figures")
             logged.add(str(name))
         except Exception as exc:
-            log.debug("NeuralSignalPlugin | failed to log figure artifact %s: %s", path, exc)
+            log.debug("TradingResearcherPlugin | failed to log figure artifact %s: %s", path, exc)
     return logged
 
 
@@ -2125,7 +2128,7 @@ def _log_mlflow_dataset_artifacts(artifact: dict[str, Any]) -> None:
     try:
         mlflow.log_artifact(str(path), artifact_path="dataset")
     except Exception as exc:
-        log.debug("NeuralSignalPlugin | failed to log dataset artifact %s: %s", path, exc)
+        log.debug("TradingResearcherPlugin | failed to log dataset artifact %s: %s", path, exc)
 
 
 def _roc_figure(metrics: dict[str, Any], artifacts_payload: dict[str, Any]) -> Any | None:
@@ -2225,7 +2228,7 @@ def _plt() -> Any | None:
 
         return plt
     except Exception as exc:
-        log.debug("NeuralSignalPlugin | matplotlib unavailable for MLflow figures: %s", exc)
+        log.debug("TradingResearcherPlugin | matplotlib unavailable for MLflow figures: %s", exc)
         return None
 
 
@@ -2349,7 +2352,7 @@ def _write_job_status(job: dict[str, Any]) -> None:
 
 def _backend_config(cfg: Any) -> dict[str, Any]:
     return {
-        "backend_type": "neuralsignal_v1",
+        "backend_type": "trading_researcher_v1",
         "mongo_url": getattr(cfg, "mongo_url", ""),
         "mlflow_uri": getattr(cfg, "mlflow_uri", "http://hp.lan:8899/"),
         "mlflow_register_model": False,
@@ -2420,7 +2423,7 @@ def _default_scan_cache_directory(profile: dict[str, Any]) -> Path:
     preferred = Path("F:/temp") if _scan_cache_platform() == "windows" else Path("/tmp")
     if _path_root_exists(preferred.as_posix()):
         return preferred
-    return dev_path("scan_cache", str(profile.get("name") or "neuralsignal")).resolve()
+    return dev_path("scan_cache", str(profile.get("name") or "trading_researcher")).resolve()
 
 
 def _scan_cache_platform() -> str:
@@ -2435,16 +2438,16 @@ def _path_root_exists(path_value: str) -> bool:
     return True
 
 
-def _neuralsignal_workdir(cfg: Any) -> Path:
-    configured = Path(getattr(cfg, "neuralsignal_src_path", "")).resolve()
+def _trading_researcher_workdir(cfg: Any) -> Path:
+    configured = Path(getattr(cfg, "trading_researcher_src_path", "")).resolve()
     if _is_package_dir(configured):
         return configured.parent
     return configured
 
 
 def _pythonpath_entries(cfg: Any) -> list[Path]:
-    configured = Path(getattr(cfg, "neuralsignal_src_path", "")).resolve()
-    workdir = _neuralsignal_workdir(cfg)
+    configured = Path(getattr(cfg, "trading_researcher_src_path", "")).resolve()
+    workdir = _trading_researcher_workdir(cfg)
     researcher_root = _TASK_RUNNER.resolve().parents[2]
 
     entries = [workdir, configured, researcher_root]
@@ -2462,7 +2465,7 @@ def _pythonpath_entries(cfg: Any) -> list[Path]:
 
 
 def _is_package_dir(path: Path) -> bool:
-    return path.name == "neuralsignal" and (path / "__init__.py").exists()
+    return path.name == "trading_researcher" and (path / "__init__.py").exists()
 
 
 def _csv_metadata(file_path: str | os.PathLike[str]) -> dict[str, Any]:
@@ -2528,7 +2531,7 @@ def _json_safe(value: Any) -> Any:
 def _slug(value: str) -> str:
     slug = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in value.strip())
     slug = "_".join(part for part in slug.split("_") if part)
-    return slug or "neuralsignal_experiment"
+    return slug or "trading_researcher_experiment"
 
 
 def _csv_filename(value: str) -> str:
@@ -2542,7 +2545,7 @@ def _model_task_workdir(artifact: dict[str, Any], cfg: Any) -> Path:
         parent = Path(str(dataset_path)).resolve().parent
         if parent.exists():
             return parent
-    return _neuralsignal_workdir(cfg)
+    return _trading_researcher_workdir(cfg)
 
 
 def _first(items: list[Any]) -> Any:

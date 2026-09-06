@@ -1,8 +1,8 @@
 """Dev harness for manually running individual pipeline steps.
 
 Usage:
-    uv run python run_node.py research --profile neuralsignal --direction "sparse autoencoders"
-    uv run python run_node.py implement --profile neuralsignal --state-file <dev_root>/state/after_plan.json
+    uv run python run_node.py research --profile trading_researcher --direction "sparse autoencoders"
+    uv run python run_node.py implement --profile trading_researcher --state-file <dev_root>/state/after_plan.json
     uv run python run_node.py --list
     uv run python run_node.py           # interactive mode
 """
@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("step", nargs="?", choices=list(STEP_REGISTRY),
                         metavar="step", help=f"Step to run. Choices: {', '.join(STEP_REGISTRY)}")
     parser.add_argument("--profile", metavar="NAME", default=None,
-                        help="Research profile name (e.g. 'neuralsignal').")
+                        help="Research profile name (e.g. 'trading_researcher').")
     parser.add_argument("--state-file", metavar="PATH",
                         help="JSON file to load as initial state.")
     parser.add_argument("--direction", metavar="TEXT",
@@ -68,8 +68,8 @@ def _load_profile(profile_name: str | None, state: dict) -> dict:
 def _add_plugin_to_path(profile: dict) -> None:
     from pathlib import Path
     cfg = get_config()
-    if profile.get("name") == "neuralsignal":
-        ns_path = Path(cfg.neuralsignal_src_path).resolve()
+    if profile.get("name") == "trading_researcher":
+        ns_path = Path(cfg.trading_researcher_src_path).resolve()
         if ns_path.exists() and str(ns_path) not in sys.path:
             sys.path.insert(0, str(ns_path))
 

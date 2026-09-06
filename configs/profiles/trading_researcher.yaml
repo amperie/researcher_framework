@@ -1,12 +1,12 @@
-# Research profile: neuralsignal LLM internals probing experiments.
+# Research profile: trading_researcher LLM internals probing experiments.
 #
-# This file is the single source of truth for the neuralsignal research domain.
+# This file is the single source of truth for the trading_researcher research domain.
 # It controls: pipeline steps, LLM models, prompts, datasets, base classes,
 # evaluation metrics, experiment adapter, and storage targets.
 
-name: neuralsignal
+name: trading_researcher
 description: >
-  Research and experiment automation for neuralsignal LLM internals probing.
+  Research and experiment automation for trading_researcher LLM internals probing.
   Generates FeatureSetBase subclasses that extract activation-based features
   from LLM scan snapshots and trains XGBoost detectors (e.g. hallucination).
 
@@ -44,22 +44,22 @@ next_steps:
 memory:
   objects:
     - object_type: dataset
-      kind: neuralsignal_dataset
+      kind: trading_researcher_dataset
       reusable: true
       fingerprint_metadata_key: dataset_config_fingerprint
       status_metadata_key: dataset_status
       ready_statuses: [ready]
       required_blob_names: [dataset_artifact]
     - object_type: featureset
-      kind: neuralsignal_featureset
+      kind: trading_researcher_featureset
       reusable: true
       fingerprint_metadata_key: feature_set_fingerprint
     - object_type: model
-      kind: neuralsignal_model
+      kind: trading_researcher_model
       reusable: true
       fingerprint_metadata_key: model_config_fingerprint
     - object_type: experiment_result
-      kind: neuralsignal_experiment
+      kind: trading_researcher_experiment
       reusable: false
 
 knowledge_graph:
@@ -157,9 +157,9 @@ research:
 # The implement step generates code subclassing one of these.
 base_classes:
   - name: FeatureSetBase
-    module: neuralsignal.core.modules.feature_sets.feature_set_base
+    module: trading_researcher.core.modules.feature_sets.feature_set_base
     description: >
-      Base class for all neuralsignal feature extraction strategies.
+      Base class for all trading_researcher feature extraction strategies.
       Subclass this to define a new probing feature set.
     key_interface: |
       class FeatureSetBase:
@@ -208,7 +208,7 @@ base_classes:
               ...
 
 implementation_examples:
-  - path: plugins/neuralsignal/feature_set_example.py
+  - path: plugins/trading_researcher/feature_set_example.py
     purpose: >
       Reference FeatureSetBase implementation showing __init__, get_feature_set_name,
       process_feature_set, self.config, make_column_name, layer filtering, and
@@ -217,11 +217,11 @@ implementation_examples:
 # ── Validate Step ──────────────────────────────────────────────────────────────
 validate:
   auto_run: true
-  contract_test: neuralsignal_feature_set
+  contract_test: trading_researcher_feature_set
   llm_generate_tests: false
   max_fix_retries: 1
   test_runner: "uv run pytest"
-  test_output_dir: dev/experiments/neuralsignal/tests
+  test_output_dir: dev/experiments/trading_researcher/tests
 
 # ── Datasets ──────────────────────────────────────────────────────────────────
 datasets:
@@ -273,7 +273,7 @@ datasets:
       attn: [.q, .k, .v, .o, SelfAttention, attention, attn]
 
 # ── Experiment Adapter ────────────────────────────────────────────────────────
-experiment_adapter: core.plugins.neuralsignal.adapter
+experiment_adapter: core.plugins.trading_researcher.adapter
 
 # ── Evaluation Metrics ────────────────────────────────────────────────────────
 evaluation:
@@ -288,14 +288,14 @@ evaluation:
 
 # ── Results Storage ───────────────────────────────────────────────────────────
 storage:
-  mlflow_experiment: neuralsignal_agent_experiments
+  mlflow_experiment: trading_researcher_agent_experiments
   mongodb_results_db: researcher
-  mongodb_results_collection: neuralsignal_experiments
+  mongodb_results_collection: trading_researcher_experiments
   chroma_collection: agent_experiments
   memory_mongodb_db: researcher
-  memory_mongodb_collection: neuralsignal_memory_records
+  memory_mongodb_collection: trading_researcher_memory_records
   artifacts_mongodb_db: researcher
-  artifacts_collection: neuralsignal_artifacts
+  artifacts_collection: trading_researcher_artifacts
   memory_neo4j_database: neo4j
 
 # ── Prompts ────────────────────────────────────────────────────────────────────
@@ -428,10 +428,10 @@ prompts:
       Implement the Python class described in the implementation plan.
 
       Requirements:
-      - Subclass FeatureSetBase from neuralsignal.core.modules.feature_sets.feature_set_base
-      - Import FeatureSetBase from neuralsignal.core.modules.feature_sets.feature_set_base
+      - Subclass FeatureSetBase from trading_researcher.core.modules.feature_sets.feature_set_base
+      - Import FeatureSetBase from trading_researcher.core.modules.feature_sets.feature_set_base
       - Do NOT define a local FeatureSetBase class
-      - Do NOT create fake neuralsignal modules or mutate sys.modules
+      - Do NOT create fake trading_researcher modules or mutate sys.modules
       - Do NOT include offline package stubs; validation provides any needed stubs outside the implementation
       - Implement __init__(self, config: dict), get_feature_set_name(self), and process_feature_set(self, scan: dict)
       - __init__ should call super().__init__(config) and set up anything reused while processing scans
@@ -514,7 +514,7 @@ prompts:
 
   evaluate:
     system: |
-      Analyze these neuralsignal experiment results. For each proposal:
+      Analyze these trading_researcher experiment results. For each proposal:
 
       1. Interpret the test_auc score:
          - >= 0.75: Strong signal — the feature captures meaningful hallucination-related patterns

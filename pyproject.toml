@@ -1,7 +1,7 @@
 [project]
-name = "neuralsignalresearcher"
+name = "trading_researcher"
 version = "0.1.0"
-description = "Multi-agent LangGraph orchestrator for NeuralSignal research automation"
+description = "Multi-agent LangGraph orchestrator for TradingResearcher research automation"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -31,8 +31,8 @@ dev = [
     "mongomock>=4.3.0",
     "pytest>=9.0.3",
 ]
-# neuralsignal is not installed as a package dep — its multi-package flat layout
-# prevents editable install. The experiment runner injects NEURALSIGNAL_SRC_PATH
+# trading_researcher is not installed as a package dep — its multi-package flat layout
+# prevents editable install. The experiment runner injects TRADING_RESEARCHER_SRC_PATH
 # into PYTHONPATH when launching generated scripts.
 
 [tool.pytest.ini_options]

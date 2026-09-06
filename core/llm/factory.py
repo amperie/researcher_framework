@@ -23,6 +23,27 @@ _TOKEN_TOTALS: dict[str, int] = {
     "completion_tokens": 0,
     "total_tokens": 0,
 }
+_TOKEN_EVENTS: list[dict[str, Any]] = []
+
+
+def reset_usage() -> None:
+    _TOKEN_EVENTS.clear()
+    for key in _TOKEN_TOTALS:
+        _TOKEN_TOTALS[key] = 0
+
+
+def get_usage_report() -> dict[str, Any]:
+    providers = sorted({str(item.get("provider") or "") for item in _TOKEN_EVENTS if item.get("provider")})
+    models = sorted({str(item.get("model") or "") for item in _TOKEN_EVENTS if item.get("model")})
+    return {
+        "provider": providers[0] if len(providers) == 1 else None,
+        "model": models[0] if len(models) == 1 else None,
+        "promptTokens": _TOKEN_TOTALS["prompt_tokens"],
+        "completionTokens": _TOKEN_TOTALS["completion_tokens"],
+        "totalTokens": _TOKEN_TOTALS["total_tokens"],
+        "calls": len(_TOKEN_EVENTS),
+        "steps": list(_TOKEN_EVENTS),
+    }
 
 
 @dataclass
@@ -171,6 +192,16 @@ def _log_usage(*, step_name: str, provider: str, model_name: str, response: Any)
     _TOKEN_TOTALS["prompt_tokens"] += prompt_tokens
     _TOKEN_TOTALS["completion_tokens"] += completion_tokens
     _TOKEN_TOTALS["total_tokens"] += total_tokens
+    _TOKEN_EVENTS.append(
+        {
+            "step": step_name,
+            "provider": provider,
+            "model": model_name,
+            "promptTokens": prompt_tokens,
+            "completionTokens": completion_tokens,
+            "totalTokens": total_tokens,
+        }
+    )
 
     log.info(
         "llm usage | step=%r provider=%r model=%r prompt_tokens=%d completion_tokens=%d total_tokens=%d cumulative_total_tokens=%d",

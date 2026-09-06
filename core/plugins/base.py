@@ -101,7 +101,7 @@ class ResearchAdapter(Protocol):
         and decides how to map proposals to artifacts.
 
         Typical responsibilities:
-        - NeuralSignal: load generated feature classes, create feature datasets,
+        - TradingResearcher: load generated feature classes, create feature datasets,
           cache CSV paths, and attach lightweight dataset metadata.
         - Trading: build backtest configs, resolve universes/date ranges, prepare
           parameter grids, or cache market data bundles.
@@ -191,7 +191,7 @@ class ResearchAdapter(Protocol):
         storage, retrieval, or prompt context.
 
         Examples:
-        - NeuralSignal: best proposal by AUC, feature importance highlights, and
+        - TradingResearcher: best proposal by AUC, feature importance highlights, and
           dataset sizes.
         - Trading: best strategy by Sharpe, drawdown/turnover summary, benchmark
           comparison, and risk warnings.

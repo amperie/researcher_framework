@@ -1,0 +1,159 @@
+name: trading_platform_components
+description: >
+  Post-approval Quant Crucible platform profile. It takes an approved trading
+  idea, plans component code, implements it, and validates generated source.
+  It does not prepare, execute, evaluate, store, or loop experiments.
+
+pipeline:
+  steps:
+    - propose_experiments
+    - plan_implementation
+    - implement
+    - validate
+
+llm:
+  default_model: claude-haiku-4-5
+  default_max_output_tokens: 2500
+  step_overrides:
+    propose_experiments: claude-haiku-4-5
+    plan_implementation: claude-haiku-4-5
+    implement:
+      model: claude-haiku-4-5
+      max_output_tokens: 8000
+    validate:
+      model: claude-haiku-4-5
+      max_output_tokens: 5000
+
+platform:
+  package: trading
+  source_path: ../trading_guy
+
+base_classes:
+  - name: Algorithm
+    module: trading.core.algorithm
+    description: >
+      Base class for generated trading algorithms. Implement on_data_logic()
+      and emit MarketSignal objects from the current tick plus rolling history.
+    key_interface: |
+      class Algorithm:
+          crucible_metadata = {
+              "schema_version": 1,
+              "role": "algorithm",
+              "description": "",
+              "tunables": {},
+              "fixed_parameters": [],
+              "required_symbols": [],
+              "required_timeframes": [],
+              "required_fields": ["open", "high", "low", "close", "volume"],
+              "warmup_bars": None,
+              "signal_contract": {"emits": ["BUY", "SELL"], "strength_range": [0, 100], "metadata_fields": []},
+              "statefulness": {"supports_reconfigure": True, "preserves_history_on_reconfigure": True},
+              "dependencies": [],
+          }
+          def __init__(self, cfg: dict | None = None, history_length: int = 0): ...
+          def on_data_logic(self, data): ...
+
+data_sources:
+  - name: platform_ohlcv
+    description: "OHLCV data accepted by Quant Crucible datasets"
+    path: data/SPY_5min.csv
+    fields:
+      guaranteed: [timestamp, symbol, open, high, low, close, volume]
+      optional: [trade_count, vwap, exchange]
+
+risk_constraints:
+  no_lookahead: true
+  max_gross_exposure: 1.0
+  market_orders_only: true
+  require_history_warmup: true
+
+execution:
+  defaults:
+    mode: component-generation
+    symbol: SPY
+    symbols: [SPY]
+    history_length: 200
+    timeframe: Minute
+    start_date: "2023-01-01"
+    end_date: "2025-12-31"
+  mass_test:
+    max_variants_per_proposal: 1
+
+implementation_examples:
+  - path: ../trading_guy/trading/algorithms/test_algorithm.py
+    purpose: Minimal Algorithm subclass shape and MarketSignal return contract.
+  - path: ../trading_guy/trading/algorithms/macd_rsi_algorithm.py
+    purpose: Real history-driven algorithm using self.price_history and warmup-aware logic.
+  - path: ../trading_guy/trading/core/algorithm.py
+    purpose: Canonical base-class contract for warmup handling, history management, and subclass expectations.
+
+validate:
+  auto_run: true
+  max_fix_retries: 1
+  test_runner: "uv run pytest"
+  test_output_dir: dev/experiments/trading_platform_components/tests
+  contract_test: trading_algorithm
+  llm_generate_tests: false
+
+experiment_adapter: core.plugins.trading.adapter
+
+storage:
+  mlflow_experiment: trading_agent_experiments
+  mongodb_results_db: trading_researcher
+  mongodb_results_collection: trading_platform_components
+  chroma_collection: trading_agent_experiments
+  memory_mongodb_db: trading_researcher
+  memory_mongodb_collection: trading_memory_records
+  artifacts_mongodb_db: trading_researcher
+  artifacts_collection: trading_artifacts
+  memory_neo4j_database: neo4j
+
+prompts:
+  propose_experiments:
+    system: |
+      Convert the approved idea into an algorithm-generation proposal. This is
+      not a backtest request.
+
+      Include name, description, mode "component-generation",
+      optimization_target "algorithm", symbol, symbols, timeframe,
+      history_length, hyperparameters, hpo with algorithm_param_keys and
+      search_space, benchmark, and success_criterion describing later smoke
+      validation. Return a JSON array.
+
+  plan_implementation:
+    system: |
+      For each approved proposal, write a detailed implementation plan. Do not
+      write code. Require an Algorithm subclass, cfg-driven symbols,
+      self.price_history or self.price_data_history usage, no future data,
+      no portfolio/order/cash/position logic, class-level crucible_metadata,
+      and same-named public instance attributes for tunable cfg leaves.
+      Return a JSON array of plans.
+
+  implement:
+    system: |
+      Implement the Python class described in the plan.
+
+      Requirements:
+      - Subclass Algorithm from trading.core.algorithm
+      - Implement on_data_logic(self, data: list[PriceData]) -> list[MarketSignal]
+      - Import only PriceData, MarketSignal, and SignalType from trading.core.classes unless the plan explicitly requires another known class
+      - Use only current and historical bars
+      - Return deterministic BUY or SELL MarketSignal objects only
+      - Do not emit EXIT signals
+      - Do not implement portfolio, order, cash, position, stop-loss, or profit-taking behavior
+      - Define literal class-level crucible_metadata with schema_version 1, role "algorithm", dict tunables, list fixed_parameters, required symbols/timeframes/fields, signal_contract, statefulness, and dependencies
+      - Always implement __init__(self, cfg: dict | None = None, history_length: int = 0) and call super().__init__(cfg=cfg, history_length=history_length)
+      - Cache every tunable cfg leaf on a same-named public instance attribute
+
+      Return only Python source. No markdown fences.
+
+  validate:
+    system: |
+      Generate pytest unit tests for this Algorithm subclass. Return only
+      parseable Python test code.
+
+    fix_system: |
+      The following tests failed for the Algorithm implementation. Fix the
+      implementation, not the tests. Prioritize no-lookahead behavior,
+      deterministic outputs, correct MarketSignal usage, crucible_metadata shape,
+      and robust warmup handling. Return only parseable Python source.

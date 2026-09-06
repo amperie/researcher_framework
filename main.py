@@ -3,7 +3,7 @@
 Usage:
     uv run python main.py help
     uv run python main.py --list-profiles
-    uv run python main.py --profile neuralsignal --direction "attention head specialization"
+    uv run python main.py --profile trading_researcher --direction "attention head specialization"
     uv run python main.py --mode brainstorm --profile trading --direction "SPY regime filters"
 """
 from __future__ import annotations
@@ -32,23 +32,23 @@ _CLI_EPILOG = """Examples:
   Help and discovery:
     uv run python main.py help
     uv run python main.py --list-profiles
-    uv run python main.py --profile neuralsignal --list-nodes
+    uv run python main.py --profile trading_researcher --list-nodes
 
   Pipeline from a direction:
-    uv run python main.py --profile neuralsignal --direction "attention head specialization"
+    uv run python main.py --profile trading_researcher --direction "attention head specialization"
     uv run python main.py --profile trading --direction "SPY regime filters" --run-next-steps-once
-    uv run python main.py --profile neuralsignal --direction "residual entropy features" --loop
+    uv run python main.py --profile trading_researcher --direction "residual entropy features" --loop
 
   Pipeline from saved work:
-    uv run python main.py --profile neuralsignal --next-step "next_step:1"
-    uv run python main.py --profile neuralsignal --source-experiment "exp-123" --proposal-seed "proposal_seed:1"
-    uv run python main.py --profile neuralsignal --source-experiment "exp-123" --handoff "run_handoff:1"
-    uv run python main.py --profile neuralsignal --resume-from "experiment_result:123" --start-node implement
-    uv run python main.py --profile neuralsignal --start-node check_experiment_jobs --resume-snapshot
-    uv run python main.py --profile neuralsignal --start-node submit_experiment_jobs --resume-snapshot --force-dataset-refresh
+    uv run python main.py --profile trading_researcher --next-step "next_step:1"
+    uv run python main.py --profile trading_researcher --source-experiment "exp-123" --proposal-seed "proposal_seed:1"
+    uv run python main.py --profile trading_researcher --source-experiment "exp-123" --handoff "run_handoff:1"
+    uv run python main.py --profile trading_researcher --resume-from "experiment_result:123" --start-node implement
+    uv run python main.py --profile trading_researcher --start-node check_experiment_jobs --resume-snapshot
+    uv run python main.py --profile trading_researcher --start-node submit_experiment_jobs --resume-snapshot --force-dataset-refresh
 
   Brainstorm mode:
-    uv run python main.py --mode brainstorm --profile neuralsignal --direction "new detector direction"
+    uv run python main.py --mode brainstorm --profile trading_researcher --direction "new detector direction"
     uv run python main.py --mode brainstorm --profile trading --config configs/brainstorm/default.trading.brainstorm.yaml
     uv run python main.py --mode brainstorm --profile trading --resume-brainstorm "<session-id>"
     uv run python main.py --mode brainstorm --profile trading --source-experiment "exp-123"
@@ -64,7 +64,7 @@ Notes:
   Omit --direction in pipeline mode to be prompted.
   --config is an alias for --brainstorm-config.
   Use --resume-snapshot with no value to load dev/state/<profile>/after_<previous-node>.json.
-  Use --force-dataset-refresh only for NeuralSignal dataset regeneration.
+  Use --force-dataset-refresh only for TradingResearcher dataset regeneration.
 
 Interactive brainstorm commands after pause:
   help, continue, summary, research, plan, feedback <text>, approve_plan, execute, exit
@@ -205,7 +205,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--profile", type=str, default=None,
-                        help="Profile name from configs/profiles, e.g. neuralsignal or trading. If omitted, the CLI prompts when multiple profiles exist.")
+                        help="Profile name from configs/profiles, e.g. trading_researcher or trading. If omitted, the CLI prompts when multiple profiles exist.")
     parser.add_argument(
         "--mode",
         type=str,
@@ -278,7 +278,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force-dataset-refresh",
         action="store_true",
         default=False,
-        help="NeuralSignal only: regenerate datasets instead of reusing memory records or local CSVs.",
+        help="TradingResearcher only: regenerate datasets instead of reusing memory records or local CSVs.",
     )
     parser.add_argument("--campaign-id", type=str, default=None, help="Campaign id to attach to stored results.")
     parser.add_argument("--campaign-title", type=str, default=None, help="Human-readable campaign title.")
@@ -334,13 +334,13 @@ def _add_plugin_to_path(profile: dict) -> None:
     from configs.config import get_config
     cfg = get_config()
 
-    if profile.get("name") == "neuralsignal":
-        ns_path = Path(cfg.neuralsignal_src_path).resolve()
+    if profile.get("name") == "trading_researcher":
+        ns_path = Path(cfg.trading_researcher_src_path).resolve()
         if ns_path.exists() and str(ns_path) not in sys.path:
             sys.path.insert(0, str(ns_path))
-            log.debug("Added neuralsignal to sys.path: %s", ns_path)
+            log.debug("Added trading_researcher to sys.path: %s", ns_path)
         elif not ns_path.exists():
-            log.warning("neuralsignal_src_path not found: %s", ns_path)
+            log.warning("trading_researcher_src_path not found: %s", ns_path)
 
 
 def build_initial_state(

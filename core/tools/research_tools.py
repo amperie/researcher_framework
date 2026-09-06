@@ -30,7 +30,7 @@ from core.utils.utils import extract_json_array
 log = get_logger(__name__)
 _WEB_CACHE_DIR = dev_path("web_research")
 _WEB_TIMEOUT = 20
-_USER_AGENT = "NeuralSignalResearcher/1.0"
+_USER_AGENT = "trading_researcher/1.0"
 _ARXIV_QUERY_MAX_TERMS = 8
 _ARXIV_QUERY_MAX_CHARS = 96
 _ARXIV_STOPWORDS = {

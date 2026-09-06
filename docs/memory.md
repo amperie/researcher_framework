@@ -32,13 +32,13 @@ structure for a later distillation layer to consume.
 ### Canonical record
 
 The central type is `MemoryRecord` in
-[`core/memory/models.py`](/E:/Programming/NeuralSignalResearcher/core/memory/models.py:38).
+[`core/memory/models.py`](/E:/Programming/trading_researcher/core/memory/models.py:38).
 
 It contains:
 
 - `record_id`: unique persisted record id
-- `domain`: profile/domain name such as `neuralsignal` or `trading`
-- `kind`: retrieval/use-case class such as `neuralsignal_dataset` or
+- `domain`: profile/domain name such as `trading_researcher` or `trading`
+- `kind`: retrieval/use-case class such as `trading_researcher_dataset` or
   `backtest_result`
 - `object_type`: canonical object class such as `dataset`, `featureset`,
   `model`, `experiment_result`, `algorithm`, `portfolio`, `backtest`
@@ -69,7 +69,7 @@ schemas into the graph:
 memory:
   objects:
     - object_type: dataset
-      kind: neuralsignal_dataset
+      kind: trading_researcher_dataset
       reusable: true
       fingerprint_metadata_key: dataset_config_fingerprint
       status_metadata_key: dataset_status
@@ -84,7 +84,7 @@ still owns meaning: what a dataset, model, strategy, or backtest contains.
 ### Persistence service
 
 `MemoryService` in
-[`core/memory/service.py`](/E:/Programming/NeuralSignalResearcher/core/memory/service.py:18)
+[`core/memory/service.py`](/E:/Programming/trading_researcher/core/memory/service.py:18)
 coordinates:
 
 - `document_store.upsert(record)`
@@ -164,7 +164,7 @@ count = service.repair_projections({"domain": profile["name"]})
 ### Backends
 
 Current backends are defined in
-[`core/memory/backends.py`](/E:/Programming/NeuralSignalResearcher/core/memory/backends.py):
+[`core/memory/backends.py`](/E:/Programming/trading_researcher/core/memory/backends.py):
 
 - `MongoMemoryDocumentStore`
   - source of truth for full records
@@ -182,7 +182,7 @@ Current backends are defined in
 
 The main write point is `store_results`:
 
-- [`core/graph/nodes/store_results.py`](/E:/Programming/NeuralSignalResearcher/core/graph/nodes/store_results.py:21)
+- [`core/graph/nodes/store_results.py`](/E:/Programming/trading_researcher/core/graph/nodes/store_results.py:21)
 
 That node:
 
@@ -196,7 +196,7 @@ Memory record construction is adapter-owned when available:
 
 Fallback generic builders live in:
 
-- [`core/memory/defaults.py`](/E:/Programming/NeuralSignalResearcher/core/memory/defaults.py:10)
+- [`core/memory/defaults.py`](/E:/Programming/trading_researcher/core/memory/defaults.py:10)
 
 Nodes can also emit individual typed memory objects through:
 
@@ -210,7 +210,7 @@ dataset, or submitted job handle.
 
 The main read point is the `research` step through:
 
-- [`core/tools/research_tools.py`](/E:/Programming/NeuralSignalResearcher/core/tools/research_tools.py)
+- [`core/tools/research_tools.py`](/E:/Programming/trading_researcher/core/tools/research_tools.py)
 
 `collect_memory(...)` does:
 
@@ -226,7 +226,7 @@ of raw backend records.
 
 Adapters own profile-specific memory semantics. The shared contract lives in:
 
-- [`core/plugins/base.py`](/E:/Programming/NeuralSignalResearcher/core/plugins/base.py:205)
+- [`core/plugins/base.py`](/E:/Programming/trading_researcher/core/plugins/base.py:205)
 
 Three hooks matter:
 
@@ -247,7 +247,7 @@ The adapter should:
 Use this when retrieved memory should appear differently in prompts than the
 generic fallback artifact shape.
 
-For example, the `neuralsignal` adapter adds dataset, detector, feature set
+For example, the `trading_researcher` adapter adds dataset, detector, feature set
 class, and stored artifact URI into the retrieved summary.
 
 ### `memory_object_specs(profile)`
@@ -278,9 +278,9 @@ Instead:
 
 Examples:
 
-### NeuralSignal
+### TradingResearcher
 
-The NeuralSignal adapter now emits multiple object types from a run:
+The TradingResearcher adapter now emits multiple object types from a run:
 
 - `object_type="dataset"`
 - `object_type="featureset"`
@@ -289,10 +289,10 @@ The NeuralSignal adapter now emits multiple object types from a run:
 
 Typical `kind` values:
 
-- `neuralsignal_dataset`
-- `neuralsignal_featureset`
-- `neuralsignal_model`
-- `neuralsignal_experiment`
+- `trading_researcher_dataset`
+- `trading_researcher_featureset`
+- `trading_researcher_model`
+- `trading_researcher_experiment`
 
 ### Trading
 
@@ -318,7 +318,7 @@ configuration fingerprint.
 
 Fingerprint helpers live in:
 
-- [`core/memory/fingerprints.py`](/E:/Programming/NeuralSignalResearcher/core/memory/fingerprints.py)
+- [`core/memory/fingerprints.py`](/E:/Programming/trading_researcher/core/memory/fingerprints.py)
 
 The canonical helper is:
 
@@ -335,7 +335,7 @@ It:
 
 ### Dataset fingerprints
 
-For `neuralsignal`, dataset reuse is driven by a canonical dataset memory spec.
+For `trading_researcher`, dataset reuse is driven by a canonical dataset memory spec.
 It includes only fields that actually define dataset identity, for example:
 
 - dataset/application/sub-application
@@ -372,15 +372,15 @@ If a dataset depends on generated code, then config equality alone is not
 enough. The same dataset config with different feature set source should not be
 treated as the same dataset.
 
-For that reason, the NeuralSignal adapter includes:
+For that reason, the TradingResearcher adapter includes:
 
 - `feature_set_source_hash`
 
 inside the dataset memory spec.
 
-## Current NeuralSignal Reuse Flow
+## Current TradingResearcher Reuse Flow
 
-The current `neuralsignal` adapter performs exact dataset reuse in
+The current `trading_researcher` adapter performs exact dataset reuse in
 `prepare_experiment(...)`.
 
 High-level flow:
@@ -459,7 +459,7 @@ Rule of thumb:
 `entities` and `relations` are the right place to encode reusable object graph
 structure.
 
-Example NeuralSignal entities:
+Example TradingResearcher entities:
 
 - `proposal:activation_sparsity`
 - `dataset:HaluBench`
@@ -527,8 +527,8 @@ itself; those details are recorded by the core layer.
 ```python
 {
   "record_id": "dataset:<fingerprint>",
-  "domain": "neuralsignal",
-  "kind": "neuralsignal_dataset",
+  "domain": "trading_researcher",
+  "kind": "trading_researcher_dataset",
   "object_type": "dataset",
   "object_key": "<fingerprint>",
   "object_role": "artifact",
@@ -555,8 +555,8 @@ itself; those details are recorded by the core layer.
 ```python
 {
   "record_id": "exp-001",
-  "domain": "neuralsignal",
-  "kind": "neuralsignal_experiment",
+  "domain": "trading_researcher",
+  "kind": "trading_researcher_experiment",
   "object_type": "experiment_result",
   "object_key": "exp-001",
   "object_role": "result",
@@ -601,7 +601,7 @@ The current implementation now supports:
 - node-level typed memory emission API
 - semantic retrieval
 - typed structured retrieval through `MemoryService.query(...)`
-- exact dataset reuse for NeuralSignal
+- exact dataset reuse for TradingResearcher
 - exact reuse helper with validity and blob checks
 - lineage and validity fields on canonical records
 - projection repair from document-store source of truth

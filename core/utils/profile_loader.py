@@ -27,7 +27,7 @@ def load_profile(name: str) -> dict:
     Looks for ``configs/profiles/<name>.yaml``.
 
     Args:
-        name: Profile name (e.g. 'neuralsignal', 'trading').
+        name: Profile name (e.g. 'trading_researcher', 'trading').
 
     Returns:
         Parsed profile dict.

@@ -87,7 +87,7 @@ def test_parse_args_accepts_config_alias():
 
 
 def test_parse_args_accepts_resume_snapshot_without_value():
-    args = main.parse_args(["--profile", "neuralsignal", "--start-node", "check_experiment_jobs", "--resume-snapshot"])
+    args = main.parse_args(["--profile", "trading_researcher", "--start-node", "check_experiment_jobs", "--resume-snapshot"])
 
     assert args.resume_snapshot == "auto"
 
@@ -111,14 +111,14 @@ def test_load_resume_snapshot_accepts_explicit_path(tmp_path):
     snapshot = tmp_path / "state.json"
     snapshot.write_text(json.dumps({"research_direction": "d", "proposals": [{"name": "p"}]}), encoding="utf-8")
 
-    state = main._load_resume_snapshot("neuralsignal", {"pipeline": {"steps": ["research"]}}, "research", str(snapshot))
+    state = main._load_resume_snapshot("trading_researcher", {"pipeline": {"steps": ["research"]}}, "research", str(snapshot))
 
     assert state["proposals"][0]["name"] == "p"
 
 
 def test_build_initial_state_preserves_resume_fields():
     state = main.build_initial_state(
-        "neuralsignal",
+        "trading_researcher",
         "direction",
         {
             "research_direction": "direction",
@@ -183,7 +183,7 @@ def test_default_brainstorm_config_index_prefers_profile_named_yaml():
     index = main._default_brainstorm_config_index(
         profile_name="trading",
         config_paths=[
-            "configs/brainstorm/default.neuralsignal.brainstorm.yaml",
+            "configs/brainstorm/default.trading_researcher.brainstorm.yaml",
             "configs/brainstorm/default.trading.brainstorm.yaml",
         ],
     )

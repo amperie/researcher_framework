@@ -36,7 +36,7 @@ from core.utils.logger import get_logger, setup_plugin_file_logging, setup_loggi
 TERMINAL_STATUSES = {"succeeded", "failed", "timed_out", "cancelled"}
 log = get_logger("core.plugins.job_runner")
 _JOB_STORE_ACTOR_NAME = "researcher_framework_job_store"
-# NeuralSignalResearcher project root — always use this as the worker cwd so that
+# trading_researcher project root — always use this as the worker cwd so that
 # configs/config.yaml is resolvable and the framework's Python packages are importable.
 _NSR_ROOT = Path(__file__).resolve().parents[2]
 _LOG_CONFIG_PATH = str((_NSR_ROOT / "configs" / "config.yaml").resolve())
@@ -166,7 +166,7 @@ def run_job(job_dir: str) -> None:
         setup_plugin_file_logging(
             plugin_name,
             logger_prefixes=[
-                "core.plugins.neuralsignal",
+                "core.plugins.trading_researcher",
                 "core.plugins.task_runner",
                 "core.plugins.job_runner",
             ],

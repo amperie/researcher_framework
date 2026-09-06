@@ -4,11 +4,11 @@ This project supports a shared YAML catalog for reusable research-tool definitio
 
 ## Catalog Files
 
-Catalog files live under [`configs/research_tools/`](/E:/Programming/NeuralSignalResearcher/configs/research_tools/).
+Catalog files live under [`configs/research_tools/`](/E:/Programming/trading_researcher/configs/research_tools/).
 
 Current built-in catalog:
 
-- [builtins.tools.yaml](/E:/Programming/NeuralSignalResearcher/configs/research_tools/builtins.tools.yaml:1)
+- [builtins.tools.yaml](/E:/Programming/trading_researcher/configs/research_tools/builtins.tools.yaml:1)
 
 ## Referencing Tools
 
@@ -49,13 +49,13 @@ arXiv top-level archive presets are named `arxiv-<category-prefix>`, for example
 
 ## Current Catalog Reuse
 
-The trading pipeline profile uses refs in [trading.yaml](/E:/Programming/NeuralSignalResearcher/configs/profiles/trading.yaml:64).
+The trading pipeline profile uses refs in [trading.yaml](/E:/Programming/trading_researcher/configs/profiles/trading.yaml:64).
 
-The trading brainstorm config uses refs in [default.trading.brainstorm.yaml](/E:/Programming/NeuralSignalResearcher/configs/brainstorm/default.trading.brainstorm.yaml:79).
+The trading brainstorm config uses refs in [default.trading.brainstorm.yaml](/E:/Programming/trading_researcher/configs/brainstorm/default.trading.brainstorm.yaml:79).
 
 ## Built-in Tool Settings
 
-The actual accepted keys are still defined by the Python collectors in [research_tools.py](/E:/Programming/NeuralSignalResearcher/core/tools/research_tools.py:1). The most useful built-ins are:
+The actual accepted keys are still defined by the Python collectors in [research_tools.py](/E:/Programming/trading_researcher/core/tools/research_tools.py:1). The most useful built-ins are:
 
 - `collect_arxiv`
   Keys: `max_results`, `query`, `categories`, `match_any`

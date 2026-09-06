@@ -1,6 +1,6 @@
 """Prepare experiment artifacts using the active domain adapter.
 
-This node is intentionally generic. For NeuralSignal, the prepared artifact is a
+This node is intentionally generic. For TradingResearcher, the prepared artifact is a
 feature dataset. For trading, it might be a data slice, parameter grid, or cached
 market data bundle.
 """
@@ -85,7 +85,7 @@ def prepare_experiment_node(state: ResearchState, profile: dict) -> dict:
 
     delta: dict = {"experiment_artifacts": artifacts, "errors": errors}
 
-    # Compatibility alias for existing NeuralSignal/debug tooling.
+    # Compatibility alias for existing TradingResearcher/debug tooling.
     datasets = [a for a in artifacts if a.get("artifact_type") == "dataset" or a.get("dataset_id")]
     if datasets:
         delta["datasets"] = datasets

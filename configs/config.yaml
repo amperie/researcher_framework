@@ -44,8 +44,8 @@ artifact_store_root: ${ARTIFACT_STORE_ROOT:dev/artifacts}
 cache_locations:
   uv:
     windows: ${UV_CACHE_DIR_WINDOWS:dev/uv-cache}
-    linux: ${UV_CACHE_DIR_LINUX:/tmp/neuralsignalresearcher/uv-cache}
-    macos: ${UV_CACHE_DIR_MACOS:~/Library/Caches/neuralsignalresearcher/uv-cache}
+    linux: ${UV_CACHE_DIR_LINUX:/tmp/trading_researcher/uv-cache}
+    macos: ${UV_CACHE_DIR_MACOS:~/Library/Caches/trading_researcher/uv-cache}
 
 s3_endpoint_url: ${S3_ENDPOINT_URL:http://hp.lan:9000}
 s3_access_key_id: ${S3_ACCESS_KEY_ID:minioadmin}
@@ -60,13 +60,13 @@ experiment_timeout_seconds: 18000
 validate_timeout_seconds: 120
 experiments_dir: ${EXPERIMENTS_DIR:dev/experiments}
 
-# ── neuralsignal plugin ───────────────────────────────────────────────────────
-neuralsignal_python: ${NEURALSIGNAL_PYTHON:uv run python}
-neuralsignal_src_path: ${NEURALSIGNAL_SRC_PATH:../neuralsignal/neuralsignal}
+# ── trading_researcher plugin ───────────────────────────────────────────────────────
+trading_researcher_python: ${TRADING_RESEARCHER_PYTHON:uv run python}
+trading_researcher_src_path: ${TRADING_RESEARCHER_SRC_PATH:../trading_researcher/trading_researcher}
 trading_python: ${TRADING_PYTHON:uv run python}
 ray_mode: ${RAY_MODE:local}              # local | remote
 ray_address: ${RAY_ADDRESS:auto}         # remote cluster address when ray_mode=remote
-ray_namespace: ${RAY_NAMESPACE:neuralsignalresearcher}
+ray_namespace: ${RAY_NAMESPACE:trading_researcher}
 
 # ── Arxiv ─────────────────────────────────────────────────────────────────────
 max_arxiv_papers: 10

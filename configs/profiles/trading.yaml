@@ -120,6 +120,21 @@ base_classes:
       and emit MarketSignal objects from the current tick plus rolling history.
     key_interface: |
       class Algorithm:
+          crucible_metadata = {
+              "schema_version": 1,
+              "role": "algorithm",
+              "description": "",
+              "tunables": {},
+              "fixed_parameters": [],
+              "required_symbols": [],
+              "required_timeframes": [],
+              "required_fields": ["open", "high", "low", "close", "volume"],
+              "warmup_bars": None,
+              "signal_contract": {"emits": ["BUY", "SELL"], "strength_range": [0, 100], "metadata_fields": []},
+              "statefulness": {"supports_reconfigure": True, "preserves_history_on_reconfigure": True},
+              "dependencies": [],
+          }
+
           def __init__(self, cfg: dict | None = None, history_length: int = 0):
               ...
 
@@ -150,6 +165,19 @@ base_classes:
       orders, broker sync, portfolio value updates, and tick lifecycle.
     key_interface: |
       class Portfolio:
+          crucible_metadata = {
+              "schema_version": 1,
+              "role": "portfolio",
+              "description": "",
+              "tunables": {},
+              "fixed_parameters": [],
+              "signal_requirements": {"accepted_signal_types": ["BUY", "SELL"], "uses_signal_strength": False, "required_signal_metadata": []},
+              "order_contract": {"order_types": ["MARKET", "BRACKET"], "position_sizing": "", "exit_logic": ""},
+              "risk_controls": [],
+              "statefulness": {"supports_reconfigure": True, "preserves_positions_on_reconfigure": True},
+              "dependencies": [],
+          }
+
           def __init__(
               self,
               cfg: dict | None = None,
@@ -437,6 +465,7 @@ prompts:
       - If the algorithm needs a custom warmup threshold, either override the required_warmup_bars property or set self._required_warmup_bars_override in __init__
       - Prefer self.price_data_history[symbol] when OHLCV fields are needed and self.price_history[symbol] when only closes are needed
       - Do not reproduce logic already implemented in Algorithm.on_data() or Portfolio.process_market_signals_for_tick()
+      - Plans must require a class-level crucible_metadata dict for every generated Algorithm and Portfolio subclass. Algorithm metadata must document schema_version, role, description, tunables, fixed_parameters, required_symbols, required_timeframes, required_fields, warmup_bars, signal_contract, statefulness, and dependencies. Portfolio metadata must document schema_version, role, description, tunables, fixed_parameters, signal_requirements, order_contract, risk_controls, statefulness, and dependencies.
       - The algorithm must only emit trading signals. It must not track positions, holding periods, stop-loss execution, profit-taking, or portfolio state.
       - Any tunable config leaf that should change during HPO or walk-forward live reconfiguration must be cached in __init__ on a same-named public instance attribute, for example self.rsi_period <- cfg["rsi_config"]["rsi_period"]
       - Plans should prefer lazy/per-tick recomputation over cached derived state; if derived state must be rebuilt when tunables change, the plan must explicitly call out that a custom reconfigure(new_params) is required and that it must delegate to super().reconfigure(new_params)
@@ -447,6 +476,7 @@ prompts:
       - base_class: "Algorithm"
       - init_fields including config keys and history_length expectations
       - tunable_fields that are sensible to expose to HPO
+      - crucible_metadata_fields explaining tunables, fixed assumptions, data requirements, signal/order contract, statefulness, and dependencies
       - whether a custom reconfigure(new_params) is needed for derived state rebuilds
       - main_method: "on_data_logic"
       - required_warmup_bars if it should exceed history_length
@@ -478,6 +508,8 @@ prompts:
       - Prefer self.price_data_history[symbol] for OHLCV access because self.price_history[symbol] contains closes only
       - Match the local platform constructor pattern:
         __init__(self, cfg: dict | None = None, history_length: int = 0)
+      - Always define a class-level crucible_metadata dict before __init__. For Algorithm subclasses include schema_version, role: "algorithm", description, tunables, fixed_parameters, required_symbols, required_timeframes, required_fields, warmup_bars, signal_contract, statefulness, and dependencies. For any generated Portfolio subclass include schema_version, role: "portfolio", description, tunables, fixed_parameters, signal_requirements, order_contract, risk_controls, statefulness, and dependencies.
+      - In crucible_metadata["tunables"], document every config key that HPO or walk-forward may vary, including dotted nested keys, type, default, valid bounds/options, and recommended search type when known.
       - Always implement __init__(self, cfg: dict | None = None, history_length: int = 0) and call super().__init__(cfg=cfg, history_length=history_length)
       - In __init__, read each tunable config leaf once and store it on a same-named public instance attribute so Algorithm.reconfigure() can auto-sync it later
       - For nested config, preserve the nested cfg shape but mirror the leaf name on the attribute, for example:
@@ -581,3 +613,5 @@ prompts:
 
       Each array item must be:
       - candidate_id: the exact candidate_id from the input
+
+

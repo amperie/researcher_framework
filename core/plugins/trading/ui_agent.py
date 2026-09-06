@@ -14,12 +14,16 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from core.llm.factory import get_usage_report, reset_usage
+
 Progress = Callable[[int, str, dict[str, Any] | None], None]
 
 
 def create_idea_batch(payload: dict[str, Any], progress: Progress | None = None) -> dict[str, Any]:
+    reset_usage()
     direction = _required_text(payload, "direction")
-    max_ideas = max(1, min(8, int(payload.get("maxIdeas") or 4)))
+    profile_name = str(payload.get("profileName") or "trading_platform_ideas")
+    max_ideas = max(1, min(8, int(payload.get("maxIdeas") or 3)))
     constraints = payload.get("constraints") if isinstance(payload.get("constraints"), dict) else {}
     symbols = _symbols(payload, constraints)
     _progress(progress, 10, "Researching direction", {"direction": direction})
@@ -43,17 +47,21 @@ def create_idea_batch(payload: dict[str, Any], progress: Progress | None = None)
         "createdAt": _now(),
         "updatedAt": _now(),
         "provenance": {
-            "profile": "trading",
+            "profile": profile_name,
+            "profileName": profile_name,
             "adapter": "core.plugins.trading.ui_agent",
             "mode": "deterministic-wrapper",
         },
+        "usage": get_usage_report(),
     }
 
 
 def create_component_draft(
     payload: dict[str, Any], progress: Progress | None = None
 ) -> dict[str, Any]:
+    reset_usage()
     direction = _required_text(payload, "direction")
+    profile_name = str(payload.get("profileName") or "trading_platform_components")
     idea = payload.get("idea")
     if not isinstance(idea, dict):
         raise ValueError("idea is required")
@@ -130,10 +138,12 @@ def create_component_draft(
         "createdAt": _now(),
         "updatedAt": _now(),
         "provenance": {
-            "profile": "trading",
+            "profile": profile_name,
+            "profileName": profile_name,
             "adapter": "core.plugins.trading.ui_agent",
             "mode": generation_mode,
         },
+        "usage": get_usage_report(),
     }
 
 

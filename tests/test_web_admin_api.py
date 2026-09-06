@@ -13,7 +13,7 @@ def test_run_handoff_endpoint_returns_payload(monkeypatch):
     )
     client = TestClient(app)
 
-    response = client.post("/api/runs/neuralsignal/exp-1/handoffs", json={"launch_direction": "next"})
+    response = client.post("/api/runs/trading_researcher/exp-1/handoffs", json={"launch_direction": "next"})
 
     assert response.status_code == 200
     assert response.json()["handoff"]["record_id"] == "run_handoff:1"
@@ -26,7 +26,7 @@ def test_proposal_seed_endpoint_returns_payload(monkeypatch):
     )
     client = TestClient(app)
 
-    response = client.post("/api/runs/neuralsignal/exp-1/proposal-seeds", json={"proposal_template": {"name": "p1"}})
+    response = client.post("/api/runs/trading_researcher/exp-1/proposal-seeds", json={"proposal_template": {"name": "p1"}})
 
     assert response.status_code == 200
     assert response.json()["proposal_seed"]["record_id"] == "proposal_seed:1"

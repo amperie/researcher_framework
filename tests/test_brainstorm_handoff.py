@@ -5,7 +5,7 @@ from core.brainstorm.handoff import build_execution_handoff, choose_start_node
 
 def test_brainstorm_handoff_prefers_implement_when_plan_exists():
     state = {
-        "profile_name": "neuralsignal",
+        "profile_name": "trading_researcher",
         "session_id": "s1",
         "current_goal": "test",
         "plan_draft": {
@@ -29,7 +29,7 @@ def test_brainstorm_handoff_prefers_implement_when_plan_exists():
 
 def test_brainstorm_handoff_falls_back_to_plan_implementation():
     state = {
-        "profile_name": "neuralsignal",
+        "profile_name": "trading_researcher",
         "session_id": "s1",
         "current_goal": "test",
         "plan_draft": {
@@ -50,7 +50,7 @@ def test_brainstorm_handoff_falls_back_to_plan_implementation():
 
 def test_brainstorm_handoff_skips_direct_implement_for_placeholder_class_name():
     state = {
-        "profile_name": "neuralsignal",
+        "profile_name": "trading_researcher",
         "session_id": "s1",
         "current_goal": "test",
         "plan_draft": {
@@ -71,7 +71,7 @@ def test_brainstorm_handoff_skips_direct_implement_for_placeholder_class_name():
 
 def test_brainstorm_handoff_skips_direct_implement_for_generated_plan_placeholder():
     state = {
-        "profile_name": "neuralsignal",
+        "profile_name": "trading_researcher",
         "session_id": "s1",
         "current_goal": "test",
         "plan_draft": {
@@ -92,7 +92,7 @@ def test_brainstorm_handoff_skips_direct_implement_for_generated_plan_placeholde
 
 def test_brainstorm_handoff_preserves_imported_lineage():
     state = {
-        "profile_name": "neuralsignal",
+        "profile_name": "trading_researcher",
         "session_id": "s1",
         "current_goal": "test",
         "source_experiment_record_id": "exp-1",

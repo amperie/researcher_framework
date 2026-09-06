@@ -1,4 +1,4 @@
-# NeuralSignalResearcher — Claude Code Guide
+# trading_researcher — Claude Code Guide
 
 ## Project Vision
 
@@ -8,7 +8,7 @@ The system automates the full loop of:
   literature review → ideate → refine → propose experiments → plan → implement → validate →
   create dataset → run experiment → create model → evaluate → store results → propose next steps
 
-It is **not coupled to any specific domain**. The same pipeline code runs neuralsignal
+It is **not coupled to any specific domain**. The same pipeline code runs trading_researcher
 probing experiments today and automated trading strategy research tomorrow — the domain
 is fully described by a **research profile** YAML file. Adding a new research domain
 requires only a new profile and (if needed) a thin plugin adapter.
@@ -26,7 +26,7 @@ requires only a new profile and (if needed) a thin plugin adapter.
    step to skip it entirely. `graph/builder.py` compiles the LangGraph at runtime from
    this list.
 
-3. **Prompts belong in the profile** — a neuralsignal ideation prompt bears no resemblance
+3. **Prompts belong in the profile** — a trading_researcher ideation prompt bears no resemblance
    to a trading strategy ideation prompt. All prompts live under `prompts.<step_name>` in
    the profile YAML. Node code reads via `utils/profile_loader.py::get_prompt(profile, step, key)`.
    No prompt strings in node files.
@@ -34,7 +34,7 @@ requires only a new profile and (if needed) a thin plugin adapter.
 4. **Implementation always subclasses** — the `implement` step generates Python code that
    subclasses a base class declared in `profile['base_classes']`. The base class API is
    injected verbatim into the code-generation prompt. Generated files are cached at
-   `dev/experiments/<profile_name>/implementations/<ClassName>.py`.
+   `dev/experiments/<profile_name>/implementations/<ClassName>.py`. Trading Algorithm and Portfolio subclasses must include class-level `crucible_metadata` documenting tunables, fixed assumptions, data/signal/order contracts, statefulness, and dependencies.
 
 5. **Validate with auto-run + retry** — the `validate` step generates pytest tests, runs
    them via subprocess, and on failure asks the LLM to fix the implementation. Loops up to
@@ -58,7 +58,7 @@ requires only a new profile and (if needed) a thin plugin adapter.
 ## Repository Layout
 
 ```
-NeuralSignalResearcher/
+trading_researcher/
 ├── CLAUDE.md
 ├── README.md
 ├── pyproject.toml
@@ -67,7 +67,7 @@ NeuralSignalResearcher/
 │   ├── config.yaml            # global: LLM provider, backends, logging levels
 │   ├── config.py              # Pydantic BaseSettings (reads .env + env vars)
 │   └── profiles/
-│       ├── neuralsignal.yaml  # full profile: neuralsignal probing experiments
+│       ├── trading_researcher.yaml  # full profile: trading_researcher probing experiments
 │       └── trading.yaml       # (stub) profile: automated trading research
 │
 │   # NO shared prompts.py — every prompt lives inside its profile YAML
@@ -93,9 +93,9 @@ NeuralSignalResearcher/
 |   +-- base.py                # ResearchAdapter Protocol (adapter contract)
 |   +-- loader.py              # load_adapter(profile), resolves get_adapter() or legacy module
 |   +-- task_runner.py         # generic subprocess runner for dotted Python callables
-|   +-- neuralsignal/
-|   |   +-- adapter.py          # ResearchAdapter skeleton for neuralsignal
-|   |   +-- tasks.py           # NeuralSignal task callables for subprocess execution
+|   +-- trading_researcher/
+|   |   +-- adapter.py          # ResearchAdapter skeleton for trading_researcher
+|   |   +-- tasks.py           # TradingResearcher task callables for subprocess execution
 |   |   +-- bridge.py          # compatibility wrapper around task_runner.py
 |   +-- trading/               # trading adapter scaffold
 │
@@ -129,7 +129,7 @@ NeuralSignalResearcher/
 
 ## Research Profile Schema
 
-Full reference: `configs/profiles/neuralsignal.yaml`. Abbreviated schema:
+Full reference: `configs/profiles/trading_researcher.yaml`. Abbreviated schema:
 
 ```yaml
 name: <str>                    # unique identifier, used in file paths and logging
@@ -308,26 +308,26 @@ for each implementation:
 # Help and discovery
 uv run python main.py help
 uv run python main.py --list-profiles
-uv run python main.py --profile neuralsignal --list-nodes
+uv run python main.py --profile trading_researcher --list-nodes
 
 # Pipeline from a fresh direction
-uv run python main.py --profile neuralsignal --direction "attention head specialization"
+uv run python main.py --profile trading_researcher --direction "attention head specialization"
 
 # Pipeline run modes
 uv run python main.py --profile trading --direction "SPY intraday momentum" --run-next-steps-once
-uv run python main.py --profile neuralsignal --direction "residual entropy features" --loop
+uv run python main.py --profile trading_researcher --direction "residual entropy features" --loop
 
 # Seeded and resumed pipeline runs
-uv run python main.py --profile neuralsignal --next-step "next_step:..."
-uv run python main.py --profile neuralsignal --resume-from "experiment_result:..." --start-node implement
-uv run python main.py --profile neuralsignal --start-node check_experiment_jobs --resume-snapshot
+uv run python main.py --profile trading_researcher --next-step "next_step:..."
+uv run python main.py --profile trading_researcher --resume-from "experiment_result:..." --start-node implement
+uv run python main.py --profile trading_researcher --start-node check_experiment_jobs --resume-snapshot
 
 # Brainstorm mode
 uv run python main.py --mode brainstorm --profile trading --direction "SPY regime filters"
 uv run python main.py --mode brainstorm --profile trading --config configs/brainstorm/default.trading.brainstorm.yaml
 
 # Run a single step against a saved state snapshot
-uv run python run_node.py implement --profile neuralsignal \
+uv run python run_node.py implement --profile trading_researcher \
     --state-file dev/state/after_plan_implementation.json
 
 # List available steps
@@ -356,9 +356,9 @@ CHROMA_HOST=hp.lan
 CHROMA_PORT=8000
 MLFLOW_URI=http://hp.lan:8899/
 
-# neuralsignal plugin only:
-NEURALSIGNAL_PYTHON=uv run python
-NEURALSIGNAL_SRC_PATH=../neuralsignal/neuralsignal
+# trading_researcher plugin only:
+TRADING_RESEARCHER_PYTHON=uv run python
+TRADING_RESEARCHER_SRC_PATH=../trading_researcher/trading_researcher
 ```
 
 Everything else (timeouts, paths, logging levels) is edited directly in `configs/config.yaml`.
@@ -367,7 +367,7 @@ Everything else (timeouts, paths, logging levels) is edited directly in `configs
 
 ## Adding a New Research Domain
 
-1. Create `configs/profiles/<domain>.yaml` — copy `neuralsignal.yaml` as a template
+1. Create `configs/profiles/<domain>.yaml` — copy `trading_researcher.yaml` as a template
 2. Fill in every section: `pipeline.steps`, `llm`, `research`, `base_classes`, `datasets`,
    `experiment_adapter`, `evaluation`, `storage`, and all `prompts`
 3. Add `plugins/<domain>/adapter.py` exposing `get_adapter()` that returns a `ResearchAdapter`
@@ -378,15 +378,17 @@ Everything else (timeouts, paths, logging levels) is edited directly in `configs
 
 ---
 
-## neuralsignal Plugin Notes
+## trading_researcher Plugin Notes
 
-- `plugins/neuralsignal/adapter.py` implements the `ResearchAdapter` skeleton; exposes `get_adapter()`
+- `plugins/trading_researcher/adapter.py` implements the `ResearchAdapter` skeleton; exposes `get_adapter()`
 - `prepare_experiment` currently builds dataset manifests and marks them `pending_bridge`; task-runner-backed dataset creation still needs wiring
-- `execute_experiment` currently reports pending task-runner work; future implementation should call `plugins.neuralsignal.tasks.create_s1_model` through `plugins/task_runner.py`
-- Heavy NeuralSignal functions live in `plugins/neuralsignal/tasks.py` and run under `plugins/task_runner.py`
-  using the NeuralSignal Python interpreter. `bridge.py` is only a compatibility wrapper.
+- `execute_experiment` currently reports pending task-runner work; future implementation should call `plugins.trading_researcher.tasks.create_s1_model` through `plugins/task_runner.py`
+- Heavy TradingResearcher functions live in `plugins/trading_researcher/tasks.py` and run under `plugins/task_runner.py`
+  using the TradingResearcher Python interpreter. `bridge.py` is only a compatibility wrapper.
   is handled by the adapter.
 - Layer name patterns from `profile['datasets'][*]['layer_name_patterns']` are injected into
   `fs_cfg` at instantiation time so generated classes never use empty defaults.
 - Scan field constraints from `available_scan_fields` are injected into the `implement` and
   `validate` prompts so the LLM never generates code that accesses unavailable fields.
+
+

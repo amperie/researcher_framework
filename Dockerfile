@@ -10,7 +10,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv
 
-WORKDIR /workspace/NeuralSignalResearcher
+WORKDIR /workspace/trading_researcher
 
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-install-project

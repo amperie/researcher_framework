@@ -1,6 +1,6 @@
-"""Tests for the NeuralSignal research adapter.
+"""Tests for the TradingResearcher research adapter.
 
-The real NeuralSignal runtime is intentionally not imported here. These tests
+The real TradingResearcher runtime is intentionally not imported here. These tests
 mock the subprocess boundary and verify that the adapter builds payloads and
 normalizes task outputs correctly.
 """
@@ -13,17 +13,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from core.plugins.neuralsignal import adapter as ns_adapter
-from core.plugins.neuralsignal.adapter import NeuralSignalPlugin
+from core.plugins.trading_researcher import adapter as ns_adapter
+from core.plugins.trading_researcher.adapter import TradingResearcherPlugin
 
 
 def _cfg(tmp_path):
-    ns_src = tmp_path / "neuralsignal_src"
+    ns_src = tmp_path / "trading_researcher_src"
     ns_src.mkdir()
     return SimpleNamespace(
         dev_root="dev",
-        neuralsignal_src_path=str(ns_src),
-        neuralsignal_python="python",
+        trading_researcher_src_path=str(ns_src),
+        trading_researcher_python="python",
         experiment_timeout_seconds=30,
         mongo_url="mongodb://localhost:27017",
         mlflow_uri="http://localhost:5000",
@@ -44,7 +44,7 @@ def _mock_artifact_store():
             return {
                 "artifact_id": f"stored-figure-{artifact_name or '1'}",
                 "uri": f"file:///stored/{artifact_name or 'figure.png'}",
-                "storage_key": f"neuralsignal/model_figure/{artifact_name or 'figure.png'}",
+                "storage_key": f"trading_researcher/model_figure/{artifact_name or 'figure.png'}",
                 "storage_bucket": "researcher-artifacts",
                 "storage_endpoint_url": "http://hp.lan:9000",
                 "mime_type": "image/png",
@@ -53,14 +53,14 @@ def _mock_artifact_store():
             return {
                 "artifact_id": "stored-implementation-1",
                 "uri": "file:///stored/implementation.py",
-                "storage_key": "neuralsignal/implementation/stored-implementation-1/implementation.py",
+                "storage_key": "trading_researcher/implementation/stored-implementation-1/implementation.py",
                 "storage_bucket": "researcher-artifacts",
                 "storage_endpoint_url": "http://hp.lan:9000",
             }
         return {
             "artifact_id": "stored-dataset-1",
             "uri": "file:///stored/dataset.csv",
-            "storage_key": "neuralsignal/dataset/stored-dataset-1/dataset.csv",
+            "storage_key": "trading_researcher/dataset/stored-dataset-1/dataset.csv",
             "storage_bucket": "researcher-artifacts",
             "storage_endpoint_url": "http://hp.lan:9000",
         }
@@ -69,7 +69,7 @@ def _mock_artifact_store():
     store.store_json.side_effect = lambda *args, **kwargs: {
         "artifact_id": "stored-model-1",
         "uri": "file:///stored/model.json",
-        "storage_key": "neuralsignal/model/stored-model-1/model.json",
+        "storage_key": "trading_researcher/model/stored-model-1/model.json",
         "storage_bucket": "researcher-artifacts",
         "storage_endpoint_url": "http://hp.lan:9000",
     }
@@ -120,9 +120,9 @@ def _implementation(tmp_path):
     }
 
 
-def test_build_dataset_config_contains_neuralsignal_payload(tmp_path):
-    adapter = NeuralSignalPlugin()
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+def test_build_dataset_config_contains_trading_researcher_payload(tmp_path):
+    adapter = TradingResearcherPlugin()
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
         payload = adapter._build_dataset_config(_profile(), _proposal(), _implementation(tmp_path))
 
     assert payload["create_dataset"] is True
@@ -137,7 +137,7 @@ def test_build_dataset_config_contains_neuralsignal_payload(tmp_path):
     assert payload["query"] == {"split": "train"}
     assert payload["balanced_target"] == {"enabled": True, "field": "ground_truth", "values": [0, 1]}
     assert payload["file_out"] == "activation_sparsity_hallucination.csv"
-    assert payload["dataset_output_dir"] == str((Path("dev") / "experiments" / "neuralsignal" / "datasets").resolve())
+    assert payload["dataset_output_dir"] == str((Path("dev") / "experiments" / "trading_researcher" / "datasets").resolve())
     assert payload["overwrite_existing_dataset"] is False
     assert payload["feature_set_class_name"] == "ActivationSparsity"
     assert payload["feature_set_source_hash"]
@@ -148,7 +148,7 @@ def test_build_dataset_config_contains_neuralsignal_payload(tmp_path):
 
 
 def test_build_dataset_config_forwards_scan_cache_backend_options(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     profile = _profile()
     profile["backend_config"] = {"cache_scan_on_write": False}
     profile["datasets"][0]["scan_cache"] = {
@@ -161,7 +161,7 @@ def test_build_dataset_config_forwards_scan_cache_backend_options(tmp_path):
     proposal = _proposal()
     proposal["hyperparameters"]["backend_config"] = {"scan_hd_cache_size": 128}
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
         payload = adapter._build_dataset_config(profile, proposal, _implementation(tmp_path))
 
     backend = payload["backend_config"]
@@ -173,7 +173,7 @@ def test_build_dataset_config_forwards_scan_cache_backend_options(tmp_path):
 
 
 def test_build_dataset_config_uses_platform_scan_cache_directory(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     profile = _profile()
     profile["datasets"][0]["scan_cache"] = {
         "enabled": True,
@@ -184,9 +184,9 @@ def test_build_dataset_config_uses_platform_scan_cache_directory(tmp_path):
         "on_write": False,
     }
 
-    with patch("core.plugins.neuralsignal.adapter._scan_cache_platform", return_value="windows"):
-        with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path in {"F:/temp", "F:\\temp"}):
-            with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+    with patch("core.plugins.trading_researcher.adapter._scan_cache_platform", return_value="windows"):
+        with patch("core.plugins.trading_researcher.adapter._path_root_exists", lambda path: path in {"F:/temp", "F:\\temp"}):
+            with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
                 payload = adapter._build_dataset_config(profile, _proposal(), _implementation(tmp_path))
 
     backend = payload["backend_config"]
@@ -198,7 +198,7 @@ def test_build_dataset_config_uses_platform_scan_cache_directory(tmp_path):
 
 
 def test_build_dataset_config_replaces_missing_drive_scan_cache_directory_with_f_temp(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     profile = _profile()
     profile["datasets"][0]["backend_config"] = {
         "scan_cache_size": 8,
@@ -206,8 +206,8 @@ def test_build_dataset_config_replaces_missing_drive_scan_cache_directory_with_f
         "scan_cache_directory": "J:\\Temp\\scan_cache",
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path in {"F:/temp", "F:\\temp"}):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter._path_root_exists", lambda path: path in {"F:/temp", "F:\\temp"}):
             payload = adapter._build_dataset_config(profile, _proposal(), _implementation(tmp_path))
 
     cache_dir = Path(payload["backend_config"]["scan_cache_directory"])
@@ -219,8 +219,8 @@ def test_build_dataset_config_replaces_missing_drive_scan_cache_directory_with_f
 
 def test_default_scan_cache_directory_uses_windows_temp_on_windows():
     profile = _profile()
-    with patch("core.plugins.neuralsignal.adapter._scan_cache_platform", return_value="windows"):
-        with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path in {"F:/temp", "F:\\temp"}):
+    with patch("core.plugins.trading_researcher.adapter._scan_cache_platform", return_value="windows"):
+        with patch("core.plugins.trading_researcher.adapter._path_root_exists", lambda path: path in {"F:/temp", "F:\\temp"}):
             cache_dir = ns_adapter._default_scan_cache_directory(profile)
 
     assert cache_dir == Path("F:/temp")
@@ -228,8 +228,8 @@ def test_default_scan_cache_directory_uses_windows_temp_on_windows():
 
 def test_default_scan_cache_directory_uses_tmp_on_linux():
     profile = _profile()
-    with patch("core.plugins.neuralsignal.adapter._scan_cache_platform", return_value="linux"):
-        with patch("core.plugins.neuralsignal.adapter._path_root_exists", lambda path: path == "/tmp"):
+    with patch("core.plugins.trading_researcher.adapter._scan_cache_platform", return_value="linux"):
+        with patch("core.plugins.trading_researcher.adapter._path_root_exists", lambda path: path == "/tmp"):
             cache_dir = ns_adapter._default_scan_cache_directory(profile)
 
     assert cache_dir == Path("/tmp")
@@ -237,30 +237,30 @@ def test_default_scan_cache_directory_uses_tmp_on_linux():
 
 def test_default_scan_cache_directory_falls_back_when_f_drive_missing(tmp_path):
     profile = _profile()
-    with patch("core.plugins.neuralsignal.adapter._path_root_exists", return_value=False):
-        with patch("core.plugins.neuralsignal.adapter.dev_path", lambda *parts: tmp_path.joinpath(*parts)):
+    with patch("core.plugins.trading_researcher.adapter._path_root_exists", return_value=False):
+        with patch("core.plugins.trading_researcher.adapter.dev_path", lambda *parts: tmp_path.joinpath(*parts)):
             cache_dir = ns_adapter._default_scan_cache_directory(profile)
 
-    assert cache_dir == tmp_path / "scan_cache" / "neuralsignal"
+    assert cache_dir == tmp_path / "scan_cache" / "trading_researcher"
 
 
 def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path):
     csv_path = tmp_path / "features.csv"
     csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
 
     mock_memory_service = MagicMock()
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch("core.plugins.neuralsignal.adapter.MemoryService.for_profile", return_value=mock_memory_service):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+            with patch("core.plugins.trading_researcher.adapter.MemoryService.for_profile", return_value=mock_memory_service):
                 with patch.object(adapter, "_call_task", return_value={"file_paths": [str(csv_path)]}) as call_task:
                     delta = adapter.prepare_experiment(_profile(), state)
 
     call_task.assert_called_once()
-    assert call_task.call_args.args[1] == "core.plugins.neuralsignal.tasks.create_dataset"
+    assert call_task.call_args.args[1] == "core.plugins.trading_researcher.tasks.create_dataset"
     assert call_task.call_args.kwargs["timeout"] == 7200
-    assert call_task.call_args.kwargs["cwd"] == str(tmp_path / "neuralsignal_src")
+    assert call_task.call_args.kwargs["cwd"] == str(tmp_path / "trading_researcher_src")
     assert delta["errors"] == []
     assert len(delta["experiment_artifacts"]) == 1
     artifact = delta["experiment_artifacts"][0]
@@ -268,7 +268,7 @@ def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path)
     assert artifact["dataset_source"] == "generated"
     assert artifact["stored_artifact_id"] == "stored-dataset-1"
     assert artifact["stored_artifact_bucket"] == "researcher-artifacts"
-    assert artifact["stored_artifact_key"] == "neuralsignal/dataset/stored-dataset-1/dataset.csv"
+    assert artifact["stored_artifact_key"] == "trading_researcher/dataset/stored-dataset-1/dataset.csv"
     assert artifact["status"] == "ready"
     assert artifact["rows"] == 2
     assert artifact["columns"] == 2
@@ -278,11 +278,11 @@ def test_prepare_experiment_runs_dataset_task_and_records_csv_metadata(tmp_path)
 
 
 def test_prepare_experiment_normalizes_dataset_task_failure(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
             with patch.object(adapter, "_call_task", side_effect=RuntimeError("boom")):
                 delta = adapter.prepare_experiment(_profile(), state)
 
@@ -293,7 +293,7 @@ def test_prepare_experiment_normalizes_dataset_task_failure(tmp_path):
 def test_prepare_experiment_reuses_existing_dataset_when_overwrite_disabled(tmp_path):
     csv_path = tmp_path / "existing.csv"
     csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
     dataset_cfg = {
         "dataset": "HaluBench",
@@ -303,11 +303,13 @@ def test_prepare_experiment_reuses_existing_dataset_when_overwrite_disabled(tmp_
         "overwrite_existing_dataset": False,
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch.object(adapter, "_build_dataset_config", return_value=dataset_cfg):
-                with patch.object(adapter, "_call_task") as call_task:
-                    delta = adapter.prepare_experiment(_profile(), state)
+    mock_memory_service = MagicMock()
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+            with patch("core.plugins.trading_researcher.adapter.MemoryService.for_profile", return_value=mock_memory_service):
+                with patch.object(adapter, "_build_dataset_config", return_value=dataset_cfg):
+                    with patch.object(adapter, "_call_task") as call_task:
+                        delta = adapter.prepare_experiment(_profile(), state)
 
     call_task.assert_not_called()
     artifact = delta["experiment_artifacts"][0]
@@ -324,7 +326,7 @@ def test_prepare_experiment_reuses_existing_dataset_when_overwrite_disabled(tmp_
 def test_prepare_experiment_overwrites_existing_dataset_when_enabled(tmp_path):
     csv_path = tmp_path / "existing.csv"
     csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
     dataset_cfg = {
         "dataset": "HaluBench",
@@ -334,11 +336,13 @@ def test_prepare_experiment_overwrites_existing_dataset_when_enabled(tmp_path):
         "overwrite_existing_dataset": True,
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch.object(adapter, "_build_dataset_config", return_value=dataset_cfg):
-                with patch.object(adapter, "_call_task", return_value={"file_paths": [str(csv_path)]}) as call_task:
-                    delta = adapter.prepare_experiment(_profile(), state)
+    mock_memory_service = MagicMock()
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+            with patch("core.plugins.trading_researcher.adapter.MemoryService.for_profile", return_value=mock_memory_service):
+                with patch.object(adapter, "_build_dataset_config", return_value=dataset_cfg):
+                    with patch.object(adapter, "_call_task", return_value={"file_paths": [str(csv_path)]}) as call_task:
+                        delta = adapter.prepare_experiment(_profile(), state)
 
     call_task.assert_called_once()
     assert delta["experiment_artifacts"][0]["dataset_source"] == "generated"
@@ -348,7 +352,7 @@ def test_prepare_experiment_overwrites_existing_dataset_when_enabled(tmp_path):
 def test_prepare_experiment_reuses_matching_dataset_from_memory(tmp_path):
     csv_path = tmp_path / "memory_dataset.csv"
     csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
     dataset_cfg = {
         "dataset": "HaluBench",
@@ -365,7 +369,7 @@ def test_prepare_experiment_reuses_matching_dataset_from_memory(tmp_path):
         "feature_set_configs": None,
         "ffn_layer_patterns": ["mlp", "fc"],
         "attn_layer_patterns": ["attn", ".q"],
-        "backend_config": {"backend_type": "neuralsignal_v1"},
+        "backend_config": {"backend_type": "trading_researcher_v1"},
         "overwrite_existing_dataset": False,
     }
     mock_memory = MagicMock()
@@ -381,9 +385,9 @@ def test_prepare_experiment_reuses_matching_dataset_from_memory(tmp_path):
         },
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch("core.plugins.neuralsignal.adapter.MemoryService.for_profile", return_value=mock_memory):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+            with patch("core.plugins.trading_researcher.adapter.MemoryService.for_profile", return_value=mock_memory):
                 with patch.object(adapter, "_build_dataset_config", return_value=dataset_cfg):
                     with patch.object(adapter, "_call_task") as call_task:
                         delta = adapter.prepare_experiment(_profile(), state)
@@ -397,7 +401,7 @@ def test_prepare_experiment_reuses_matching_dataset_from_memory(tmp_path):
 
 
 def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     artifact = {
         "artifact_id": "activation_sparsity_dataset_0",
         "artifact_type": "dataset",
@@ -423,7 +427,7 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
         "params": {"max_depth": 3},
         "feature_importance": {"a": 0.8},
         "artifacts": {"feature_importance": {"a": 0.8}},
-        "model_config": {"description": "desc", "model": "xgboost", "tags": ["neuralsignal"]},
+        "model_config": {"description": "desc", "model": "xgboost", "tags": ["trading_researcher"]},
         "figure_paths": {},
     }
     mock_run = MagicMock()
@@ -432,9 +436,9 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
     mock_run.info.run_id = "mlflow-run-123"
 
     mock_memory_service = MagicMock()
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch("core.plugins.neuralsignal.adapter.MemoryService.for_profile", return_value=mock_memory_service):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+            with patch("core.plugins.trading_researcher.adapter.MemoryService.for_profile", return_value=mock_memory_service):
                 with patch("mlflow.set_tracking_uri"):
                     with patch("mlflow.set_experiment"):
                         with patch("mlflow.start_run", return_value=mock_run):
@@ -447,7 +451,7 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
                                                     delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
 
     call_task.assert_called_once()
-    assert call_task.call_args.args[1] == "core.plugins.neuralsignal.tasks.create_s1_model"
+    assert call_task.call_args.args[1] == "core.plugins.trading_researcher.tasks.create_s1_model"
     payload = call_task.call_args.args[2]
     assert call_task.call_args.kwargs["timeout"] == 7200
     assert call_task.call_args.kwargs["cwd"] == str(tmp_path)
@@ -468,7 +472,7 @@ def test_execute_experiment_runs_model_task_and_normalizes_result(tmp_path):
 
 
 def test_execute_experiment_continues_when_mlflow_logging_fails(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     artifact = {
         "artifact_id": "activation_sparsity_dataset_0",
         "artifact_type": "dataset",
@@ -492,12 +496,12 @@ def test_execute_experiment_continues_when_mlflow_logging_fails(tmp_path):
         "params": {"max_depth": 3},
         "feature_importance": {"a": 0.8},
         "artifacts": {"feature_importance": {"a": 0.8}},
-        "model_config": {"description": "desc", "model": "xgboost", "tags": ["neuralsignal"]},
+        "model_config": {"description": "desc", "model": "xgboost", "tags": ["trading_researcher"]},
         "figure_paths": {},
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
             with patch("mlflow.set_tracking_uri", side_effect=Exception("mlflow down")):
                 with patch.object(adapter, "_call_task", return_value=task_result):
                     delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
@@ -508,7 +512,7 @@ def test_execute_experiment_continues_when_mlflow_logging_fails(tmp_path):
 
 
 def test_execute_experiment_logs_agent_state_and_figures_when_artifacts_exist(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     artifact = {
         "artifact_id": "activation_sparsity_dataset_0",
         "artifact_type": "dataset",
@@ -536,7 +540,7 @@ def test_execute_experiment_logs_agent_state_and_figures_when_artifacts_exist(tm
             "confusion_matrix": [[8, 1], [2, 9]],
             "roc_curve": {"fpr": [0.0, 0.1, 1.0], "tpr": [0.0, 0.8, 1.0]},
         },
-        "model_config": {"description": "model description", "model": "xgboost", "tags": ["neuralsignal", "hallucination"]},
+        "model_config": {"description": "model description", "model": "xgboost", "tags": ["trading_researcher", "hallucination"]},
         "figure_paths": {},
     }
     mock_run = MagicMock()
@@ -563,8 +567,8 @@ def test_execute_experiment_logs_agent_state_and_figures_when_artifacts_exist(tm
         "research_artifacts": [{"artifact_id": "paper-1"}],
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
             with patch("mlflow.set_tracking_uri"):
                 with patch("mlflow.set_experiment"):
                     with patch("mlflow.start_run", return_value=mock_run):
@@ -585,7 +589,7 @@ def test_execute_experiment_logs_agent_state_and_figures_when_artifacts_exist(tm
 
 
 def test_execute_experiment_logs_dataset_and_confusion_figure_artifacts(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     dataset_path = tmp_path / "features.csv"
     dataset_path.write_text("a,b\n1,2\n", encoding="utf-8")
     confusion_path = tmp_path / "confusion_matrix.png"
@@ -600,14 +604,19 @@ def test_execute_experiment_logs_dataset_and_confusion_figure_artifacts(tmp_path
         "dataset_path": str(dataset_path),
         "dataset": "HaluBench",
         "detector": "hallucination",
-        "dataset_config": {"dataset": "HaluBench", "foo": "bar"},
+        "dataset_config": {
+            "dataset": "HaluBench",
+            "foo": "bar",
+            "feature_set_class_path": str(tmp_path / "ActivationSparsity.py"),
+            "feature_set_class_name": "ActivationSparsity",
+        },
     }
     task_result = {
         "metrics": {"test_auc": 0.72},
         "params": {"max_depth": 3},
         "feature_importance": {"a": 0.8},
         "artifacts": {"feature_importance": {"a": 0.8}},
-        "model_config": {"description": "model description", "model": "xgboost", "tags": ["neuralsignal"]},
+        "model_config": {"description": "model description", "model": "xgboost", "tags": ["trading_researcher"]},
         "figure_paths": {"confusion_matrix": str(confusion_path), "roc_curve": str(roc_path)},
     }
     mock_run = MagicMock()
@@ -623,8 +632,8 @@ def test_execute_experiment_logs_dataset_and_confusion_figure_artifacts(tmp_path
     def _capture_log_text(text, path):
         text_calls.append(path)
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
             with patch("mlflow.set_tracking_uri"):
                 with patch("mlflow.set_experiment"):
                     with patch("mlflow.start_run", return_value=mock_run):
@@ -646,7 +655,7 @@ def test_execute_experiment_logs_dataset_and_confusion_figure_artifacts(tmp_path
 
 
 def test_execute_experiment_does_not_register_figure_artifacts_in_state(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     dataset_path = tmp_path / "features.csv"
     dataset_path.write_text("a,b\n1,2\n", encoding="utf-8")
     confusion_path = tmp_path / "confusion_matrix.png"
@@ -659,7 +668,11 @@ def test_execute_experiment_does_not_register_figure_artifacts_in_state(tmp_path
         "dataset_path": str(dataset_path),
         "dataset": "HaluBench",
         "detector": "hallucination",
-        "dataset_config": {"dataset": "HaluBench"},
+        "dataset_config": {
+            "dataset": "HaluBench",
+            "feature_set_class_path": str(tmp_path / "ActivationSparsity.py"),
+            "feature_set_class_name": "ActivationSparsity",
+        },
     }
     task_result = {
         "metrics": {"test_auc": 0.72},
@@ -670,9 +683,9 @@ def test_execute_experiment_does_not_register_figure_artifacts_in_state(tmp_path
         "figure_paths": {"confusion_matrix": str(confusion_path)},
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch("core.plugins.neuralsignal.adapter._log_result_to_mlflow", return_value=""):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+            with patch("core.plugins.trading_researcher.adapter._log_result_to_mlflow", return_value=""):
                 with patch.object(adapter, "_call_task", return_value=task_result):
                     delta = adapter.execute_experiment(_profile(), {"experiment_artifacts": [artifact]})
 
@@ -680,8 +693,8 @@ def test_execute_experiment_does_not_register_figure_artifacts_in_state(tmp_path
     assert "stored_figure_artifacts" not in delta["experiment_results"][0]
 
 
-def test_build_memory_records_returns_neuralsignal_specific_records(tmp_path):
-    adapter = NeuralSignalPlugin()
+def test_build_memory_records_returns_trading_researcher_specific_records(tmp_path):
+    adapter = TradingResearcherPlugin()
     state = {
         "research_direction": "find useful MLP sparsity probes",
         "proposals": [{**_proposal(), "description": "Probe MLP activation sparsity"}],
@@ -732,13 +745,13 @@ def test_build_memory_records_returns_neuralsignal_specific_records(tmp_path):
     records = adapter.build_memory_records(_profile(), state)
 
     kinds = {record["kind"] for record in records}
-    assert "neuralsignal_dataset" in kinds
-    assert "neuralsignal_featureset" in kinds
-    assert "neuralsignal_experiment" in kinds
+    assert "trading_researcher_dataset" in kinds
+    assert "trading_researcher_featureset" in kinds
+    assert "trading_researcher_experiment" in kinds
 
-    experiment_record = next(record for record in records if record["kind"] == "neuralsignal_experiment")
-    dataset_record = next(record for record in records if record["kind"] == "neuralsignal_dataset")
-    featureset_record = next(record for record in records if record["kind"] == "neuralsignal_featureset")
+    experiment_record = next(record for record in records if record["kind"] == "trading_researcher_experiment")
+    dataset_record = next(record for record in records if record["kind"] == "trading_researcher_dataset")
+    featureset_record = next(record for record in records if record["kind"] == "trading_researcher_featureset")
 
     assert experiment_record["object_type"] == "experiment_result"
     assert experiment_record["metadata"]["dataset"] == "HaluBench"
@@ -760,12 +773,12 @@ def test_build_memory_records_returns_neuralsignal_specific_records(tmp_path):
     assert featureset_record["blob_refs"][0]["artifact_id"] == "stored-implementation-1"
 
 
-def test_memory_record_to_artifact_returns_neuralsignal_specific_summary():
-    adapter = NeuralSignalPlugin()
+def test_memory_record_to_artifact_returns_trading_researcher_specific_summary():
+    adapter = TradingResearcherPlugin()
     record = {
         "record_id": "exp-001",
-        "domain": "neuralsignal",
-        "kind": "neuralsignal_experiment",
+        "domain": "trading_researcher",
+        "kind": "trading_researcher_experiment",
         "title": "activation_sparsity",
         "summary": "Direction: find useful MLP sparsity probes\nMetrics: {'test_auc': 0.72}",
         "metadata": {
@@ -779,7 +792,7 @@ def test_memory_record_to_artifact_returns_neuralsignal_specific_summary():
 
     artifact = adapter.memory_record_to_artifact(_profile(), record, {})
 
-    assert artifact["source_type"] == "neuralsignal_experiment"
+    assert artifact["source_type"] == "trading_researcher_experiment"
     assert "dataset=HaluBench" in artifact["title"]
     assert "detector=hallucination" in artifact["title"]
     assert "Feature set class: ActivationSparsity" in artifact["summary"]
@@ -788,7 +801,7 @@ def test_memory_record_to_artifact_returns_neuralsignal_specific_summary():
 
 
 def test_execute_experiment_records_not_ready_dataset_error():
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     artifact = {
         "artifact_type": "dataset",
         "status": "missing_file",
@@ -803,7 +816,7 @@ def test_execute_experiment_records_not_ready_dataset_error():
 
 
 def test_task_timeout_prefers_stage_override_then_job_timeout(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     artifact = {
         "artifact_id": "activation_sparsity_dataset_0",
         "artifact_type": "dataset",
@@ -829,8 +842,8 @@ def test_task_timeout_prefers_stage_override_then_job_timeout(tmp_path):
         "model_timeout_seconds": 14400,
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
             with patch.object(adapter, "_call_task", return_value=task_result) as call_task:
                 adapter.execute_experiment(profile, {"experiment_artifacts": [artifact]})
 
@@ -838,7 +851,7 @@ def test_task_timeout_prefers_stage_override_then_job_timeout(tmp_path):
 
 
 def test_submit_experiment_jobs_submits_proposal_branch_job(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     state = {"proposals": [_proposal()], "implementations": [_implementation(tmp_path)]}
     submitted = {
         "job_id": "proposal_branch_activation_sparsity",
@@ -848,8 +861,8 @@ def test_submit_experiment_jobs_submits_proposal_branch_job(tmp_path):
         "proposal_name": "activation_sparsity",
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.submit_task", return_value=submitted) as submit_task:
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.submit_task", return_value=submitted) as submit_task:
             delta = adapter.submit_experiment_jobs(
                 {**_profile(), "execution": {"runner": "local_process", "max_parallel_jobs": 1}},
                 state,
@@ -858,17 +871,17 @@ def test_submit_experiment_jobs_submits_proposal_branch_job(tmp_path):
     submit_task.assert_called_once()
     spec = submit_task.call_args.args[0]
     assert spec["stage"] == "proposal_branch"
-    assert spec["task_path"] == "core.plugins.neuralsignal.tasks.run_proposal_branch"
+    assert spec["task_path"] == "core.plugins.trading_researcher.tasks.run_proposal_branch"
     assert spec["payload"]["dataset_config"]["dataset"] == "HaluBench"
     assert spec["payload"]["model_config_base"]["dataset"] == "HaluBench"
     assert delta["experiment_jobs"][0]["status"] == "submitted"
 
 
 def test_submit_experiment_jobs_reports_missing_implementation(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     state = {"proposals": [_proposal()], "implementations": []}
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.submit_task") as submit_task:
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.submit_task") as submit_task:
             delta = adapter.submit_experiment_jobs(
                 {**_profile(), "execution": {"runner": "ray", "max_parallel_jobs": 1}},
                 state,
@@ -880,7 +893,7 @@ def test_submit_experiment_jobs_reports_missing_implementation(tmp_path):
 
 
 def test_submit_experiment_jobs_reports_generation_failure_before_submit(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     state = {
         "proposals": [_proposal()],
         "implementations": [{
@@ -890,8 +903,8 @@ def test_submit_experiment_jobs_reports_generation_failure_before_submit(tmp_pat
             "error": "LLM returned prose instead of Python",
         }],
     }
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.submit_task") as submit_task:
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.submit_task") as submit_task:
             delta = adapter.submit_experiment_jobs(
                 {**_profile(), "execution": {"runner": "ray", "max_parallel_jobs": 1}},
                 state,
@@ -903,7 +916,7 @@ def test_submit_experiment_jobs_reports_generation_failure_before_submit(tmp_pat
 
 
 def test_build_model_config_requires_implementation_metadata(tmp_path):
-    adapter = NeuralSignalPlugin()
+    adapter = TradingResearcherPlugin()
     artifact = {
         "artifact_id": "activation_sparsity_dataset_0",
         "artifact_type": "dataset",
@@ -923,7 +936,7 @@ def test_build_model_config_requires_implementation_metadata(tmp_path):
         },
     }
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
         try:
             adapter._build_model_config(_profile(), artifact, "exp-123")
         except RuntimeError as exc:
@@ -972,7 +985,7 @@ def test_check_experiment_jobs_collects_completed_proposal_branch(tmp_path):
         json.dumps({
             "job_id": "proposal_branch_job",
             "job_dir": str(job_dir),
-            "task_path": "core.plugins.neuralsignal.tasks.run_proposal_branch",
+            "task_path": "core.plugins.trading_researcher.tasks.run_proposal_branch",
             "payload": payload,
         }),
         encoding="utf-8",
@@ -1002,11 +1015,11 @@ def test_check_experiment_jobs_collects_completed_proposal_branch(tmp_path):
         "experiment_id": "exp-123",
     }
 
-    adapter = NeuralSignalPlugin()
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=_cfg(tmp_path)):
-        with patch("core.plugins.neuralsignal.adapter.get_artifact_store", return_value=_mock_artifact_store()):
-            with patch("core.plugins.neuralsignal.adapter.check_task", return_value=checked_job):
-                with patch("core.plugins.neuralsignal.adapter._log_result_to_mlflow", return_value="mlflow-run-branch"):
+    adapter = TradingResearcherPlugin()
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=_cfg(tmp_path)):
+        with patch("core.plugins.trading_researcher.adapter.get_artifact_store", return_value=_mock_artifact_store()):
+            with patch("core.plugins.trading_researcher.adapter.check_task", return_value=checked_job):
+                with patch("core.plugins.trading_researcher.adapter._log_result_to_mlflow", return_value="mlflow-run-branch"):
                     delta = adapter.check_experiment_jobs(
                         {**_profile(), "execution": {"runner": "local_process", "max_parallel_jobs": 1}},
                     {"experiment_jobs": [{"job_id": "proposal_branch_job", "job_dir": str(job_dir), "proposal_name": "activation_sparsity"}]},
@@ -1019,7 +1032,7 @@ def test_check_experiment_jobs_collects_completed_proposal_branch(tmp_path):
     assert delta["models"][0]["mlflow_run_id"] == "mlflow-run-branch"
 
 
-def test_call_task_sets_neuralsignal_src_on_pythonpath(tmp_path, monkeypatch):
+def test_call_task_sets_trading_researcher_src_on_pythonpath(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     monkeypatch.setenv("PYTHONPATH", "existing_path")
 
@@ -1033,18 +1046,18 @@ def test_call_task_sets_neuralsignal_src_on_pythonpath(tmp_path, monkeypatch):
         def wait(self, timeout=None):
             return self.returncode
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=cfg):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=cfg):
         with patch("core.plugins.external_tasks.subprocess.Popen", return_value=FakeProc()) as popen:
-            result = NeuralSignalPlugin()._call_task({}, "some.module.task", {"x": 1}, cwd=str(tmp_path))
+            result = TradingResearcherPlugin()._call_task({}, "some.module.task", {"x": 1}, cwd=str(tmp_path))
 
     assert result == {"ok": True}
     env = popen.call_args.kwargs["env"]
     pythonpath = env["PYTHONPATH"].split(os.pathsep)
-    assert pythonpath[0] == cfg.neuralsignal_src_path
+    assert pythonpath[0] == cfg.trading_researcher_src_path
     assert str((Path(os.getcwd()) / "core").resolve()) in pythonpath
     assert "existing_path" in pythonpath
-    assert env["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
-    assert "core.plugins.neuralsignal" in env["RESEARCH_PLUGIN_LOGGERS"]
+    assert env["RESEARCH_PLUGIN_LOG"] == "trading_researcher"
+    assert "core.plugins.trading_researcher" in env["RESEARCH_PLUGIN_LOGGERS"]
     assert env["RESEARCH_LOG_CONFIG"].endswith(os.path.join("configs", "config.yaml"))
     assert env["PYTHONIOENCODING"] == "utf-8"
     assert env["PYTHONUTF8"] == "1"
@@ -1069,20 +1082,20 @@ def test_call_task_uses_full_timeout_for_process_wait(tmp_path):
             seen["timeout"] = timeout
             return self.returncode
 
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=cfg):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=cfg):
         with patch("core.plugins.external_tasks.subprocess.Popen", return_value=FakeProc()):
-            result = NeuralSignalPlugin()._call_task({}, "some.module.task", {"x": 1}, timeout=123)
+            result = TradingResearcherPlugin()._call_task({}, "some.module.task", {"x": 1}, timeout=123)
 
     assert result == {"ok": True}
     assert seen["timeout"] == 123
 
 
-def test_call_task_supports_package_dir_as_neuralsignal_src_path(tmp_path, monkeypatch):
-    package_dir = tmp_path / "repo" / "neuralsignal"
+def test_call_task_supports_package_dir_as_trading_researcher_src_path(tmp_path, monkeypatch):
+    package_dir = tmp_path / "repo" / "trading_researcher"
     package_dir.mkdir(parents=True)
     (package_dir / "__init__.py").write_text("", encoding="utf-8")
     cfg = _cfg(tmp_path)
-    cfg.neuralsignal_src_path = str(package_dir)
+    cfg.trading_researcher_src_path = str(package_dir)
 
     class FakeProc:
         def __init__(self):
@@ -1095,9 +1108,9 @@ def test_call_task_supports_package_dir_as_neuralsignal_src_path(tmp_path, monke
             return self.returncode
 
     monkeypatch.delenv("PYTHONPATH", raising=False)
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=cfg):
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=cfg):
         with patch("core.plugins.external_tasks.subprocess.Popen", return_value=FakeProc()) as popen:
-            result = NeuralSignalPlugin()._call_task({}, "some.module.task", {"x": 1})
+            result = TradingResearcherPlugin()._call_task({}, "some.module.task", {"x": 1})
 
     assert result == {"ok": True}
     pythonpath = popen.call_args.kwargs["env"]["PYTHONPATH"].split(os.pathsep)
@@ -1105,7 +1118,7 @@ def test_call_task_supports_package_dir_as_neuralsignal_src_path(tmp_path, monke
     assert str(package_dir) in pythonpath
     assert str((Path(os.getcwd()) / "core").resolve()) in pythonpath
     env = popen.call_args.kwargs["env"]
-    assert env["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
+    assert env["RESEARCH_PLUGIN_LOG"] == "trading_researcher"
     assert "core.plugins.job_runner" in env["RESEARCH_PLUGIN_LOGGERS"]
     assert env["RESEARCH_LOG_CONFIG"].endswith(os.path.join("configs", "config.yaml"))
     assert env["PYTHONIOENCODING"] == "utf-8"
@@ -1117,9 +1130,9 @@ def test_call_task_supports_package_dir_as_neuralsignal_src_path(tmp_path, monke
 
 def test_external_runtime_spec_exposes_shared_runner_settings(tmp_path):
     cfg = _cfg(tmp_path)
-    with patch("core.plugins.neuralsignal.adapter.get_config", return_value=cfg):
-        spec = NeuralSignalPlugin().external_runtime_spec({}, "validate")
+    with patch("core.plugins.trading_researcher.adapter.get_config", return_value=cfg):
+        spec = TradingResearcherPlugin().external_runtime_spec({}, "validate")
 
     assert spec["python"] == "python"
-    assert spec["plugin_name"] == "neuralsignal"
+    assert spec["plugin_name"] == "trading_researcher"
     assert str((Path(os.getcwd()) / "core").resolve()) in spec["pythonpath_entries"]

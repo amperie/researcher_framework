@@ -20,7 +20,7 @@ def test_run_job_executes_task_and_writes_result(tmp_path):
         json.dumps({
             "job_id": "job1",
             "job_dir": str(job_dir),
-            "plugin_name": "neuralsignal",
+            "plugin_name": "trading_researcher",
             "task_path": "tests.test_job_runner.echo_task",
             "runner": "local_process",
             "stage": "unit",
@@ -44,15 +44,15 @@ def test_local_process_submit_writes_job_files_and_launches_module(tmp_path):
     spec = {
         "job_id": "job1",
         "job_dir": str(tmp_path / "job1"),
-        "plugin_name": "neuralsignal",
+        "plugin_name": "trading_researcher",
         "task_path": "tests.test_job_runner.echo_task",
         "payload": {"value": 1},
         "python": "python",
         "cwd": str(tmp_path),
         "env": {
             "PYTHONPATH": "x",
-            "RESEARCH_PLUGIN_LOG": "neuralsignal",
-            "RESEARCH_PLUGIN_LOGGERS": "core.plugins.neuralsignal,core.plugins.task_runner,core.plugins.job_runner",
+            "RESEARCH_PLUGIN_LOG": "trading_researcher",
+            "RESEARCH_PLUGIN_LOGGERS": "core.plugins.trading_researcher,core.plugins.task_runner,core.plugins.job_runner",
         },
         "stage": "unit",
         "proposal_name": "p1",
@@ -68,9 +68,9 @@ def test_local_process_submit_writes_job_files_and_launches_module(tmp_path):
     cmd = popen.call_args.args[0]
     assert cmd[-4:-1] == ["-m", "core.plugins.job_runner", "run"]
     assert cmd[-1] == str(job_dir.resolve())
-    assert Path(popen.call_args.kwargs["cwd"]).name == "NeuralSignalResearcher"
+    assert Path(popen.call_args.kwargs["cwd"]).name == "trading_researcher"
     assert popen.call_args.kwargs["env"]["PYTHONPATH"] == "x"
-    assert popen.call_args.kwargs["env"]["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
+    assert popen.call_args.kwargs["env"]["RESEARCH_PLUGIN_LOG"] == "trading_researcher"
     assert popen.call_args.kwargs["env"]["RESEARCH_LOG_CONFIG"].endswith("configs\\config.yaml")
 
 
@@ -108,13 +108,13 @@ def test_ray_runner_submit_starts_local_ray_and_passes_runtime_env(tmp_path):
     spec = {
         "job_id": "job-ray-local",
         "job_dir": str(tmp_path / "job-ray-local"),
-        "plugin_name": "neuralsignal",
+        "plugin_name": "trading_researcher",
         "task_path": "tests.test_job_runner.echo_task",
         "payload": {"value": 7},
         "cwd": str(tmp_path),
         "env": {
             "PYTHONPATH": "ns_path;repo_path",
-            "RESEARCH_PLUGIN_LOG": "neuralsignal",
+            "RESEARCH_PLUGIN_LOG": "trading_researcher",
         },
         "stage": "unit",
         "proposal_name": "p1",
@@ -154,7 +154,7 @@ def test_ray_runner_submit_connects_to_remote_cluster_when_configured(tmp_path):
     spec = {
         "job_id": "job-ray-remote",
         "job_dir": str(tmp_path / "job-ray-remote"),
-        "plugin_name": "neuralsignal",
+        "plugin_name": "trading_researcher",
         "task_path": "tests.test_job_runner.echo_task",
         "payload": {"value": 9},
         "cwd": str(tmp_path),
@@ -187,13 +187,13 @@ def test_ray_runner_remote_mode_drops_pythonpath_from_runtime_env(tmp_path):
     spec = {
         "job_id": "job-ray-remote-env",
         "job_dir": str(tmp_path / "job-ray-remote-env"),
-        "plugin_name": "neuralsignal",
+        "plugin_name": "trading_researcher",
         "task_path": "tests.test_job_runner.echo_task",
         "payload": {"value": 9},
         "cwd": str(tmp_path),
         "env": {
             "PYTHONPATH": "local_only_path",
-            "RESEARCH_PLUGIN_LOG": "neuralsignal",
+            "RESEARCH_PLUGIN_LOG": "trading_researcher",
         },
         "stage": "unit",
         "proposal_name": "p3",
@@ -217,7 +217,7 @@ def test_ray_runner_remote_mode_drops_pythonpath_from_runtime_env(tmp_path):
 
     runtime_env = ray_options.call_args.kwargs["runtime_env"]
     assert "PYTHONPATH" not in runtime_env["env_vars"]
-    assert runtime_env["env_vars"]["RESEARCH_PLUGIN_LOG"] == "neuralsignal"
+    assert runtime_env["env_vars"]["RESEARCH_PLUGIN_LOG"] == "trading_researcher"
     assert "working_dir" in runtime_env
 
 

@@ -104,24 +104,24 @@ class _FakeMongoDatabase:
 
 def test_list_run_summaries_falls_back_to_raw_results_collection(monkeypatch):
     profile = {
-        "name": "neuralsignal",
+        "name": "trading_researcher",
         "storage": {
             "mongodb_results_db": "researcher",
-            "mongodb_results_collection": "neuralsignal_experiments",
+            "mongodb_results_collection": "trading_researcher_experiments",
         },
         "evaluation": {"primary_metric": "test_auc"},
     }
     context = service.ProfileContext(
-        name="neuralsignal",
+        name="trading_researcher",
         profile=profile,
         memory_service=_FakeMemoryService(records=[]),
     )
     docs = {
         "researcher": {
-            "neuralsignal_experiments": [{
+            "trading_researcher_experiments": [{
                 "experiment_id": "exp-1",
                 "proposal_name": "proposal-a",
-                "profile": "neuralsignal",
+                "profile": "trading_researcher",
                 "research_direction": "direction",
                 "metrics": {"test_auc": 0.91},
                 "evaluation_summary": {
@@ -139,7 +139,7 @@ def test_list_run_summaries_falls_back_to_raw_results_collection(monkeypatch):
     monkeypatch.setattr(service.pymongo, "MongoClient", lambda *_args, **_kwargs: _FakeMongoClient(docs))
     monkeypatch.setattr(service, "_mlflow_bundle", lambda *_args, **_kwargs: {"ui_url": "http://mlflow/run"})
 
-    runs = service.list_run_summaries(profile_name="neuralsignal", limit=10)
+    runs = service.list_run_summaries(profile_name="trading_researcher", limit=10)
 
     assert len(runs) == 1
     assert runs[0]["record_id"] == "exp-1"
@@ -150,21 +150,21 @@ def test_list_run_summaries_falls_back_to_raw_results_collection(monkeypatch):
 
 def test_get_run_bundle_falls_back_to_raw_results_collection(monkeypatch):
     profile = {
-        "name": "neuralsignal",
+        "name": "trading_researcher",
         "storage": {
             "mongodb_results_db": "researcher",
-            "mongodb_results_collection": "neuralsignal_experiments",
+            "mongodb_results_collection": "trading_researcher_experiments",
             "artifacts_mongodb_db": "researcher",
-            "artifacts_collection": "neuralsignal_artifacts",
+            "artifacts_collection": "trading_researcher_artifacts",
         },
         "evaluation": {"primary_metric": "test_auc"},
     }
     docs = {
         "researcher": {
-            "neuralsignal_experiments": [{
+            "trading_researcher_experiments": [{
                 "experiment_id": "exp-2",
                 "proposal_name": "proposal-b",
-                "profile": "neuralsignal",
+                "profile": "trading_researcher",
                 "research_direction": "direction",
                 "metrics": {"test_auc": 0.88},
                 "evaluation_summary": {
@@ -179,11 +179,11 @@ def test_get_run_bundle_falls_back_to_raw_results_collection(monkeypatch):
                 "inserted_at": "2026-05-01T21:00:00+00:00",
                 "mlflow_run_id": "mlf-2",
             }],
-            "neuralsignal_artifacts": [],
+            "trading_researcher_artifacts": [],
         }
     }
     context = service.ProfileContext(
-        name="neuralsignal",
+        name="trading_researcher",
         profile=profile,
         memory_service=_FakeMemoryService(records=[]),
     )
@@ -194,7 +194,7 @@ def test_get_run_bundle_falls_back_to_raw_results_collection(monkeypatch):
     monkeypatch.setattr(service, "_artifact_records", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(service, "_graph_bundle", lambda *_args, **_kwargs: {"backend_enabled": False, "nodes": [], "edges": []})
 
-    bundle = service.get_run_bundle("neuralsignal", "exp-2")
+    bundle = service.get_run_bundle("trading_researcher", "exp-2")
 
     assert bundle["run"]["record"]["record_id"] == "exp-2"
     assert bundle["run"]["summary"]["experiment_id"] == "exp-2"
@@ -204,7 +204,7 @@ def test_get_run_bundle_falls_back_to_raw_results_collection(monkeypatch):
 
 def test_get_run_bundle_includes_run_family(monkeypatch):
     profile = {
-        "name": "neuralsignal",
+        "name": "trading_researcher",
         "storage": {},
         "evaluation": {"primary_metric": "test_auc"},
     }
@@ -252,7 +252,7 @@ def test_get_run_bundle_includes_run_family(monkeypatch):
         },
     ]
     context = service.ProfileContext(
-        name="neuralsignal",
+        name="trading_researcher",
         profile=profile,
         memory_service=_FakeMemoryService(records=records),
     )
@@ -265,7 +265,7 @@ def test_get_run_bundle_includes_run_family(monkeypatch):
     monkeypatch.setattr(service, "list_run_handoffs", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(service, "list_proposal_seeds", lambda *_args, **_kwargs: [])
 
-    bundle = service.get_run_bundle("neuralsignal", "exp-root")
+    bundle = service.get_run_bundle("trading_researcher", "exp-root")
 
     family = bundle["run"]["family"]
     assert family["family_id"] == "family-1"
@@ -279,7 +279,7 @@ def test_get_run_bundle_includes_run_family(monkeypatch):
 
 def test_get_run_bundle_includes_handoff_draft_and_saved(monkeypatch):
     profile = {
-        "name": "neuralsignal",
+        "name": "trading_researcher",
         "storage": {},
         "evaluation": {"primary_metric": "test_auc"},
     }
@@ -317,7 +317,7 @@ def test_get_run_bundle_includes_handoff_draft_and_saved(monkeypatch):
         },
     }
     context = service.ProfileContext(
-        name="neuralsignal",
+        name="trading_researcher",
         profile=profile,
         memory_service=_FakeMemoryService(records=[run_record, saved_handoff]),
     )
@@ -330,7 +330,7 @@ def test_get_run_bundle_includes_handoff_draft_and_saved(monkeypatch):
     monkeypatch.setattr(service, "list_run_handoffs", lambda *_args, **_kwargs: [saved_handoff])
     monkeypatch.setattr(service, "list_proposal_seeds", lambda *_args, **_kwargs: [])
 
-    bundle = service.get_run_bundle("neuralsignal", "exp-root")
+    bundle = service.get_run_bundle("trading_researcher", "exp-root")
 
     handoff = bundle["run"]["handoff"]
     assert handoff["draft"]["source_experiment_record_id"] == "exp-root"
@@ -340,7 +340,7 @@ def test_get_run_bundle_includes_handoff_draft_and_saved(monkeypatch):
 
 def test_get_run_bundle_includes_proposal_seed_draft_and_saved(monkeypatch):
     profile = {
-        "name": "neuralsignal",
+        "name": "trading_researcher",
         "storage": {},
         "evaluation": {"primary_metric": "test_auc"},
     }
@@ -387,7 +387,7 @@ def test_get_run_bundle_includes_proposal_seed_draft_and_saved(monkeypatch):
         },
     }
     context = service.ProfileContext(
-        name="neuralsignal",
+        name="trading_researcher",
         profile=profile,
         memory_service=_FakeMemoryService(records=[run_record, saved_seed]),
     )
@@ -401,7 +401,7 @@ def test_get_run_bundle_includes_proposal_seed_draft_and_saved(monkeypatch):
     monkeypatch.setattr(service, "list_proposal_seeds", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(service, "list_proposal_seeds", lambda *_args, **_kwargs: [saved_seed])
 
-    bundle = service.get_run_bundle("neuralsignal", "exp-root")
+    bundle = service.get_run_bundle("trading_researcher", "exp-root")
 
     proposal_seed = bundle["run"]["proposal_seed"]
     assert proposal_seed["draft"]["proposal_template"]["name"] == "proposal-root"
@@ -411,7 +411,7 @@ def test_get_run_bundle_includes_proposal_seed_draft_and_saved(monkeypatch):
 
 def test_get_run_bundle_includes_proposed_next_steps_panel(monkeypatch):
     profile = {
-        "name": "neuralsignal",
+        "name": "trading_researcher",
         "storage": {},
         "evaluation": {"primary_metric": "test_auc"},
     }
@@ -449,7 +449,7 @@ def test_get_run_bundle_includes_proposed_next_steps_panel(monkeypatch):
         },
     }
     context = service.ProfileContext(
-        name="neuralsignal",
+        name="trading_researcher",
         profile=profile,
         memory_service=_FakeMemoryService(records=[run_record, next_step_record]),
     )
@@ -462,19 +462,19 @@ def test_get_run_bundle_includes_proposed_next_steps_panel(monkeypatch):
     monkeypatch.setattr(service, "list_run_handoffs", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(service, "list_proposal_seeds", lambda *_args, **_kwargs: [])
 
-    bundle = service.get_run_bundle("neuralsignal", "exp-root")
+    bundle = service.get_run_bundle("trading_researcher", "exp-root")
 
     panel = next(item for item in bundle["run"]["text_panels"] if item["title"] == "Proposed Next Steps")
     assert "Try residual signal probe" in panel["body"]
     assert "Priority: high" in panel["body"]
     assert "Suggested Direction: Probe residual stream signals around hallucination onset" in panel["body"]
     assert bundle["run"]["next_steps"][0]["record_id"] == "next_step:1"
-    assert bundle["run"]["next_steps"][0]["copy_command"] == 'uv run python main.py --profile neuralsignal --next-step "next_step:1"'
+    assert bundle["run"]["next_steps"][0]["copy_command"] == 'uv run python main.py --profile trading_researcher --next-step "next_step:1"'
 
 
 def test_get_run_bundle_includes_all_original_ideas(monkeypatch):
     profile = {
-        "name": "neuralsignal",
+        "name": "trading_researcher",
         "storage": {},
         "evaluation": {"primary_metric": "test_auc"},
     }
@@ -510,7 +510,7 @@ def test_get_run_bundle_includes_all_original_ideas(monkeypatch):
         "metadata": {"research_direction": "initial direction"},
     }
     context = service.ProfileContext(
-        name="neuralsignal",
+        name="trading_researcher",
         profile=profile,
         memory_service=_FakeMemoryService(records=[run_record, idea_a, idea_b]),
     )
@@ -523,7 +523,7 @@ def test_get_run_bundle_includes_all_original_ideas(monkeypatch):
     monkeypatch.setattr(service, "list_run_handoffs", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(service, "list_proposal_seeds", lambda *_args, **_kwargs: [])
 
-    bundle = service.get_run_bundle("neuralsignal", "exp-root")
+    bundle = service.get_run_bundle("trading_researcher", "exp-root")
 
     panel = next(item for item in bundle["run"]["text_panels"] if item["title"] == "Ideas")
     assert "Original idea A" in panel["body"]
@@ -534,7 +534,7 @@ def test_get_run_bundle_includes_all_original_ideas(monkeypatch):
 
 def test_get_run_bundle_relates_ideas_by_run_family(monkeypatch):
     profile = {
-        "name": "neuralsignal",
+        "name": "trading_researcher",
         "storage": {},
         "evaluation": {"primary_metric": "test_auc"},
     }
@@ -565,7 +565,7 @@ def test_get_run_bundle_relates_ideas_by_run_family(monkeypatch):
         },
     }
     context = service.ProfileContext(
-        name="neuralsignal",
+        name="trading_researcher",
         profile=profile,
         memory_service=_FakeMemoryService(records=[run_record, idea_record]),
     )
@@ -578,7 +578,7 @@ def test_get_run_bundle_relates_ideas_by_run_family(monkeypatch):
     monkeypatch.setattr(service, "list_run_handoffs", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(service, "list_proposal_seeds", lambda *_args, **_kwargs: [])
 
-    bundle = service.get_run_bundle("neuralsignal", "exp-root")
+    bundle = service.get_run_bundle("trading_researcher", "exp-root")
 
     panel = next(item for item in bundle["run"]["text_panels"] if item["title"] == "Ideas")
     assert "Original family idea" in panel["body"]
@@ -675,7 +675,7 @@ def test_list_run_summaries_keeps_parent_pipeline_run_when_child_experiment_exis
 
 
 def test_create_brainstorm_session_accepts_source_experiment_seed(monkeypatch):
-    profile = {"name": "neuralsignal"}
+    profile = {"name": "trading_researcher"}
     captured: dict[str, object] = {}
 
     class _FakeEngine:
@@ -708,7 +708,7 @@ def test_create_brainstorm_session_accepts_source_experiment_seed(monkeypatch):
     monkeypatch.setattr(service, "create_brainstorm_state", _fake_create_state)
     monkeypatch.setattr(service, "persist_brainstorm_session", lambda *_args, **_kwargs: {})
 
-    result = service.create_brainstorm_session("neuralsignal", {"source_experiment": "exp-1"})
+    result = service.create_brainstorm_session("trading_researcher", {"source_experiment": "exp-1"})
 
     assert captured["direction"] == "seeded direction"
     assert captured["seed"]["source_experiment_record_id"] == "exp-1"

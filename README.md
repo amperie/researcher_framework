@@ -17,9 +17,9 @@ Pipeline mode is the deterministic research execution path. It starts from a res
 Use pipeline mode when you already know the direction you want to test, or when a brainstorm/session/UI handoff has produced concrete proposals.
 
 ```bash
-uv run python main.py --mode pipeline --profile neuralsignal --direction "attention head specialization"
-uv run python main.py --profile neuralsignal --proposal-seed "proposal_seed:..."
-uv run python main.py --profile neuralsignal --resume-from "experiment_result:..." --start-node implement
+uv run python main.py --mode pipeline --profile trading_researcher --direction "attention head specialization"
+uv run python main.py --profile trading_researcher --proposal-seed "proposal_seed:..."
+uv run python main.py --profile trading_researcher --resume-from "experiment_result:..." --start-node implement
 ```
 
 The graph remains profile-driven. For example, a profile can run the full synchronous path, use async `submit_experiment_jobs` / `check_experiment_jobs`, or start from a later node when the initial state already contains proposals or implementation plans.
@@ -29,7 +29,7 @@ The graph remains profile-driven. For example, a profile can run the full synchr
 Brainstorm mode is the exploratory path. It is designed for cases where the agent should reason more freely before the structured pipeline takes over: compare high-level concepts, pull in prior memory, challenge assumptions, narrow open questions, sketch candidate ideas, and turn the discussion into a draft execution plan.
 
 ```bash
-uv run python main.py --mode brainstorm --profile neuralsignal --direction "generalization signals across attention heads"
+uv run python main.py --mode brainstorm --profile trading_researcher --direction "generalization signals across attention heads"
 uv run python main.py --mode brainstorm --profile trading --resume-brainstorm "<session-id>"
 ```
 
@@ -76,7 +76,7 @@ Given a direction like `"attention head specialization"`, a brainstorm handoff, 
 
 Profiles live under `configs/profiles/` and are the single source of truth for a research domain.
 
-- `neuralsignal`: LLM internals probing and hallucination-detection research. Generates `FeatureSetBase` subclasses, creates datasets from scan snapshots, trains detector models, and evaluates metrics such as `test_auc`.
+- `trading_researcher`: LLM internals probing and hallucination-detection research. Generates `FeatureSetBase` subclasses, creates datasets from scan snapshots, trains detector models, and evaluates metrics such as `test_auc`.
 - `trading`: algorithmic trading research scaffold. Uses the same graph and profile model to generate strategy code, apply validation and risk constraints, and delegate execution to a trading adapter.
 
 A profile controls the step list, prompts, research tools, datasets, base classes, execution mode, evaluation thresholds, and storage targets. In practice, most domain customization belongs in the profile rather than in graph code.
@@ -98,36 +98,36 @@ uv run python main.py --list-profiles
 List nodes for a profile:
 
 ```powershell
-uv run python main.py --profile neuralsignal --list-nodes
+uv run python main.py --profile trading_researcher --list-nodes
 ```
 
 Run the main pipeline from a fresh direction:
 
 ```powershell
-uv run python main.py --profile neuralsignal --direction "attention head specialization"
+uv run python main.py --profile trading_researcher --direction "attention head specialization"
 ```
 
 Run all proposed next steps once, or continuously loop through the top promoted next step:
 
 ```powershell
 uv run python main.py --profile trading --direction "SPY intraday momentum" --run-next-steps-once
-uv run python main.py --profile neuralsignal --direction "residual entropy features" --loop
+uv run python main.py --profile trading_researcher --direction "residual entropy features" --loop
 ```
 
 Run the pipeline from saved seeds:
 
 ```powershell
-uv run python main.py --profile neuralsignal --next-step "next_step:..."
-uv run python main.py --profile neuralsignal --source-experiment "exp-123" --proposal-seed "proposal_seed:..."
-uv run python main.py --profile neuralsignal --source-experiment "exp-123" --handoff "run_handoff:..."
+uv run python main.py --profile trading_researcher --next-step "next_step:..."
+uv run python main.py --profile trading_researcher --source-experiment "exp-123" --proposal-seed "proposal_seed:..."
+uv run python main.py --profile trading_researcher --source-experiment "exp-123" --handoff "run_handoff:..."
 ```
 
 Resume the pipeline from memory or a state snapshot:
 
 ```powershell
-uv run python main.py --profile neuralsignal --resume-from "experiment_result:..." --start-node implement
-uv run python main.py --profile neuralsignal --start-node check_experiment_jobs --resume-snapshot
-uv run python main.py --profile neuralsignal --start-node implement --resume-snapshot dev/state/neuralsignal/after_plan_implementation.json
+uv run python main.py --profile trading_researcher --resume-from "experiment_result:..." --start-node implement
+uv run python main.py --profile trading_researcher --start-node check_experiment_jobs --resume-snapshot
+uv run python main.py --profile trading_researcher --start-node implement --resume-snapshot dev/state/trading_researcher/after_plan_implementation.json
 ```
 
 Start brainstorm mode from a fresh prompt:
@@ -149,22 +149,22 @@ uv run python main.py --mode brainstorm --profile trading --next-step "next_step
 
 In brainstorm mode, imported run context, proposal templates, and lineage are loaded into the brainstorm session so you can adjust them before using `execute` to hand off into the main pipeline.
 
-Attach campaign metadata or force NeuralSignal dataset regeneration when needed:
+Attach campaign metadata or force TradingResearcher dataset regeneration when needed:
 
 ```powershell
 uv run python main.py --profile trading --direction "factor rotation" --campaign-id "camp-1" --campaign-title "Macro rotation" --campaign-variant-id "v1" --campaign-variant-title "Baseline" --campaign-variant-index 1 --campaign-size 3
-uv run python main.py --profile neuralsignal --direction "new detector" --force-dataset-refresh
+uv run python main.py --profile trading_researcher --direction "new detector" --force-dataset-refresh
 ```
 
 Full CLI reference: [`docs/main_cli_usage.md`](docs/main_cli_usage.md).
 
 ## Adding A New Research Domain
 
-To add a new domain, copy an existing profile such as `configs/profiles/neuralsignal.yaml`, update the domain prompts, datasets, tools, base classes, and thresholds, then point `experiment_adapter` at a new `plugins/<domain>/adapter.py`. If the adapter implements the same small prepare/execute or async submit/check interface, the existing graph can run the new domain without structural changes.
+To add a new domain, copy an existing profile such as `configs/profiles/trading_researcher.yaml`, update the domain prompts, datasets, tools, base classes, and thresholds, then point `experiment_adapter` at a new `plugins/<domain>/adapter.py`. If the adapter implements the same small prepare/execute or async submit/check interface, the existing graph can run the new domain without structural changes.
 
 ## Example Prior Run
 
-The current stored `neuralsignal` runs include a strong prior result for `per_projection_residual_entropy`:
+The current stored `trading_researcher` runs include a strong prior result for `per_projection_residual_entropy`:
 
 - `test_auc`: `0.8787`
 - `test_f1`: `0.8023`
@@ -244,7 +244,7 @@ The memory envelope distinguishes:
 - `object_key`: stable object identity
 - `object_role`: how the object is being remembered, such as `artifact`, `implementation`, or `result`
 
-For deterministic reuse, adapters can persist exact-match fingerprints in record metadata. The current `neuralsignal` adapter stores `dataset_config_fingerprint` and checks memory before creating a dataset. If an identical ready dataset already exists and its referenced file still exists, it reuses that dataset instead of recomputing it.
+For deterministic reuse, adapters can persist exact-match fingerprints in record metadata. The current `trading_researcher` adapter stores `dataset_config_fingerprint` and checks memory before creating a dataset. If an identical ready dataset already exists and its referenced file still exists, it reuses that dataset instead of recomputing it.
 
 Full documentation:
 
@@ -273,34 +273,34 @@ The graph state stores lightweight job metadata in `state['experiment_jobs']`. `
 
 ---
 
-## neuralsignal Plugin
+## trading_researcher Plugin
 
-The `neuralsignal` plugin generates `FeatureSetBase` subclasses and runs NeuralSignal automation through isolated subprocess tasks. It supports both synchronous adapter methods and the async job-node flow used by the `neuralsignal` profile.
+The `trading_researcher` plugin generates `FeatureSetBase` subclasses and runs TradingResearcher automation through isolated subprocess tasks. It supports both synchronous adapter methods and the async job-node flow used by the `trading_researcher` profile.
 
-The current NeuralSignal integration adds several safety and compatibility layers:
+The current TradingResearcher integration adds several safety and compatibility layers:
 
 - generated feature sets are wrapped so common real scan-shape variants still work when code assumes `outputs[0][layer_id]`
 - empty feature outputs fail loudly instead of silently producing target-only CSVs
 - balanced dataset pulls are supported through profile config
 - long-running Mongo scan iteration uses `no_cursor_timeout=True` to reduce `CursorNotFound` failures during dataset builds
-- model tasks run from the dataset directory so NeuralSignal's current `file_out` handling resolves the real CSV correctly
+- model tasks run from the dataset directory so TradingResearcher's current `file_out` handling resolves the real CSV correctly
 
-The async NeuralSignal task chain is:
+The async TradingResearcher task chain is:
 
 ```text
 submit_experiment_jobs
   -> plugins.job_runner.LocalProcessRunner or Ray runner
-    -> plugins.neuralsignal.tasks.create_dataset
-      -> neuralsignal.automation.create_dataset
+    -> plugins.trading_researcher.tasks.create_dataset
+      -> trading_researcher.automation.create_dataset
 
 check_experiment_jobs
   -> collect dataset result.json
   -> submit model job
-    -> plugins.neuralsignal.tasks.create_s1_model
-      -> neuralsignal.automation.create_s1_model
+    -> plugins.trading_researcher.tasks.create_s1_model
+      -> trading_researcher.automation.create_s1_model
 ```
 
-The task wrapper merges the agent payload over NeuralSignal's packaged automation defaults, then injects the generated feature set through a real NeuralSignal `FeatureProcessor`.
+The task wrapper merges the agent payload over TradingResearcher's packaged automation defaults, then injects the generated feature set through a real TradingResearcher `FeatureProcessor`.
 
 ---
 
@@ -322,7 +322,7 @@ To run trading experiments end to end, the adapter is expected to load the gener
 
 The generated-work tree is rooted at `dev_root`, which defaults to `dev/`. The runtime also performs a periodic best-effort cleanup of disposable files under that root using `maintenance.dev_cleanup` in `configs/config.yaml`.
 
-Logging writes the main application stream to `logs/research.log`. Plugin-specific adapter and subprocess logs can also be routed to plugin-named files such as `logs/research.neuralsignal.log` to keep subprocess-heavy domains separate from the main pipeline log.
+Logging writes the main application stream to `logs/research.log`. Plugin-specific adapter and subprocess logs can also be routed to plugin-named files such as `logs/research.trading_researcher.log` to keep subprocess-heavy domains separate from the main pipeline log.
 
 ---
 

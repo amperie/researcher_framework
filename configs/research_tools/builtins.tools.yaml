@@ -255,7 +255,7 @@ tools:
       - "*risk*.py"
     max_files: 80
 
-  neuralsignal_arxiv:
+  trading_researcher_arxiv:
     tool: core.tools.research_tools.collect_arxiv
     path: core.tools.research_tools.collect_arxiv
     name: arxiv
@@ -266,13 +266,13 @@ tools:
     max_queries: 4
     match_any: false
 
-  neuralsignal_memory:
+  trading_researcher_memory:
     tool: core.tools.research_tools.collect_memory
     path: core.tools.research_tools.collect_memory
     name: memory
     n_results: 5
 
-  neuralsignal_profile_context:
+  trading_researcher_profile_context:
     tool: core.tools.research_tools.collect_profile_context
     path: core.tools.research_tools.collect_profile_context
     name: profile_context

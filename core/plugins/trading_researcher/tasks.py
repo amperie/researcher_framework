@@ -1,6 +1,6 @@
-"""NeuralSignal task callables for the generic subprocess runner.
+"""TradingResearcher task callables for the generic subprocess runner.
 
-These functions run inside the NeuralSignal-capable Python process. Keep heavy
+These functions run inside the TradingResearcher-capable Python process. Keep heavy
 imports here instead of in ``adapter.py``.
 """
 from __future__ import annotations
@@ -20,12 +20,12 @@ log = get_logger(__name__)
 
 
 def create_dataset(payload: dict[str, Any]) -> dict[str, Any]:
-    """Create a NeuralSignal feature dataset and return output file paths."""
+    """Create a TradingResearcher feature dataset and return output file paths."""
     cfg = _automation_config(payload)
     _enable_mongo_no_cursor_timeout()
     _inject_feature_processor(cfg)
 
-    from neuralsignal.automation import create_dataset as ns_create_dataset  # type: ignore
+    from trading_researcher.automation import create_dataset as ns_create_dataset  # type: ignore
 
     balanced_cfg = cfg.get("balanced_target") or {}
     if balanced_cfg.get("enabled"):
@@ -44,11 +44,11 @@ def create_dataset(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_s1_model(payload: dict[str, Any]) -> dict[str, Any]:
-    """Train a NeuralSignal S1 model and return best-model metrics."""
+    """Train a TradingResearcher S1 model and return best-model metrics."""
     cfg = _automation_config(payload)
     _inject_feature_processor(cfg)
 
-    from neuralsignal.automation import create_s1_model as ns_create_s1_model  # type: ignore
+    from trading_researcher.automation import create_s1_model as ns_create_s1_model  # type: ignore
 
     models = ns_create_s1_model(cfg)
     if not models:
@@ -126,8 +126,8 @@ def run_proposal_branch(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _automation_config(payload: dict[str, Any]) -> dict[str, Any]:
-    """Merge task payload over NeuralSignal's packaged automation defaults."""
-    from neuralsignal.automation import get_config  # type: ignore
+    """Merge task payload over TradingResearcher's packaged automation defaults."""
+    from trading_researcher.automation import get_config  # type: ignore
 
     cfg = deepcopy(get_config())
     payload_copy = deepcopy(payload)
@@ -349,7 +349,7 @@ def _as_int_counts(value: Any) -> dict[str, int]:
 
 
 def _enable_mongo_no_cursor_timeout() -> None:
-    """Patch the NeuralSignal Mongo backend for long-running dataset scans.
+    """Patch the TradingResearcher Mongo backend for long-running dataset scans.
 
     Dataset creation can spend many seconds per scan deserializing tensors and
     featurizing activations. The SDK's default Mongo cursor uses the server's
@@ -357,7 +357,7 @@ def _enable_mongo_no_cursor_timeout() -> None:
     CursorNotFound. Using no_cursor_timeout keeps the cursor alive for the
     lifetime of the task process.
     """
-    from neuralsignal.backend.mongo_backend import MongoBackend  # type: ignore
+    from trading_researcher.backend.mongo_backend import MongoBackend  # type: ignore
 
     if getattr(MongoBackend, "_nsr_no_cursor_timeout_enabled", False):
         return
@@ -419,7 +419,7 @@ def _save_figure(figure: Any, name: str) -> str:
         return ""
 
     safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name.strip()) or "figure"
-    out_dir = make_temp_dir(prefix="nsr_figures_", category="neuralsignal")
+    out_dir = make_temp_dir(prefix="tr_figures_", category="trading_researcher")
     out_path = out_dir / f"{safe_name}.png"
     try:
         figure.savefig(out_path)
@@ -440,8 +440,8 @@ def _inject_feature_processor(cfg: dict[str, Any]) -> None:
     if not cfg.get("feature_set_class_path"):
         return
 
-    from neuralsignal.core.modules.feature_sets.feature_processor import FeatureProcessor  # type: ignore
-    from neuralsignal.core.modules.feature_sets import feature_set_base as real_base_module  # type: ignore
+    from trading_researcher.core.modules.feature_sets.feature_processor import FeatureProcessor  # type: ignore
+    from trading_researcher.core.modules.feature_sets import feature_set_base as real_base_module  # type: ignore
 
     FeatureSetBase = real_base_module.FeatureSetBase
 
@@ -459,9 +459,9 @@ def _inject_feature_processor(cfg: dict[str, Any]) -> None:
         pass
     finally:
         # Generated files may install offline validation stubs into sys.modules.
-        # Restore the real runtime base class before NeuralSignal imports use it.
+        # Restore the real runtime base class before TradingResearcher imports use it.
         sys.modules[
-            "neuralsignal.core.modules.feature_sets.feature_set_base"
+            "trading_researcher.core.modules.feature_sets.feature_set_base"
         ].FeatureSetBase = FeatureSetBase
 
     cls = _find_feature_set_class(module, class_name, FeatureSetBase)
@@ -524,9 +524,9 @@ def _wrap_feature_set_class(cls: type, feature_set_base: type) -> type:
 
 
 class _ScanShapeCompatibleFeatureSet:
-    """Retry generated feature sets with common NeuralSignal scan shapes.
+    """Retry generated feature sets with common TradingResearcher scan shapes.
 
-    Generated code is validated on synthetic scans, but real NeuralSignal scans
+    Generated code is validated on synthetic scans, but real TradingResearcher scans
     currently store activations as a flat dict keyed by string layer ids:
     ``outputs[layer_id] -> Tensor``. Some generated implementations assume a
     pass/batch wrapper: ``outputs[0][layer_id]``. This adapter keeps generated

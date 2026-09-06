@@ -1,7 +1,7 @@
 """Create dataset step — build a feature dataset for each experiment proposal.
 
 Delegates to the experiment adapter declared in the profile. The adapter handles
-all domain-specific logic (neuralsignal scan extraction, trading bar assembly, etc.)
+all domain-specific logic (trading_researcher scan extraction, trading bar assembly, etc.)
 
 Reads:
     state['proposals']

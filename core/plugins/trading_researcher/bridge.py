@@ -1,7 +1,7 @@
-"""Compatibility wrapper for NeuralSignal subprocess tasks.
+"""Compatibility wrapper for TradingResearcher subprocess tasks.
 
 The generic runner is ``plugins/task_runner.py``. This file remains only so old
-commands such as ``plugins/neuralsignal/bridge.py create_dataset`` continue to
+commands such as ``plugins/trading_researcher/bridge.py create_dataset`` continue to
 work while callers migrate to dotted task paths.
 """
 from __future__ import annotations
@@ -12,8 +12,8 @@ import sys
 from pathlib import Path
 
 _TASKS = {
-    "create_dataset": "core.plugins.neuralsignal.tasks.create_dataset",
-    "create_s1_model": "core.plugins.neuralsignal.tasks.create_s1_model",
+    "create_dataset": "core.plugins.trading_researcher.tasks.create_dataset",
+    "create_s1_model": "core.plugins.trading_researcher.tasks.create_s1_model",
 }
 
 

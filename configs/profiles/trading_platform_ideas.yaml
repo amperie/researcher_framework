@@ -1,0 +1,163 @@
+name: trading_platform_ideas
+description: >
+  Pre-approval Quant Crucible platform profile. It researches a user trading
+  direction, validates feasibility through refinement, and returns exactly
+  three reviewable strategy ideas. It does not create code or run experiments.
+
+pipeline:
+  steps:
+    - research
+    - ideate
+    - refine
+
+llm:
+  default_model: claude-haiku-4-5
+  default_max_output_tokens: 1800
+  prompt_context:
+    ideate_max_digests: 2
+    ideate_max_artifacts: 5
+  step_overrides:
+    arxiv_query_rewrite: claude-haiku-4-5
+    research: claude-haiku-4-5
+    ideate: claude-haiku-4-5
+    refine: claude-haiku-4-5
+
+platform:
+  package: trading
+  source_path: ../trading_guy
+
+research:
+  max_summary_artifacts: 12
+  tools:
+    - ref: trading_profile_context
+      relevance_score_threshold: 5
+    - ref: trading_adapter_context
+      relevance_score_threshold: 5
+    - ref: trading_strategy_library
+      patterns: ["*strategy*.py", "*signal*.py", "*portfolio*.py", "*risk*.py"]
+      max_files: 50
+      relevance_score_threshold: 5
+    - ref: trading_prior_experiments
+      n_results: 5
+      relevance_score_threshold: 7
+    - ref: trading_arxiv
+      relevance_score_threshold: 7
+      max_papers_to_digest: 1
+  domain_context: >
+    Focus on implementable, leakage-safe algorithmic trading signal logic that
+    can become reusable Quant Crucible Algorithm and Portfolio components.
+
+base_classes:
+  - name: Algorithm
+    module: trading.core.algorithm
+    description: >
+      Base class for generated trading algorithms. Implement on_data_logic()
+      and emit MarketSignal objects from current and historical bars only.
+    key_interface: |
+      class Algorithm:
+          crucible_metadata = {
+              "schema_version": 1,
+              "role": "algorithm",
+              "tunables": {},
+              "required_symbols": [],
+              "required_fields": ["open", "high", "low", "close", "volume"],
+              "signal_contract": {"emits": ["BUY", "SELL"]},
+          }
+          def __init__(self, cfg: dict | None = None, history_length: int = 0): ...
+          def on_data_logic(self, data): ...
+
+data_sources:
+  - name: platform_ohlcv
+    description: "OHLCV data accepted by Quant Crucible datasets"
+    path: data/SPY_5min.csv
+    fields:
+      guaranteed: [timestamp, symbol, open, high, low, close, volume]
+      optional: [trade_count, vwap, exchange]
+
+risk_constraints:
+  no_lookahead: true
+  max_gross_exposure: 1.0
+  market_orders_only: true
+  require_history_warmup: true
+
+validate:
+  stage: idea_feasibility
+  output_count: 3
+  checks:
+    - no_lookahead
+    - platform_contract_fit
+    - available_data_fields
+    - clear_portfolio_boundary
+    - testable_after_user_approval
+
+storage:
+  mlflow_experiment: trading_agent_experiments
+  mongodb_results_db: trading_researcher
+  mongodb_results_collection: trading_platform_ideas
+  chroma_collection: trading_agent_experiments
+  memory_mongodb_db: trading_researcher
+  memory_mongodb_collection: trading_memory_records
+  artifacts_mongodb_db: trading_researcher
+  artifacts_collection: trading_artifacts
+  memory_neo4j_database: neo4j
+
+prompts:
+  research:
+    artifact_score_system: |
+      You are an expert in quantitative finance, systematic trading, and robust
+      backtesting. Score the artifact 0-10 for usefulness in producing safe,
+      testable Quant Crucible strategy ideas. Prefer concrete signal logic,
+      realistic data requirements, no-lookahead validation, transaction-cost
+      awareness, and clear risk controls. Respond with valid JSON only:
+      {"score": <int 0-10>, "reason": "<one sentence>", "usefulness": "<how to use it>", "risks": "<limitations>"}
+
+    artifact_summary_system: |
+      Synthesize the top artifacts into concise implementation guidance for
+      Quant Crucible idea generation. Focus on signal logic, required data
+      fields, symbols, tunables, warmup, leakage risks, portfolio boundary, and
+      smoke/research backtest validation requirements.
+
+    score_system: |
+      Score the paper 0-10 for relevance to safe, implementable systematic
+      trading ideas. Respond with valid JSON only:
+      {"score": <int 0-10>, "reason": "<one sentence>"}
+
+    summary_system: |
+      Synthesize the provided papers into concise guidance for implementable
+      systematic trading ideas, including data, validation, costs, and risks.
+
+    digest_system: |
+      Extract methodology, data assumptions, trading rules, validation protocol,
+      costs, risk management, limitations, and implementation ideas.
+
+  ideate:
+    system: |
+      Propose exactly 3 algorithmic trading ideas grounded in the research
+      summary and scored artifacts.
+
+      Each idea must:
+      - Be implementable as a trading.core.algorithm.Algorithm subclass
+      - Emit MarketSignal objects from on_data_logic using only current and past bars
+      - Include explicit warmup, symbol, timeframe, and data-field requirements
+      - Leave position sizing, exits, stops, cash, and order behavior to a Portfolio
+      - Be testable later through Quant Crucible smoke and research backtest stages
+
+      Return a JSON array of exactly 3 objects:
+      [
+        {
+          "name": "snake_case_strategy_name",
+          "description": "What the signal measures",
+          "hypothesis": "Why it may produce risk-adjusted returns",
+          "rationale": "What research or context inspired this"
+        }
+      ]
+
+  refine:
+    system: |
+      Validate these ideas for feasibility and leakage risk. Return exactly 3
+      accepted or revised ideas, ordered strongest first.
+
+      Reject or revise ideas that require future data, unavailable fields,
+      vague symbol handling, portfolio/order behavior inside the algorithm, or
+      assumptions the platform cannot test. Keep the same schema and return only
+      valid JSON.

@@ -29,7 +29,7 @@ def test_filesystem_artifact_store_copies_file_and_registers_metadata(tmp_path):
     record = store.store_file(
         source,
         artifact_type="dataset",
-        profile_name="neuralsignal",
+        profile_name="trading_researcher",
         proposal_name="activation_sparsity",
         experiment_id="exp-1",
         metadata={"rows": 1, "columns": 2},
@@ -59,7 +59,7 @@ def test_artifact_store_writes_json_artifact(tmp_path):
     record = store.store_json(
         {"metrics": {"test_auc": 0.71}},
         artifact_type="model",
-        profile_name="neuralsignal",
+        profile_name="trading_researcher",
         proposal_name="activation_sparsity",
         experiment_id="exp-2",
         artifact_name="model.json",
@@ -118,11 +118,11 @@ def test_s3_backend_uploads_file_and_returns_uri(tmp_path):
         client=client,
     )
 
-    uri = backend.put_file(source, "neuralsignal/dataset/file.csv")
+    uri = backend.put_file(source, "trading_researcher/dataset/file.csv")
 
-    assert uri == "http://minio:9000/artifacts/research/neuralsignal/dataset/file.csv"
+    assert uri == "http://minio:9000/artifacts/research/trading_researcher/dataset/file.csv"
     assert client.calls[0]["bucket"] == "artifacts"
-    assert client.calls[0]["key"] == "research/neuralsignal/dataset/file.csv"
+    assert client.calls[0]["key"] == "research/trading_researcher/dataset/file.csv"
     assert client.calls[0]["body"] == source.read_bytes()
 
 
@@ -155,13 +155,13 @@ def test_artifact_store_records_s3_location_fields(tmp_path):
     record = store.store_file(
         source,
         artifact_type="dataset",
-        profile_name="neuralsignal",
+        profile_name="trading_researcher",
         proposal_name="activation_sparsity",
     )
 
     assert record["storage_bucket"] == "artifacts"
     assert record["storage_endpoint_url"] == "http://minio:9000"
-    assert record["storage_key"].startswith("research/neuralsignal/dataset/")
+    assert record["storage_key"].startswith("research/trading_researcher/dataset/")
 
 
 def test_get_artifact_store_uses_profile_specific_mongo_namespace():
@@ -180,7 +180,7 @@ def test_get_artifact_store_uses_profile_specific_mongo_namespace():
         "storage": {
             "mongodb_results_db": "researcher",
             "artifacts_mongodb_db": "researcher",
-            "artifacts_collection": "neuralsignal_artifacts",
+            "artifacts_collection": "trading_researcher_artifacts",
         }
     }
 
@@ -189,4 +189,4 @@ def test_get_artifact_store_uses_profile_specific_mongo_namespace():
 
     assert isinstance(store.metadata_store, MongoArtifactMetadataStore)
     assert store.metadata_store.db_name == "researcher"
-    assert store.metadata_store.collection_name == "neuralsignal_artifacts"
+    assert store.metadata_store.collection_name == "trading_researcher_artifacts"

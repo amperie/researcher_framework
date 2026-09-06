@@ -1,7 +1,7 @@
 import torch
-from neuralsignal.core.modules.feature_sets.feature_set_base\
+from trading_researcher.core.modules.feature_sets.feature_set_base\
     import FeatureSetBase
-from neuralsignal.core.modules.feature_sets.feature_utils\
+from trading_researcher.core.modules.feature_sets.feature_utils\
     import is_layer_string_match_in_list
 import pandas as pd
 from transformers import AutoModelForSeq2SeqLM

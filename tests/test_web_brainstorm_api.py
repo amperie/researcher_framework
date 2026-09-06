@@ -12,7 +12,7 @@ def test_create_brainstorm_session_endpoint_returns_payload(monkeypatch):
     )
     client = TestClient(app)
 
-    response = client.post("/api/brainstorm/sessions", json={"profile_name": "neuralsignal", "direction": "test"})
+    response = client.post("/api/brainstorm/sessions", json={"profile_name": "trading_researcher", "direction": "test"})
 
     assert response.status_code == 200
     assert response.json()["session_id"] == "brainstorm-1"
@@ -25,7 +25,7 @@ def test_get_brainstorm_session_endpoint_returns_payload(monkeypatch):
     )
     client = TestClient(app)
 
-    response = client.get("/api/brainstorm/sessions/neuralsignal/brainstorm-1")
+    response = client.get("/api/brainstorm/sessions/trading_researcher/brainstorm-1")
 
     assert response.status_code == 200
     assert response.json()["session_id"] == "brainstorm-1"
@@ -38,7 +38,7 @@ def test_command_brainstorm_session_endpoint_returns_payload(monkeypatch):
     )
     client = TestClient(app)
 
-    response = client.post("/api/brainstorm/sessions/neuralsignal/brainstorm-1/commands", json={"command": "continue"})
+    response = client.post("/api/brainstorm/sessions/trading_researcher/brainstorm-1/commands", json={"command": "continue"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "running"
@@ -51,7 +51,7 @@ def test_execute_brainstorm_session_endpoint_returns_payload(monkeypatch):
     )
     client = TestClient(app)
 
-    response = client.post("/api/brainstorm/sessions/neuralsignal/brainstorm-1/execute", json={})
+    response = client.post("/api/brainstorm/sessions/trading_researcher/brainstorm-1/execute", json={})
 
     assert response.status_code == 200
     assert response.json()["start_node"] == "implement"

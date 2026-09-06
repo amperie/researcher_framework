@@ -11,7 +11,7 @@ from core.graph.nodes.implement import _proposal_execution_context, implement_no
 
 def _profile():
     return {
-        "name": "neuralsignal",
+        "name": "trading_researcher",
         "datasets": [],
         "base_classes": [],
         "prompts": {"implement": {"system": "Write code."}},
@@ -26,12 +26,12 @@ def test_implement_registers_artifact_and_persists_memory(tmp_path):
     store.store_file.return_value = {
         "artifact_id": "impl-1",
         "uri": "s3://bucket/impl.py",
-        "storage_key": "neuralsignal/implementation/impl-1/impl.py",
+        "storage_key": "trading_researcher/implementation/impl-1/impl.py",
         "storage_bucket": "researcher-artifacts",
         "storage_endpoint_url": "http://hp.lan:9000",
     }
     state = {
-        "profile_name": "neuralsignal",
+        "profile_name": "trading_researcher",
         "implementation_plans": [{"proposal_name": "idea_a", "class_name": "MyFeature"}],
     }
 
@@ -45,7 +45,7 @@ def test_implement_registers_artifact_and_persists_memory(tmp_path):
     assert implementation["stored_artifact_id"] == "impl-1"
     assert implementation["stored_artifact_uri"] == "s3://bucket/impl.py"
     assert implementation["stored_artifact_bucket"] == "researcher-artifacts"
-    assert implementation["stored_artifact_key"] == "neuralsignal/implementation/impl-1/impl.py"
+    assert implementation["stored_artifact_key"] == "trading_researcher/implementation/impl-1/impl.py"
     persist_memory.assert_called_once()
 
 
@@ -56,7 +56,7 @@ def test_implement_artifact_failure_is_non_fatal(tmp_path):
     store = MagicMock()
     store.store_file.side_effect = RuntimeError("s3 down")
     state = {
-        "profile_name": "neuralsignal",
+        "profile_name": "trading_researcher",
         "implementation_plans": [{"proposal_name": "idea_a", "class_name": "MyFeature"}],
     }
 
@@ -104,7 +104,7 @@ def test_implement_normalizes_generated_plan_placeholder_before_validation(tmp_p
     llm = MagicMock()
     llm.invoke.return_value = MagicMock(content="class IdeaA:\n    pass\n")
     state = {
-        "profile_name": "neuralsignal",
+        "profile_name": "trading_researcher",
         "implementation_plans": [{"proposal_name": "idea_a", "class_name": "GeneratedPlan"}],
     }
 

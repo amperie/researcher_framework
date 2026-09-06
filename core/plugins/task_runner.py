@@ -2,7 +2,7 @@
 
 This script runs any importable Python callable in a separate process. It is
 domain-agnostic: domain-specific code belongs in task modules such as
-``plugins.neuralsignal.tasks``.
+``plugins.trading_researcher.tasks``.
 
 Usage:
     python plugins/task_runner.py package.module.function

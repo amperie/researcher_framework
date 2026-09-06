@@ -1,6 +1,6 @@
 # `main.py` CLI Usage
 
-[`main.py`](/E:/Programming/NeuralSignalResearcher/main.py:1) is the primary entrypoint for profile discovery, pipeline runs, resume flows, seeded runs, and interactive brainstorm sessions.
+[`main.py`](/E:/Programming/trading_researcher/main.py:1) is the primary entrypoint for profile discovery, pipeline runs, resume flows, seeded runs, and interactive brainstorm sessions.
 
 ## Help
 
@@ -13,7 +13,7 @@ uv run python main.py --help
 
 ```powershell
 uv run python main.py --list-profiles
-uv run python main.py --profile neuralsignal --list-nodes
+uv run python main.py --profile trading_researcher --list-nodes
 ```
 
 If `--profile` is omitted and more than one profile exists, the CLI prompts for one.
@@ -23,7 +23,7 @@ If `--profile` is omitted and more than one profile exists, the CLI prompts for 
 `pipeline` is the default mode.
 
 ```powershell
-uv run python main.py --profile neuralsignal --direction "attention head specialization"
+uv run python main.py --profile trading_researcher --direction "attention head specialization"
 uv run python main.py --mode pipeline --profile trading --direction "SPY regime filters"
 ```
 
@@ -37,7 +37,7 @@ Run modes:
 
 ```powershell
 uv run python main.py --profile trading --direction "SPY intraday momentum" --run-next-steps-once
-uv run python main.py --profile neuralsignal --direction "residual entropy features" --loop
+uv run python main.py --profile trading_researcher --direction "residual entropy features" --loop
 ```
 
 ## Pipeline Seeding
@@ -45,7 +45,7 @@ uv run python main.py --profile neuralsignal --direction "residual entropy featu
 Start from persisted work instead of a fresh direction:
 
 ```powershell
-uv run python main.py --profile neuralsignal --next-step "next_step:123"
+uv run python main.py --profile trading_researcher --next-step "next_step:123"
 uv run python main.py --profile trading --source-experiment "exp-123" --proposal-seed "proposal_seed:123"
 uv run python main.py --profile trading --source-experiment "exp-123" --handoff "run_handoff:123"
 ```
@@ -69,8 +69,8 @@ uv run python main.py --profile trading --resume-from "experiment_result:123" --
 Resume from a state snapshot:
 
 ```powershell
-uv run python main.py --profile neuralsignal --start-node check_experiment_jobs --resume-snapshot
-uv run python main.py --profile neuralsignal --start-node implement --resume-snapshot dev/state/neuralsignal/after_plan_implementation.json
+uv run python main.py --profile trading_researcher --start-node check_experiment_jobs --resume-snapshot
+uv run python main.py --profile trading_researcher --start-node implement --resume-snapshot dev/state/trading_researcher/after_plan_implementation.json
 ```
 
 With no value, `--resume-snapshot` loads `dev/state/<profile>/after_<previous-node>.json` based on `--start-node`.
@@ -135,20 +135,20 @@ Attach campaign lineage to stored results:
 uv run python main.py --profile trading --direction "factor rotation under macro regimes" --campaign-id "camp-1" --campaign-title "Macro rotation study" --campaign-variant-id "v1" --campaign-variant-title "Baseline" --campaign-variant-index 1 --campaign-size 3
 ```
 
-For batched campaign configs, use [`run_campaign.py`](/E:/Programming/NeuralSignalResearcher/run_campaign.py:1):
+For batched campaign configs, use [`run_campaign.py`](/E:/Programming/trading_researcher/run_campaign.py:1):
 
 ```powershell
-uv run python run_campaign.py configs/campaigns/neuralsignal_campaign.yaml
-uv run python run_campaign.py configs/campaigns/neuralsignal_campaign.yaml --dry-run
+uv run python run_campaign.py configs/campaigns/trading_researcher_campaign.yaml
+uv run python run_campaign.py configs/campaigns/trading_researcher_campaign.yaml --dry-run
 ```
 
-## NeuralSignal Dataset Refresh
+## TradingResearcher Dataset Refresh
 
-Force NeuralSignal dataset regeneration instead of memory/local CSV reuse:
+Force TradingResearcher dataset regeneration instead of memory/local CSV reuse:
 
 ```powershell
-uv run python main.py --profile neuralsignal --direction "new detector" --force-dataset-refresh
-uv run python main.py --profile neuralsignal --start-node submit_experiment_jobs --resume-snapshot --force-dataset-refresh
+uv run python main.py --profile trading_researcher --direction "new detector" --force-dataset-refresh
+uv run python main.py --profile trading_researcher --start-node submit_experiment_jobs --resume-snapshot --force-dataset-refresh
 ```
 
 ## Option Compatibility

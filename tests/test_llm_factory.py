@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.llm.factory import get_llm
+from core.llm.factory import LoggedChatModel, get_llm, get_usage_report, reset_usage
 
 
 # ---------------------------------------------------------------------------
@@ -150,3 +150,32 @@ class TestProviderDispatch:
                 get_llm()
 
         assert mock_cls.call_args.kwargs["api_key"] == "sk-mykey"
+
+
+def test_usage_report_tracks_invoked_model_usage():
+    reset_usage()
+    llm = LoggedChatModel(
+        inner=SimpleNamespace(
+            invoke=lambda *args, **kwargs: SimpleNamespace(
+                usage_metadata={
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "total_tokens": 18,
+                }
+            )
+        ),
+        step_name="ideate",
+        provider="openai",
+        model_name="gpt-test",
+    )
+
+    llm.invoke([])
+    report = get_usage_report()
+
+    assert report["provider"] == "openai"
+    assert report["model"] == "gpt-test"
+    assert report["promptTokens"] == 11
+    assert report["completionTokens"] == 7
+    assert report["totalTokens"] == 18
+    assert report["calls"] == 1
+    assert report["steps"][0]["step"] == "ideate"

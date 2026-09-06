@@ -43,13 +43,39 @@ _VALID_PROFILE = {
 # ---------------------------------------------------------------------------
 
 class TestLoadProfile:
-    def test_loads_neuralsignal_profile(self):
-        """The neuralsignal profile must exist and pass validation."""
-        profile = load_profile("neuralsignal")
-        assert profile["name"] == "neuralsignal"
+    def test_loads_trading_researcher_profile(self):
+        """The trading_researcher profile must exist and pass validation."""
+        profile = load_profile("trading_researcher")
+        assert profile["name"] == "trading_researcher"
         assert "pipeline" in profile
         assert "prompts" in profile
         assert "llm" in profile
+
+    def test_platform_idea_profile_stops_before_code_and_returns_three_ideas(self):
+        profile = load_profile("trading_platform_ideas")
+
+        assert profile["pipeline"]["steps"] == ["research", "ideate", "refine"]
+        assert profile["validate"]["output_count"] == 3
+        assert "exactly 3" in profile["prompts"]["ideate"]["system"]
+
+    def test_platform_component_profile_stops_before_experiments_and_next_steps(self):
+        profile = load_profile("trading_platform_components")
+
+        assert profile["pipeline"]["steps"] == [
+            "propose_experiments",
+            "plan_implementation",
+            "implement",
+            "validate",
+        ]
+        disallowed = {
+            "prepare_experiment",
+            "execute_experiment",
+            "evaluate",
+            "store_results",
+            "propose_next_steps",
+            "rank_next_steps",
+        }
+        assert disallowed.isdisjoint(profile["pipeline"]["steps"])
 
     def test_profile_not_found_raises(self):
         with pytest.raises(FileNotFoundError, match="not found"):
@@ -146,8 +172,8 @@ class TestLoadProfile:
 class TestLoadProfileCached:
     def test_returns_same_object_on_repeated_calls(self):
         load_profile_cached.cache_clear()
-        p1 = load_profile_cached("neuralsignal")
-        p2 = load_profile_cached("neuralsignal")
+        p1 = load_profile_cached("trading_researcher")
+        p2 = load_profile_cached("trading_researcher")
         assert p1 is p2
 
     def teardown_method(self):
@@ -159,9 +185,9 @@ class TestLoadProfileCached:
 # ---------------------------------------------------------------------------
 
 class TestListProfiles:
-    def test_lists_at_least_neuralsignal(self):
+    def test_lists_at_least_trading_researcher(self):
         profiles = list_profiles()
-        assert "neuralsignal" in profiles
+        assert "trading_researcher" in profiles
 
     def test_returns_sorted_list(self):
         profiles = list_profiles()

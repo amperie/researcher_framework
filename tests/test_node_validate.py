@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from core.graph.nodes.validate import (
-    _build_neuralsignal_feature_set_contract_test,
+    _build_trading_researcher_feature_set_contract_test,
     _preflight_validation_error,
     _run_tests,
     _strip_fences,
@@ -132,9 +132,9 @@ class MyClass:
         assert _preflight_validation_error(code) == ""
 
 
-class TestNeuralSignalContractTest:
+class TestTradingResearcherContractTest:
     def test_contract_scan_includes_qk_and_output_layers(self):
-        source = _build_neuralsignal_feature_set_contract_test(
+        source = _build_trading_researcher_feature_set_contract_test(
             script_path="dummy.py",
             class_name="DummyClass",
             expected_feature_set_name="dummy_feature",

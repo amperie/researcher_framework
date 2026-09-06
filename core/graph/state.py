@@ -3,7 +3,7 @@
 Every node receives the full state and returns a partial dict of keys to update.
 Fields not returned by a node are left unchanged.
 
-All keys are domain-generic. No neuralsignal-specific or trading-specific fields
+All keys are domain-generic. No trading_researcher-specific or trading-specific fields
 belong here — those details live in the profile YAML and plugin adapters.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ class ResearchState(TypedDict, total=False):
     # Input / control
     # -------------------------------------------------------------------------
     profile_name: str
-    """Name of the active research profile (e.g. 'neuralsignal', 'trading')."""
+    """Name of the active research profile (e.g. 'trading_researcher', 'trading')."""
 
     research_direction: str
     """The research question supplied by the user (or promoted from next_steps)."""
@@ -130,7 +130,7 @@ class ResearchState(TypedDict, total=False):
     # -------------------------------------------------------------------------
     experiment_artifacts: list[dict]
     """Domain-specific prepared artifacts for experiment execution.
-    Examples: NeuralSignal feature datasets, trading market-data bundles,
+    Examples: TradingResearcher feature datasets, trading market-data bundles,
     parameter grids, cached backtest inputs."""
 
     # -------------------------------------------------------------------------

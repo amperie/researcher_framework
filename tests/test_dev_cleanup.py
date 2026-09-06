@@ -43,9 +43,9 @@ def test_cleanup_keeps_recent_state_but_deletes_stale_papers_and_tests_and_termi
     now = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
 
     state_dir = Path(cfg.dev_root) / "state"
-    recent1 = state_dir / "neuralsignal" / "after_recent_1.json"
+    recent1 = state_dir / "trading_researcher" / "after_recent_1.json"
     recent2 = state_dir / "trading" / "after_recent_2.json"
-    old_kept = state_dir / "neuralsignal" / "after_old_kept.json"
+    old_kept = state_dir / "trading_researcher" / "after_old_kept.json"
     old_deleted = state_dir / "trading" / "after_old_deleted.json"
     for path in (recent1, recent2, old_kept, old_deleted):
         _write(path, "{}")
@@ -58,18 +58,18 @@ def test_cleanup_keeps_recent_state_but_deletes_stale_papers_and_tests_and_termi
     _write(old_paper, "digest")
     _set_mtime(old_paper, now - timedelta(days=40))
 
-    old_test = Path(cfg.experiments_dir) / "neuralsignal" / "tests" / "test_old.py"
+    old_test = Path(cfg.experiments_dir) / "trading_researcher" / "tests" / "test_old.py"
     _write(old_test, "def test_old(): pass")
     _set_mtime(old_test, now - timedelta(days=20))
 
-    job_dir = Path(cfg.experiments_dir) / "neuralsignal" / "jobs" / "job-1"
+    job_dir = Path(cfg.experiments_dir) / "trading_researcher" / "jobs" / "job-1"
     _write(
         job_dir / "status.json",
         json.dumps({"status": "succeeded", "updated_at": (now - timedelta(days=10)).isoformat()}),
     )
     _write(job_dir / "stdout.log", "done")
 
-    running_job_dir = Path(cfg.experiments_dir) / "neuralsignal" / "jobs" / "job-2"
+    running_job_dir = Path(cfg.experiments_dir) / "trading_researcher" / "jobs" / "job-2"
     _write(
         running_job_dir / "status.json",
         json.dumps({"status": "running", "updated_at": (now - timedelta(days=10)).isoformat()}),

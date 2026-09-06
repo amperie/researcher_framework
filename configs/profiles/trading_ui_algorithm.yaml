@@ -1,0 +1,222 @@
+name: trading_ui_algorithm
+description: >
+  Short UI-facing trading strategy generation profile. It researches a user
+  direction, proposes candidate algorithm ideas, plans implementations, and
+  generates Algorithm subclasses for Quant Crucible review. It intentionally
+  stops before experiment preparation, backtesting, evaluation, storage, or
+  next-step recommendation loops.
+
+pipeline:
+  steps:
+    - research
+    - ideate
+    - refine
+    - propose_experiments
+    - plan_implementation
+    - implement
+
+llm:
+  default_model: claude-haiku-4-5
+  step_overrides:
+    research: claude-haiku-4-5
+    refine: claude-haiku-4-5
+
+platform:
+  package: trading
+  source_path: ../trading_guy
+
+research:
+  max_summary_artifacts: 12
+  tools:
+    - ref: trading_profile_context
+      relevance_score_threshold: 5
+    - ref: trading_adapter_context
+      relevance_score_threshold: 5
+    - ref: trading_strategy_library
+      patterns: ["*strategy*.py", "*signal*.py", "*portfolio*.py", "*risk*.py"]
+      max_files: 50
+      relevance_score_threshold: 5
+    - ref: trading_prior_experiments
+      n_results: 5
+      relevance_score_threshold: 7
+    - ref: trading_arxiv
+      relevance_score_threshold: 7
+      max_papers_to_digest: 1
+  domain_context: >
+    Focus on implementable, leakage-safe algorithmic trading signal logic that
+    can become a reusable Quant Crucible Algorithm component. Avoid expensive
+    experiment design unless it is needed to define sensible tunables.
+
+base_classes:
+  - name: Algorithm
+    module: trading.core.algorithm
+    description: >
+      Base class for generated trading algorithms. Implement on_data_logic()
+      and emit MarketSignal objects from the current tick plus rolling history.
+    key_interface: |
+      class Algorithm:
+          crucible_metadata = {
+              "schema_version": 1,
+              "role": "algorithm",
+              "description": "",
+              "tunables": {},
+              "fixed_parameters": [],
+              "required_symbols": [],
+              "required_timeframes": [],
+              "required_fields": ["open", "high", "low", "close", "volume"],
+              "warmup_bars": None,
+              "signal_contract": {"emits": ["BUY", "SELL"], "strength_range": [0, 100], "metadata_fields": []},
+              "statefulness": {"supports_reconfigure": True, "preserves_history_on_reconfigure": True},
+              "dependencies": [],
+          }
+
+          def __init__(self, cfg: dict | None = None, history_length: int = 0):
+              ...
+
+          @property
+          def required_warmup_bars(self) -> int:
+              ...
+
+          def on_data(self, data: list[PriceData]) -> list[MarketSignal]:
+              ...
+
+          def on_data_logic(self, data: list[PriceData]) -> list[MarketSignal]:
+              ...
+
+data_sources:
+  - name: default_ohlcv
+    description: "Generic OHLCV data accepted by Quant Crucible datasets"
+    path: data/SPY_5min.csv
+    fields:
+      guaranteed: [timestamp, symbol, open, high, low, close, volume]
+      optional: [trade_count, vwap, exchange]
+
+risk_constraints:
+  no_lookahead: true
+  max_gross_exposure: 1.0
+  market_orders_only: true
+  require_history_warmup: true
+  require_walk_forward_split: false
+
+execution:
+  defaults:
+    mode: component-generation
+    symbol: SPY
+    symbols: [SPY]
+    history_length: 200
+    timeframe: Minute
+    start_date: "2023-01-01"
+    end_date: "2025-12-31"
+  mass_test:
+    max_variants_per_proposal: 1
+
+implementation_examples:
+  - path: ../trading_guy/trading/algorithms/test_algorithm.py
+    purpose: Minimal Algorithm subclass shape and MarketSignal return contract.
+  - path: ../trading_guy/trading/algorithms/macd_rsi_algorithm.py
+    purpose: Real history-driven algorithm using self.price_history and warmup-aware logic.
+  - path: ../trading_guy/trading/core/algorithm.py
+    purpose: Canonical base-class contract for warmup handling, history management, and subclass expectations.
+
+validate:
+  auto_run: false
+  max_fix_retries: 0
+  test_runner: "uv run pytest"
+  test_output_dir: dev/experiments/trading_ui_algorithm/tests
+  contract_test: trading_algorithm
+  llm_generate_tests: false
+
+prompts:
+  research:
+    artifact_score_system: |
+      You are an expert in quantitative finance, systematic trading, and robust
+      backtesting. Score the artifact 0-10 for usefulness in generating a safe
+      Algorithm component from the user's direction. Prefer concrete signal
+      logic, realistic data requirements, and no-lookahead implementation detail.
+      Respond with valid JSON only:
+      {"score": <int 0-10>, "reason": "<one sentence>", "usefulness": "<how to use it>", "risks": "<limitations>"}
+
+    artifact_summary_system: |
+      Synthesize the top artifacts into concise implementation guidance for
+      generating Quant Crucible Algorithm components. Focus on signal logic,
+      required data fields, required symbols, tunables, warmup, and leakage risks.
+
+  ideate:
+    system: |
+      Propose 3-5 algorithmic trading ideas grounded in the research summary.
+
+      Each idea must:
+      - Be implementable as a trading.core.algorithm.Algorithm subclass
+      - Emit MarketSignal objects from on_data_logic using only current and past bars
+      - Include explicit warmup, symbol, timeframe, and data-field requirements
+      - Leave position sizing, exits, stops, cash, and order behavior to a Portfolio
+
+      Return a JSON array:
+      [
+        {
+          "name": "snake_case_strategy_name",
+          "description": "What the signal measures",
+          "hypothesis": "Why it may produce risk-adjusted returns",
+          "rationale": "What research or context inspired this"
+        }
+      ]
+
+  refine:
+    system: |
+      Review these trading ideas for feasibility and leakage risk. Reject or
+      revise ideas that require future data, unavailable fields, vague symbol
+      handling, or portfolio/order behavior inside the algorithm.
+
+      Return a JSON array of refined ideas using the same schema.
+
+  propose_experiments:
+    system: |
+      Convert each refined idea into an algorithm-generation proposal. This is
+      not a backtest request.
+
+      Include:
+      - name
+      - description
+      - mode: "component-generation"
+      - optimization_target: "algorithm"
+      - symbol
+      - symbols
+      - timeframe
+      - history_length
+      - hyperparameters
+      - hpo object with algorithm_param_keys, portfolio_param_keys as [], and search_space
+      - benchmark
+      - success_criterion describing what a later smoke test should verify
+
+      Return a JSON array of proposals.
+
+  plan_implementation:
+    system: |
+      For each proposal, write a detailed implementation plan. Do not write code.
+
+      Requirements:
+      - Subclass Algorithm from trading.core.algorithm
+      - Import only PriceData, MarketSignal, and SignalType from trading.core.classes unless a known platform symbol is required
+      - Use cfg-driven symbols and self.price_history / self.price_data_history
+      - Never track positions, holding periods, exits, stop-loss state, profit targets, orders, or cash
+      - Define class-level crucible_metadata with algorithm role, tunables, required symbols, required fields, warmup, signal contract, statefulness, and dependencies
+      - Any tunable config leaf must be cached on a same-named instance attribute in __init__
+
+      Return a JSON array of plans.
+
+  implement:
+    system: |
+      Implement the Python class described in the plan.
+
+      Requirements:
+      - Subclass Algorithm from trading.core.algorithm
+      - Implement on_data_logic(self, data: list[PriceData]) -> list[MarketSignal]
+      - Import only PriceData, MarketSignal, and SignalType from trading.core.classes unless the plan explicitly requires another known class
+      - Use only current and historical bars
+      - Return deterministic BUY or SELL MarketSignal objects only
+      - Do not emit EXIT signals
+      - Do not implement portfolio, order, cash, position, stop-loss, or profit-taking behavior
+      - Always define literal class-level crucible_metadata
+      - Always implement __init__(self, cfg: dict | None = None, history_length: int = 0) and call super().__init__(cfg=cfg, history_length=history_length)
+
+      Return only Python source. No markdown fences.

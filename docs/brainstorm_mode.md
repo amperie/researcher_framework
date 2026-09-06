@@ -163,7 +163,7 @@ Add a canonical brainstorm state model separate from `ResearchState`.
 
 Suggested file:
 
-- [`core/brainstorm/state.py`](/E:/Programming/NeuralSignalResearcher/core/brainstorm/state.py)
+- [`core/brainstorm/state.py`](/E:/Programming/trading_researcher/core/brainstorm/state.py)
 
 Suggested state shape:
 
@@ -268,7 +268,7 @@ Recommended config-loading precedence:
 
 Suggested file:
 
-- [`core/brainstorm/config.py`](/E:/Programming/NeuralSignalResearcher/core/brainstorm/config.py)
+- [`core/brainstorm/config.py`](/E:/Programming/trading_researcher/core/brainstorm/config.py)
 
 Suggested responsibilities for the brainstorm config loader:
 
@@ -454,7 +454,7 @@ Suggested additions in `brainstorm.yaml`:
 
 Suggested file:
 
-- [`core/brainstorm/engine.py`](/E:/Programming/NeuralSignalResearcher/core/brainstorm/engine.py)
+- [`core/brainstorm/engine.py`](/E:/Programming/trading_researcher/core/brainstorm/engine.py)
 
 The orchestrator should not simulate an endless free-form chat. It should run
 explicit phases:
@@ -521,7 +521,7 @@ This should not be treated as an error. It should be a first-class pause signal.
 
 Suggested file:
 
-- [`core/brainstorm/interrupt.py`](/E:/Programming/NeuralSignalResearcher/core/brainstorm/interrupt.py)
+- [`core/brainstorm/interrupt.py`](/E:/Programming/trading_researcher/core/brainstorm/interrupt.py)
 
 Recommended behavior:
 
@@ -596,7 +596,7 @@ Suggested command types:
 
 Suggested file:
 
-- [`core/brainstorm/commands.py`](/E:/Programming/NeuralSignalResearcher/core/brainstorm/commands.py)
+- [`core/brainstorm/commands.py`](/E:/Programming/trading_researcher/core/brainstorm/commands.py)
 
 The CLI and web layer should translate user input into these commands before
 resuming the engine.
@@ -669,7 +669,7 @@ Suggested metadata for summaries and plans:
 
 Suggested file:
 
-- [`core/brainstorm/handoff.py`](/E:/Programming/NeuralSignalResearcher/core/brainstorm/handoff.py)
+- [`core/brainstorm/handoff.py`](/E:/Programming/trading_researcher/core/brainstorm/handoff.py)
 
 The handoff boundary should be explicit and typed.
 
@@ -677,7 +677,7 @@ Recommended handoff payload:
 
 ```python
 {
-    "profile_name": "neuralsignal",
+    "profile_name": "trading_researcher",
     "research_direction": "...",
     "refined_ideas": [...],
     "proposals": [...],
@@ -707,9 +707,9 @@ This aligns with the current seeded-entry behavior already used by
 Recommended commands:
 
 ```text
-uv run python main.py --mode brainstorm --profile neuralsignal --direction "..." --brainstorm-config configs/brainstorm/default.neuralsignal.brainstorm.yaml
+uv run python main.py --mode brainstorm --profile trading_researcher --direction "..." --brainstorm-config configs/brainstorm/default.trading_researcher.brainstorm.yaml
 uv run python main.py --mode brainstorm --profile trading --resume-brainstorm "<session-id>" --brainstorm-config configs/brainstorm/trading_panel.brainstorm.yaml
-uv run python main.py --mode brainstorm --profile neuralsignal --brainstorm-config configs/brainstorm/research_heavy.brainstorm.yaml
+uv run python main.py --mode brainstorm --profile trading_researcher --brainstorm-config configs/brainstorm/research_heavy.brainstorm.yaml
 ```
 
 Recommended CLI output model:
