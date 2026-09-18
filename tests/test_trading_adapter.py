@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from core.graph.nodes.validate import _build_contract_test
 from core.plugins.trading.adapter import (
+    _is_window_key,
     TradingAdapter,
     _should_log_to_mlflow,
     _build_hpo_config,
@@ -24,6 +25,12 @@ from core.plugins.trading.adapter import (
     _trading_python,
     _variant_specs,
 )
+
+
+def test_holding_period_detection_does_not_capture_thresholds():
+    assert _is_window_key("max_hold")
+    assert _is_window_key("holding_bars")
+    assert not _is_window_key("signal_threshold")
 
 
 def _profile(tmp_path: Path) -> dict:
@@ -544,11 +551,12 @@ def test_build_hpo_config_normalizes_lower_upper_bounds(tmp_path: Path):
         "backtest",
     )
 
-    assert hpo["search_space"]["fast_period"] == {"type": "randint", "lower": 4, "upper": 40, "low": 4, "high": 40}
-    assert hpo["search_space"]["threshold"] == {"type": "uniform", "min": 0.5, "max": 2.0, "low": 0.5, "high": 2.0}
+    assert hpo["search_space"]["fast_period"] == {"type": "randint", "low": 4, "high": 40}
+    assert hpo["search_space"]["threshold"] == {"type": "uniform", "low": 0.5, "high": 2.0}
 
 
-def test_build_alpaca_data_provider_params_normalizes_timeframe_aliases(tmp_path: Path):
+def test_build_alpaca_data_provider_params_normalizes_timeframe_aliases(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("core.plugins.trading.adapter._resolve_alpaca_credentials", lambda **_: {"api_key": "test", "secret_key": "test"})
     profile = _profile(tmp_path)
 
     params = _build_alpaca_data_provider_params(
@@ -580,7 +588,7 @@ def test_backtest_analysis_uses_trading_guy_full_mlflow_pipeline(monkeypatch):
 
     class Dummy:
         def __init__(self, *args, **kwargs):
-            pass
+            self.om = args[1] if len(args) > 1 else None
 
     class FakeImportModule:
         def __call__(self, name):

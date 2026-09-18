@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 UV_PROJECT_ENVIRONMENT=/opt/migrations \
+    PATH="/opt/migrations/bin:$PATH"
+WORKDIR /app
+RUN pip install --no-cache-dir uv==0.10.6
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --only-group migrations --no-install-project
+COPY database ./database
+RUN useradd --create-home migrator
+USER migrator
+ENTRYPOINT ["python", "-m", "database"]
+CMD ["status"]

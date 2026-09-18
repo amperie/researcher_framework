@@ -125,14 +125,15 @@ def test_ray_runner_submit_starts_local_ray_and_passes_runtime_env(tmp_path):
     ray_remote.options = ray_options
     ray_module = MagicMock()
     ray_module.is_initialized.return_value = False
+    ray_module.init.side_effect = lambda **_: setattr(ray_module.is_initialized, "return_value", True)
     ray_module.remote.return_value = ray_remote
     store = MagicMock()
     store.upsert.remote.return_value = True
 
     with (
-        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
         patch("core.plugins.job_runner._get_or_create_job_store", return_value=store),
         patch("core.plugins.job_runner._get_existing_job_store", return_value=None),
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
     ):
         job = runner.submit(spec)
 
@@ -167,14 +168,15 @@ def test_ray_runner_submit_connects_to_remote_cluster_when_configured(tmp_path):
     ray_remote.options.return_value = ray_task
     ray_module = MagicMock()
     ray_module.is_initialized.return_value = False
+    ray_module.init.side_effect = lambda **_: setattr(ray_module.is_initialized, "return_value", True)
     ray_module.remote.return_value = ray_remote
     store = MagicMock()
     store.upsert.remote.return_value = True
 
     with (
-        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
         patch("core.plugins.job_runner._get_or_create_job_store", return_value=store),
         patch("core.plugins.job_runner._get_existing_job_store", return_value=None),
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
     ):
         runner.submit(spec)
 
@@ -209,9 +211,9 @@ def test_ray_runner_remote_mode_drops_pythonpath_from_runtime_env(tmp_path):
     store.upsert.remote.return_value = True
 
     with (
-        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
         patch("core.plugins.job_runner._get_or_create_job_store", return_value=store),
         patch("core.plugins.job_runner._get_existing_job_store", return_value=None),
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
     ):
         runner.submit(spec)
 
@@ -242,8 +244,8 @@ def test_ray_runner_check_syncs_remote_status_and_result(tmp_path):
     ray_module.get.return_value = remote_status
 
     with (
-        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
         patch("core.plugins.job_runner._get_existing_job_store", return_value=store),
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
     ):
         status = runner.check({"job_id": "job-ray-check", "job_dir": str(job_dir)})
 
@@ -258,8 +260,8 @@ def test_ensure_ray_logs_dashboard_url_when_initializing():
     ray_module.get_runtime_context.return_value = SimpleNamespace(dashboard_url="http://ray-head:8265")
 
     with (
-        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
         patch("core.plugins.job_runner.log") as mock_log,
+        patch("core.plugins.job_runner.importlib.import_module", return_value=ray_module),
     ):
         _ensure_ray(cfg)
 

@@ -1054,7 +1054,7 @@ def test_call_task_sets_trading_researcher_src_on_pythonpath(tmp_path, monkeypat
     env = popen.call_args.kwargs["env"]
     pythonpath = env["PYTHONPATH"].split(os.pathsep)
     assert pythonpath[0] == cfg.trading_researcher_src_path
-    assert str((Path(os.getcwd()) / "core").resolve()) in pythonpath
+    assert str(Path(os.getcwd()).resolve()) in pythonpath
     assert "existing_path" in pythonpath
     assert env["RESEARCH_PLUGIN_LOG"] == "trading_researcher"
     assert "core.plugins.trading_researcher" in env["RESEARCH_PLUGIN_LOGGERS"]
@@ -1116,7 +1116,7 @@ def test_call_task_supports_package_dir_as_trading_researcher_src_path(tmp_path,
     pythonpath = popen.call_args.kwargs["env"]["PYTHONPATH"].split(os.pathsep)
     assert str(package_dir.parent) in pythonpath
     assert str(package_dir) in pythonpath
-    assert str((Path(os.getcwd()) / "core").resolve()) in pythonpath
+    assert str(Path(os.getcwd()).resolve()) in pythonpath
     env = popen.call_args.kwargs["env"]
     assert env["RESEARCH_PLUGIN_LOG"] == "trading_researcher"
     assert "core.plugins.job_runner" in env["RESEARCH_PLUGIN_LOGGERS"]
@@ -1135,4 +1135,4 @@ def test_external_runtime_spec_exposes_shared_runner_settings(tmp_path):
 
     assert spec["python"] == "python"
     assert spec["plugin_name"] == "trading_researcher"
-    assert str((Path(os.getcwd()) / "core").resolve()) in spec["pythonpath_entries"]
+    assert str(Path(os.getcwd()).resolve()) in spec["pythonpath_entries"]

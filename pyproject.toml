@@ -20,6 +20,11 @@ dependencies = [
     "pyarrow>=23.0.1",
     "fastapi>=0.135",
     "uvicorn>=0.44",
+    "httpx>=0.28",
+    "pydantic>=2.10",
+    "pyyaml>=6",
+    "psycopg[binary]>=3.2,<4",
+    "sqlparse>=0.5.5,<1",
     "ray>=2.55.1",
     "tools>=1.0.27",
     "alpaca-py",
@@ -27,6 +32,13 @@ dependencies = [
 ]
 
 [dependency-groups]
+migrations = ["psycopg[binary]>=3.2,<4", "sqlparse>=0.5.5,<1"]
+platform = [
+    "sqlparse>=0.5.5,<1",
+    "psycopg[binary]>=3.2,<4",
+    "fastapi>=0.135", "uvicorn>=0.44", "httpx>=0.28", "pydantic>=2.10", "pyyaml>=6",
+    "langchain-core>=0.3", "langchain-anthropic>=0.3", "langchain-openai>=0.2",
+]
 dev = [
     "mongomock>=4.3.0",
     "pytest>=9.0.3",

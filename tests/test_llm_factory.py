@@ -179,3 +179,10 @@ def test_usage_report_tracks_invoked_model_usage():
     assert report["totalTokens"] == 18
     assert report["calls"] == 1
     assert report["steps"][0]["step"] == "ideate"
+
+
+def test_platform_disables_hidden_sdk_retries_and_sets_timeout():
+    with patch("core.llm.factory.get_config", return_value=_mock_cfg()), patch("langchain_anthropic.ChatAnthropic") as provider:
+        get_llm("chat", {"llm": {"max_retries": 0, "timeout": 90}})
+    assert provider.call_args.kwargs["max_retries"] == 0
+    assert provider.call_args.kwargs["timeout"] == 90

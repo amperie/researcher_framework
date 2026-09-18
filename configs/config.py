@@ -45,15 +45,16 @@ def _strip_inline_comment(value: str) -> str:
     return value
 
 
-def _load_dotenv() -> None:
+def _load_dotenv(path: str | Path | None = None) -> None:
     """Load key=value pairs from configs/.env into os.environ.
 
     No-op if the file does not exist. Environment variables already set
     take precedence over .env values (twelve-factor app convention).
     """
-    if not _ENV_PATH.exists():
+    path = Path(path) if path is not None else _ENV_PATH
+    if not path.exists():
         return
-    for line in _ENV_PATH.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

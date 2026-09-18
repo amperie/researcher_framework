@@ -180,8 +180,8 @@ class TestStoreResultsMemory:
 
         mock_service.persist_records.assert_called_once()
         records = mock_service.persist_records.call_args.args[0]
-        assert len(records) == 1
-        assert records[0]["record_id"] == "exp-001"
+        assert {record["object_type"] for record in records} == {"pipeline_run", "experiment_result"}
+        assert any(record["record_id"] == "exp-001" for record in records)
 
     def test_memory_record_contains_structured_metadata(self):
         mock_service = MagicMock()
@@ -218,7 +218,7 @@ class TestStoreResultsMemory:
                                         with patch("pymongo.MongoClient"):
                                             store_results_node(state, PROFILE)
 
-        record = mock_service.persist_records.call_args.args[0][0]
+        record = next(r for r in mock_service.persist_records.call_args.args[0] if r["record_id"] == "exp-001")
         assert "Assessment: moderate" in record["summary"]
         assert record["kind"] == "prior_experiment"
         assert record["metadata"]["research_direction"] == "test dir"

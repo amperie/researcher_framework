@@ -1145,7 +1145,7 @@ def _default_brainstorm_config_index(*, profile_name: str, config_paths: list[st
     if profile_token:
         for index, path in enumerate(config_paths, 1):
             filename = path.rsplit("/", 1)[-1].rsplit(chr(92), 1)[-1].lower()
-            if profile_token in filename:
+            if profile_token in filename.split("."):
                 return index
     return 1
 

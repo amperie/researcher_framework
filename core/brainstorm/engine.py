@@ -183,7 +183,9 @@ class BrainstormEngine:
             text = str(cmd.get("text") or "").strip()
             if text:
                 state["user_intent_notes"] = list(state.get("user_intent_notes") or []) + [text]
-                emitter("Feedback noted. Type `continue` to resume with updated context.\n")
+                state["current_goal"] = text
+                self._reset_deliberation_state(state, preserve_seed_evidence=True)
+                emitter("Feedback noted; stale consensus was cleared. Type `continue` to resume.\n")
             return state
         if cmd_type == "request_research":
             query = str(cmd.get("query") or "").strip()

@@ -749,8 +749,8 @@ def _is_percentile_key(name: str) -> bool:
 
 
 def _is_window_key(name: str) -> bool:
-    return any(token in name for token in (
-        "window", "lookback", "period", "bars", "hold", "lock", "confirmation",
+    return "hold" in name.split("_") or any(token in name for token in (
+        "window", "lookback", "period", "bars", "holding", "lock", "confirmation",
         "forward", "rips", "ma_", "_ma", "sma", "ema",
     ))
 

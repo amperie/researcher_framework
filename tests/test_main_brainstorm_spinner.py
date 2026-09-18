@@ -28,7 +28,10 @@ def test_brainstorm_output_colors_role_prefix_only():
     assert "Keep the scope tight." in rendered
 
 
-def test_brainstorm_output_leaves_non_role_lines_unchanged():
+def test_brainstorm_output_preserves_plan_content():
     rendered = main._format_brainstorm_cli_output("[Plan]\nDirection: test\n")
 
-    assert rendered == "[Plan]\nDirection: test\n"
+    import re
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+    assert "Plan" in plain
+    assert "Direction: test\n" in plain

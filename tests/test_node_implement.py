@@ -62,7 +62,7 @@ def test_implement_artifact_failure_is_non_fatal(tmp_path):
 
     with patch("core.graph.nodes.implement.get_config", return_value=cfg):
         with patch("core.graph.nodes.implement.get_llm", return_value=llm):
-            with patch("core.graph.nodes.artifact_refs.get_artifact_store", return_value=store):
+            with patch("core.graph.nodes.artifact_refs.get_artifact_store", return_value=store), patch("core.graph.nodes.implement.persist_memory_records_for_state"):
                 result = implement_node(state, _profile())
 
     implementation = result["implementations"][0]
@@ -111,7 +111,7 @@ def test_implement_normalizes_generated_plan_placeholder_before_validation(tmp_p
     with caplog.at_level(logging.INFO):
         with patch("core.graph.nodes.implement.get_config", return_value=cfg):
             with patch("core.graph.nodes.implement.get_llm", return_value=llm):
-                with patch("core.graph.nodes.implement.persist_memory_records_for_state"):
+                with patch("core.graph.nodes.implement.persist_memory_records_for_state"), patch("core.graph.nodes.artifact_refs.get_artifact_store"):
                     result = implement_node(state, _profile())
 
     implementation = result["implementations"][0]

@@ -7,6 +7,30 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytest_plugins = ["tests.postgres_fixtures"]
+
+
+@pytest.fixture(autouse=True)
+def isolate_node_storage(request, monkeypatch):
+    """Node unit tests must never write to configured development services.
+
+    Storage-specific tests install their own fakes after this fixture; backend
+    behavior is tested separately in test_memory_service/test_artifact_store.
+    """
+    if not (request.node.path.name.startswith("test_node_") or request.node.path.name == "test_trading_researcher_adapter.py"):
+        return
+    import mlflow
+    for name in ("set_tracking_uri", "set_experiment", "start_run", "log_params", "log_metrics", "set_tags", "log_dict", "log_text", "log_figure", "log_artifact"):
+        monkeypatch.setattr(mlflow, name, MagicMock())
+    from core.memory import service
+    from core.graph.nodes import artifact_refs
+    for name in ("get_memory_document_store", "get_memory_vector_store", "get_memory_graph_store"):
+        monkeypatch.setattr(service, name, MagicMock())
+    store = MagicMock()
+    store.store_file.return_value = {}
+    store.store_json.return_value = {}
+    monkeypatch.setattr(artifact_refs, "get_artifact_store", lambda *a, **kw: store)
+
 
 # ---------------------------------------------------------------------------
 # Minimal profile fixture (no file I/O needed)

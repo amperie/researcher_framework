@@ -1,5 +1,22 @@
 # researcher_framework
 
+## Quant Crucible API integration
+
+Try the [local researcher playground](docs/playground.md) with
+`python scripts/start-playground.py` (Claude Haiku by default).
+
+The tenant-aware platform entry point is `python -m core.platform`. It supports
+ordinary chat without creating a job, explicit research/ideation/coding workflows,
+revision-bound proposals, static validation, durable retries/cancellation, and
+per-tenant input/output token accounting with model provenance.
+
+See [Platform integration](docs/platform-integration.md) for the service/client
+contract, authentication, deployment, and the remaining QC responsibilities.
+The legacy `ui_agent` template wrapper and inspector are not platform endpoints.
+
+Database structure is managed separately by the [researcher migration system](database/README.md):
+`python -m database status`, `up`, `check`, and `new <name>`.
+
 `researcher_framework` is a configuration-driven, plug-and-play research automation system built on LangGraph. It can run in two complementary modes: a structured pipeline for reproducible experiment execution, and an interactive brainstorm mode for open-ended exploration before committing to experiments. Both modes use the same profile system, memory layer, and domain adapters, so exploratory reasoning can feed directly into concrete pipeline runs.
 
 The intent is extensibility without graph rewrites. New domains are mostly described through configuration: prompts, research tools, datasets, base classes, evaluation thresholds, storage targets, and adapter wiring. The same graph can drive local execution, async subprocess jobs, or Ray-backed runners without changing the overall profile shape.

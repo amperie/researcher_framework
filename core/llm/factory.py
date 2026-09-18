@@ -8,45 +8,17 @@ Model resolution order (first non-None wins):
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from configs.config import get_config
+from core.llm.usage import finish_call, get_usage_report, reset_usage, start_call
 from core.utils.logger import get_logger
 
 log = get_logger(__name__)
-
-_TOKEN_TOTALS: dict[str, int] = {
-    "prompt_tokens": 0,
-    "completion_tokens": 0,
-    "total_tokens": 0,
-}
-_TOKEN_EVENTS: list[dict[str, Any]] = []
-
-
-def reset_usage() -> None:
-    _TOKEN_EVENTS.clear()
-    for key in _TOKEN_TOTALS:
-        _TOKEN_TOTALS[key] = 0
-
-
-def get_usage_report() -> dict[str, Any]:
-    providers = sorted(
-        {str(item.get("provider") or "") for item in _TOKEN_EVENTS if item.get("provider")}
-    )
-    models = sorted({str(item.get("model") or "") for item in _TOKEN_EVENTS if item.get("model")})
-    return {
-        "provider": providers[0] if len(providers) == 1 else None,
-        "model": models[0] if len(models) == 1 else None,
-        "promptTokens": _TOKEN_TOTALS["prompt_tokens"],
-        "completionTokens": _TOKEN_TOTALS["completion_tokens"],
-        "totalTokens": _TOKEN_TOTALS["total_tokens"],
-        "calls": len(_TOKEN_EVENTS),
-        "steps": list(_TOKEN_EVENTS),
-    }
-
 
 @dataclass
 class LoggedChatModel:
@@ -57,15 +29,55 @@ class LoggedChatModel:
     model_name: str = ""
     provider: str = ""
 
+    def _start(self):
+        return start_call(self.step_name or "unknown", self.provider, self.model_name)
+
+    def _finish(self, event, response=None, status="succeeded"):
+        result = finish_call(event, response, status)
+        log.info("llm usage | %s", result)
+
     def invoke(self, *args: Any, **kwargs: Any) -> Any:
-        response = self.inner.invoke(*args, **kwargs)
-        _log_usage(
-            step_name=self.step_name or "unknown",
-            provider=self.provider,
-            model_name=self.model_name,
-            response=response,
-        )
+        event = self._start()
+        try:
+            response = self.inner.invoke(*args, **kwargs)
+        except BaseException:
+            self._finish(event, status="failed")
+            raise
+        self._finish(event, response)
         return response
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+        event = self._start()
+        try:
+            response = await self.inner.ainvoke(*args, **kwargs)
+        except asyncio.CancelledError:
+            self._finish(event, status="interrupted")
+            raise
+        except BaseException:
+            self._finish(event, status="failed")
+            raise
+        self._finish(event, response)
+        return response
+
+    def stream(self, *args: Any, **kwargs: Any):
+        event, response, status = self._start(), None, "interrupted"
+        try:
+            for chunk in self.inner.stream(*args, **kwargs):
+                response = chunk if response is None else response + chunk
+                yield chunk
+            status = "succeeded"
+        finally:
+            self._finish(event, response, status)
+
+    async def astream(self, *args: Any, **kwargs: Any):
+        event, response, status = self._start(), None, "interrupted"
+        try:
+            async for chunk in self.inner.astream(*args, **kwargs):
+                response = chunk if response is None else response + chunk
+                yield chunk
+            status = "succeeded"
+        finally:
+            self._finish(event, response, status)
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self.inner, item)
@@ -89,15 +101,15 @@ def get_llm(
         model:     Explicit model ID override (highest priority).
     """
     cfg = get_config()
-    provider = provider or cfg.llm_provider
-
     llm_cfg = (profile or {}).get("llm") or {}
+    provider = provider or llm_cfg.get("provider") or cfg.llm_provider
     resolved_step_cfg = _resolve_step_config(step_name=step_name, llm_cfg=llm_cfg)
 
     resolved_model = model or resolved_step_cfg.get("model")
     if resolved_model is None:
         resolved_model = cfg.llm_model
     max_tokens = resolved_step_cfg.get("max_output_tokens")
+    runtime = {key: llm_cfg[key] for key in ("timeout", "max_retries") if key in llm_cfg}
 
     log.info(
         "get_llm | provider=%r model=%r step=%r max_output_tokens=%r",
@@ -114,6 +126,7 @@ def get_llm(
             model=resolved_model or "claude-opus-4-6",
             api_key=cfg.anthropic_api_key,
             max_tokens=max_tokens,
+            **runtime,
         )
         return LoggedChatModel(
             inner=inner,
@@ -128,6 +141,7 @@ def get_llm(
             model=resolved_model or "gpt-4o",
             api_key=cfg.openai_api_key,
             max_tokens=max_tokens,
+            **runtime,
         )
         return LoggedChatModel(
             inner=inner,
@@ -177,62 +191,4 @@ def _normalize_model_config(value: Any) -> dict[str, Any]:
 
 
 def _log_usage(*, step_name: str, provider: str, model_name: str, response: Any) -> None:
-    usage = _extract_usage_metadata(response)
-    if not usage:
-        log.debug(
-            "llm usage | step=%r provider=%r model=%r usage=unavailable",
-            step_name,
-            provider,
-            model_name,
-        )
-        return
-
-    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
-    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
-    total_tokens = int(usage.get("total_tokens", prompt_tokens + completion_tokens) or 0)
-
-    _TOKEN_TOTALS["prompt_tokens"] += prompt_tokens
-    _TOKEN_TOTALS["completion_tokens"] += completion_tokens
-    _TOKEN_TOTALS["total_tokens"] += total_tokens
-    _TOKEN_EVENTS.append(
-        {
-            "step": step_name,
-            "provider": provider,
-            "model": model_name,
-            "promptTokens": prompt_tokens,
-            "completionTokens": completion_tokens,
-            "totalTokens": total_tokens,
-        }
-    )
-
-    log.info(
-        "llm usage | step=%r provider=%r model=%r prompt_tokens=%d completion_tokens=%d total_tokens=%d cumulative_total_tokens=%d",
-        step_name,
-        provider,
-        model_name,
-        prompt_tokens,
-        completion_tokens,
-        total_tokens,
-        _TOKEN_TOTALS["total_tokens"],
-    )
-
-
-def _extract_usage_metadata(response: Any) -> dict[str, int]:
-    usage = getattr(response, "usage_metadata", None) or {}
-    if usage:
-        return {
-            "prompt_tokens": int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0),
-            "completion_tokens": int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0),
-            "total_tokens": int(usage.get("total_tokens", 0) or 0),
-        }
-
-    response_metadata = getattr(response, "response_metadata", None) or {}
-    token_usage = response_metadata.get("token_usage") or response_metadata.get("usage") or {}
-    if token_usage:
-        return {
-            "prompt_tokens": int(token_usage.get("prompt_tokens", token_usage.get("input_tokens", 0)) or 0),
-            "completion_tokens": int(token_usage.get("completion_tokens", token_usage.get("output_tokens", 0)) or 0),
-            "total_tokens": int(token_usage.get("total_tokens", 0) or 0),
-        }
-
-    return {}
+    finish_call(start_call(step_name, provider, model_name), response)

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import arxiv
 import requests
+import pytest
 
 from core.tools.arxiv_tool import (
     _build_query,
@@ -21,6 +22,12 @@ from core.tools.arxiv_tool import (
     save_digest,
     search_arxiv,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_paper_caches(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.tools.arxiv_tool._SEARCH_CACHE_DIR", tmp_path / "searches")
+    monkeypatch.setattr("core.tools.arxiv_tool._PAPERS_CACHE_DIR", tmp_path / "papers")
 
 
 # ---------------------------------------------------------------------------
