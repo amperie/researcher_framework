@@ -17,6 +17,7 @@ from core.platform.models import Identity, TurnRequest, TurnResult, RequestRecei
 from core.platform.service import PlatformService
 from core.platform.store import PlatformStore, ServiceError
 from core.platform.progress import stream_progress
+from core.platform.identity import current_user, user_scope
 
 
 class BodyLimit:
@@ -83,10 +84,15 @@ def create_app(*, service: PlatformService | None = None, tenant_keys: dict[str,
         request.state.authorized_tenant = matched
         return matched
 
+    async def scoped_tenant(request: Request, identity: str = Depends(tenant), user_id: Identity = Header(alias='X-User-ID')):
+        request.state.authorized_user = user_id
+        with user_scope(user_id):
+            yield identity
+
     @app.exception_handler(ServiceError)
     async def service_error(request: Request, exc: ServiceError):
         return JSONResponse(status_code=exc.status, content={"tenantId": getattr(request.state, "authorized_tenant", None),
-            "error": exc.error, "usage": getattr(exc, "usage", None), "diagnostics": []},
+            "userId": getattr(request.state, 'authorized_user', None), "error": exc.error, "usage": getattr(exc, "usage", None), "diagnostics": []},
             headers={"WWW-Authenticate": "Bearer"} if exc.status == 401 else None)
 
     @app.exception_handler(RequestValidationError)
@@ -110,20 +116,20 @@ def create_app(*, service: PlatformService | None = None, tenant_keys: dict[str,
         return {"status": "ready", "schemaVersion": "1"}
 
     @app.post("/v1/turns", response_model=TurnResult)
-    async def turn(body: TurnRequest, identity: str = Depends(tenant)):
+    async def turn(body: TurnRequest, identity: str = Depends(scoped_tenant)):
         return await service.execute(identity, body)
 
     @app.get("/v1/requests/{request_id}", response_model=RequestReceipt)
-    def get_request(request_id: Identity, identity: str = Depends(tenant)):
+    def get_request(request_id: Identity, identity: str = Depends(scoped_tenant)):
         return service.store.get_request(identity, request_id)
 
     @app.post("/v1/requests/{request_id}/stop", response_model=RequestReceipt)
-    def stop(request_id: Identity, identity: str = Depends(tenant)):
+    def stop(request_id: Identity, identity: str = Depends(scoped_tenant)):
         return service.store.stop(identity, request_id)
 
     @app.get("/v1/requests/{request_id}/events", response_class=StreamingResponse,
         responses={200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}}})
-    def progress_events(request_id: Identity, identity: str = Depends(tenant),
+    def progress_events(request_id: Identity, identity: str = Depends(scoped_tenant),
                         after: int = Query(0, ge=0), last_event_id: int | None = Header(None, ge=0)):
         """Replay progress after a sequence, then stream until terminal status. Never starts work."""
         receipt = service.store.get_request(identity, request_id)
@@ -132,21 +138,21 @@ def create_app(*, service: PlatformService | None = None, tenant_keys: dict[str,
             headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"})
 
     @app.get("/v1/usage/events", response_model=UsagePage)
-    def events(identity: str = Depends(tenant), requestId: Identity | None = None,
+    def events(identity: str = Depends(scoped_tenant), requestId: Identity | None = None,
                page: int = Query(1, ge=1), pageSize: int = Query(100, ge=1, le=500)):
         rows = service.store.list_events(identity, request_id=requestId, limit=pageSize + 1, offset=(page - 1) * pageSize)
-        return {"tenantId": identity, "items": rows[:pageSize],
+        return {"tenantId": identity, "userId": current_user(), "items": rows[:pageSize],
                 "pagination": {"page": page, "pageSize": pageSize, "hasNextPage": len(rows) > pageSize}}
 
     @app.get("/v1/usage/summary", response_model=UsageSummary)
-    def summary(identity: str = Depends(tenant), since: datetime | None = None, until: datetime | None = None):
+    def summary(identity: str = Depends(scoped_tenant), since: datetime | None = None, until: datetime | None = None):
         if any(value is not None and value.tzinfo is None for value in (since, until)):
             raise ServiceError(422, "invalid_time_range", "Usage timestamps must include a timezone")
         if since and until and since >= until:
             raise ServiceError(422, "invalid_time_range", "since must precede until")
         fmt = lambda value: value.astimezone(timezone.utc).isoformat() if value else None
         rows = service.store.usage_summary(identity, fmt(since), fmt(until))
-        return {"tenantId": identity, "models": rows, "totals": {
+        return {"tenantId": identity, "userId": current_user(), "models": rows, "totals": {
             key: sum(row[key] for row in rows) for key in ("calls", "unknownUsageCalls", "knownInputTokens", "knownOutputTokens")}}
 
     return app

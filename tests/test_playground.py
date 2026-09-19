@@ -12,7 +12,7 @@ def test_invalid_model_output_is_inspectable_and_tenant_scoped(postgres_dsn):
     service, _, _ = setup(postgres_dsn, invoke)
     client = TestClient(create_playground(service=service))
     a, b = client.get("/playground/config").json()["tenants"]
-    headers = lambda tenant: {"Authorization": "Bearer " + tenant["key"]}
+    headers = lambda tenant: {"Authorization": "Bearer " + tenant["key"], "X-User-ID": "legacy-researcher-owner"}
     response = client.post("/v1/turns", json=request(tenantId=a["id"]).model_dump(), headers=headers(a))
     assert response.status_code == 502
     assert response.json()["error"]["rawModelOutput"] == raw
@@ -32,7 +32,7 @@ def test_playground_uses_real_api_and_separate_tenants(postgres_dsn):
     config = client.get("/playground/config").json()
     assert config["provider"] == "anthropic"
     a, b = config["tenants"]
-    headers = lambda tenant: {"Authorization": "Bearer " + tenant["key"]}
+    headers = lambda tenant: {"Authorization": "Bearer " + tenant["key"], "X-User-ID": "legacy-researcher-owner"}
     response = client.post("/v1/turns", json=request(tenantId=a["id"]).model_dump(), headers=headers(a))
     assert response.status_code == 200
     assert response.json()["usage"]["calls"] == 1

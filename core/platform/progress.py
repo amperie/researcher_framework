@@ -12,10 +12,10 @@ async def stream_progress(store, tenant, request_id, receipt, after=0):
     while True:
         for event in receipt["progress"]:
             if event["sequence"] > after:
-                yield frame("progress", {"tenantId": tenant, "requestId": request_id, **event}, event["sequence"])
+                yield frame("progress", {"tenantId": tenant, "userId": receipt['userId'], "requestId": request_id, **event}, event["sequence"])
                 after = event["sequence"]
         if receipt["status"] != "running":
-            yield frame("complete", {key: receipt[key] for key in ("tenantId", "requestId", "status", "stage")})
+            yield frame("complete", {key: receipt[key] for key in ("tenantId", "userId", "requestId", "status", "stage")})
             return
         now = asyncio.get_running_loop().time()
         if now - heartbeat >= 15:

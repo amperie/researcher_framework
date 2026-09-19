@@ -52,7 +52,7 @@ def test_client_handles_malformed_gateway_responses(response):
 @pytest.mark.parametrize("method", ["get_request", "stop"])
 def test_client_rejects_receipt_for_another_request(method):
     async def scenario():
-        transport = httpx.MockTransport(lambda _: httpx.Response(200, json={"tenantId": "a", "requestId": "other"}))
+        transport = httpx.MockTransport(lambda _: httpx.Response(200, json={"tenantId": "a", "userId": "legacy-researcher-owner", "requestId": "other"}))
         async with ResearcherClient("http://researcher", KEY_A, "a", transport=transport) as client:
             with pytest.raises(ResearcherError, match="different request"):
                 await getattr(client, method)("r")

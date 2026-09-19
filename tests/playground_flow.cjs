@@ -11,7 +11,7 @@ const fs=require('node:fs'), assert=require('node:assert/strict');
    const json=data=>route.fulfill({json:data});
    if(path==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync('core/platform/playground.html','utf8')});
    if(path==='/activity.js')return route.fulfill({contentType:'text/javascript',body:fs.readFileSync('core/platform/activity.js','utf8')});
-   if(path==='/playground/config')return json({model:'test',tenants:[{id:'a',key:'a'},{id:'b',key:'b'}]});
+   if(path==='/playground/config')return json({model:'test',userId:'legacy-researcher-owner',tenants:[{id:'a',key:'a'},{id:'b',key:'b'}]});
    if(path==='/v1/usage/summary')return json({totals:{calls:0,knownInputTokens:0,knownOutputTokens:0}});
    if(path==='/v1/usage/events')return json({items:[]});
    if(path==='/v1/turns'){

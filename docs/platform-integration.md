@@ -347,3 +347,37 @@ cannot silently omit them. Optional local Docker setup is in `scripts/test-postg
 and `compose.test-postgres.yaml`; use `scripts/test-platform.py --local` with it.
 LLM and public research calls are mocked; tests do not assert model quality,
 live-provider availability, or runtime trading safety.
+# User ownership
+
+QC is the source of truth for users, memberships and authentication. The researcher
+stores only `(tenant_id, user_id)` references in `researcher.users`; it does not store
+passwords or offer login endpoints. Its API is private: the UI must call QC, never
+the researcher directly.
+
+Every private `/v1` request requires both the tenant service bearer credential and
+`X-User-ID`. QC sets this header from its authenticated user (or configured development
+identity while authentication is disabled). Never forward a browser-supplied identity.
+The request body cannot select a user. QC checks returned user IDs before accepting
+results or recording usage.
+
+Requests and LLM events have required user ownership, foreign keys to the local user
+references, and forced row-level security for both tenant and user. Stored proposals,
+source, evidence and validation belong to their containing request. Responses and
+cached proposals/validation expose `userId`; usage events retain provider, requested
+model, actual model, input/output tokens and status. Usage pages and summaries report
+only the calling user's usage within the tenant. Tenant-wide concurrency limits still
+count all users. Request IDs remain unique within a tenant.
+
+Migration `003_user_ownership.sql` backfills existing records and cached responses.
+Before applying it, set `RESEARCHER_LEGACY_USER_ID` to the QC seeded owner's ID. Without
+that setting it uses the reserved `legacy-researcher-owner` attribution identity.
+This is an attribution for historical records, not evidence of their original creator.
+The migration is transactional and leaves existing token counts and models intact.
+Deploy the migration and updated QC/researcher services together; an old researcher
+process cannot access rows without the new user scope. Restart running processes.
+
+Trusted Python HTTP clients should pass `ResearcherClient(..., user_id=qc_user_id)`.
+Trusted in-process callers should wrap work in `core.platform.identity.user_scope(user_id)`;
+the default is the legacy attribution identity, not an authenticated user.
+For the standalone playground, set `RESEARCHER_PLAYGROUND_USER_ID` to its development
+user ID. Its configuration and browser draft storage include this identity.

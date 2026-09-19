@@ -6,6 +6,7 @@ import secrets
 from fastapi.responses import FileResponse, JSONResponse
 from configs.config import _load_dotenv, get_config
 from core.platform.app import create_app
+from core.platform.identity import LEGACY_USER
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
@@ -31,7 +32,7 @@ def create_playground(*, service=None):
 
     @app.get("/playground/config", include_in_schema=False)
     def config():
-        return JSONResponse({"tenants": tenants, "provider": "anthropic",
+        return JSONResponse({"tenants": tenants, "userId": os.environ.get('RESEARCHER_PLAYGROUND_USER_ID', LEGACY_USER), "provider": "anthropic",
                 "model": os.environ.get("RESEARCHER_LLM_MODEL", DEFAULT_MODEL)}, headers={"Cache-Control": "no-store"})
 
     @app.get("/activity.js", include_in_schema=False)

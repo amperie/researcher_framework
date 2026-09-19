@@ -1,6 +1,8 @@
 """Tenant-scoped PostgreSQL receipts, cancellation fences, and usage summaries."""
 from psycopg.types.json import Jsonb
 from core.llm.usage import UsageLedger, get_usage_report
+from core.platform.identity import current_user
+from psycopg.errors import UniqueViolation
 
 
 class ServiceError(Exception):
@@ -22,12 +24,13 @@ class PlatformStore(UsageLedger):
         stamp = lambda value: value.isoformat() if value is not None else None
         return dict(tenantId=row[0], requestId=row[1], sessionId=row[2], status=row[4], stage=row[5],
             startedAt=stamp(row[6]), expiresAt=stamp(row[7]), finishedAt=stamp(row[8]),
-            result=row[9], error=row[10], progress=row[11])
+            result=row[9], error=row[10], progress=row[11], userId=row[12])
 
     def claim(self, tenant, request_id, session_id, fingerprint, timeout, *, tenant_limit=2, total_limit=32):
         if not tenant or not request_id:
             raise ValueError("Tenant and request identity required")
         with self.connect(tenant) as conn:
+            self.ensure_user(conn, tenant)
             # Serialize admission across replicas, never the LLM work itself.
             conn.execute("SELECT pg_advisory_xact_lock(71824002)")
             self._expire(conn, tenant)
@@ -36,15 +39,17 @@ class PlatformStore(UsageLedger):
                 if row[3] != fingerprint:
                     raise ServiceError(409, "idempotency_conflict", "requestId already belongs to different input")
                 return False, self._receipt(row)
-            active = conn.execute("""SELECT count(*) FROM researcher.platform_requests
-                WHERE tenant_id=%s AND status='running' AND expires_at>clock_timestamp()""", (tenant,)).fetchone()[0]
+            active = conn.execute('SELECT researcher.active_tenant_request_count()').fetchone()[0]
             total = conn.execute("SELECT researcher.active_request_count()").fetchone()[0]
             if active >= tenant_limit or total >= total_limit:
                 raise ServiceError(429, "capacity_exceeded", "Researcher capacity is temporarily exhausted", True)
-            row = conn.execute("""INSERT INTO researcher.platform_requests
-                (tenant_id, request_id, session_id, input_hash, status, stage, started_at, expires_at)
-                VALUES (%s,%s,%s,%s,'running','starting',clock_timestamp(),clock_timestamp() + %s * interval '1 second')
-                RETURNING *""", (tenant, request_id, session_id, fingerprint, timeout + 5)).fetchone()
+            try:
+                row = conn.execute("""INSERT INTO researcher.platform_requests
+                    (tenant_id, request_id, session_id, input_hash, status, stage, started_at, expires_at,user_id)
+                    VALUES (%s,%s,%s,%s,'running','starting',clock_timestamp(),clock_timestamp() + %s * interval '1 second',%s)
+                    RETURNING *""", (tenant, request_id, session_id, fingerprint, timeout + 5, current_user())).fetchone()
+            except UniqueViolation:
+                raise ServiceError(409, 'request_identity_unavailable', 'Use a new requestId') from None
         return True, self._receipt(row)
 
     def get_request(self, tenant, request_id):

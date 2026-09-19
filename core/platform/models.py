@@ -97,6 +97,7 @@ class Change(Contract):
 
 class Proposal(Contract):
     tenantId: Identity
+    userId: Identity
     proposalId: Identity
     sessionId: Identity
     componentId: Identity
@@ -126,6 +127,7 @@ class Diagnostic(Contract):
 
 class Validation(Contract):
     tenantId: Identity
+    userId: Identity
     validationId: Identity
     componentId: Identity
     draftId: Identity
@@ -142,6 +144,7 @@ class Validation(Contract):
 
 class UsageEvent(Contract):
     callId: str
+    userId: Identity
     tenantId: Identity | None
     requestId: Identity | None
     sessionId: Identity | None
@@ -172,6 +175,7 @@ class UsageReport(Contract):
 class TurnResult(Contract):
     schemaVersion: Literal["1"] = "1"
     tenantId: Identity
+    userId: Identity
     requestId: Identity
     sessionId: Identity
     content: str
@@ -193,6 +197,7 @@ class OperationError(Contract):
 
 class ErrorEnvelope(Contract):
     tenantId: Identity | None = None
+    userId: Identity | None = None
     error: OperationError
     usage: UsageReport | None = None
     diagnostics: list[dict] = Field(default_factory=list)
@@ -207,6 +212,7 @@ class ProgressEvent(Contract):
 
 class RequestReceipt(Contract):
     tenantId: Identity
+    userId: Identity
     requestId: Identity
     sessionId: Identity
     status: Literal["running", "succeeded", "failed", "stopped", "interrupted"]
@@ -234,11 +240,13 @@ class ModelUsage(UsageTotals):
 
 class UsageSummary(Contract):
     tenantId: Identity
+    userId: Identity
     models: list[ModelUsage]
     totals: UsageTotals
 
 
 class UsagePage(Contract):
     tenantId: Identity
+    userId: Identity
     items: list[UsageEvent]
     pagination: dict[str, int | bool]

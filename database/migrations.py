@@ -1,5 +1,6 @@
 """Forward-only, checksummed SQL migrations; independent of service and LLM code."""
 import hashlib
+import os
 from pathlib import Path
 import re
 import psycopg
@@ -76,6 +77,10 @@ def migrate(dsn, directory=VERSIONS):
         conn.execute("SET LOCAL ROLE qc_researcher_owner")
         conn.execute("SET LOCAL search_path TO pg_catalog")
         conn.execute("SET LOCAL lock_timeout = '10s'")
+        legacy_user = os.environ.get('RESEARCHER_LEGACY_USER_ID', 'legacy-researcher-owner')
+        if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', legacy_user):
+            raise ValueError('Invalid RESEARCHER_LEGACY_USER_ID')
+        conn.execute("SELECT set_config('app.legacy_user_id',%s,true)", (legacy_user,))
         conn.execute("SELECT pg_advisory_xact_lock(71824001)")
         applied = history(conn)
         verify(local, applied)

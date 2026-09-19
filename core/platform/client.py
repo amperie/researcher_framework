@@ -1,6 +1,7 @@
 """Small async client for QC. No implicit retries of billable requests."""
 import httpx
 from core.platform.models import TurnRequest, TurnResult
+from core.platform.identity import LEGACY_USER
 
 
 class ResearcherError(RuntimeError):
@@ -10,10 +11,11 @@ class ResearcherError(RuntimeError):
 
 
 class ResearcherClient:
-    def __init__(self, base_url: str, credential: str, tenant_id: str, *, transport=None):
+    def __init__(self, base_url: str, credential: str, tenant_id: str, *, user_id=LEGACY_USER, transport=None):
         self.tenant_id = tenant_id
+        self.user_id = self._id(user_id)
         self.http = httpx.AsyncClient(base_url=base_url.rstrip("/"), transport=transport,
-            headers={"Authorization": "Bearer " + credential}, timeout=httpx.Timeout(270, connect=5))
+            headers={"Authorization": "Bearer " + credential, 'X-User-ID': self.user_id}, timeout=httpx.Timeout(270, connect=5), trust_env=False)
 
     async def __aenter__(self):
         return self
@@ -36,6 +38,8 @@ class ResearcherClient:
             raise ResearcherError(response.status_code, error if isinstance(error, dict) else fallback)
         if data.get("tenantId") != self.tenant_id:
             raise ResearcherError(502, {"code": "tenant_mismatch", "message": "Researcher returned a different tenant"})
+        if data.get('userId') != self.user_id:
+            raise ResearcherError(502, {'code': 'user_mismatch', 'message': 'Researcher returned a different user'})
         return data
 
     async def turn(self, request: TurnRequest) -> TurnResult:

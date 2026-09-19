@@ -27,7 +27,34 @@ def setup(postgres_dsn, invoke=None, **kwargs):
 
 
 def headers(key=KEY_A):
-    return {"Authorization": "Bearer " + key}
+    return {"Authorization": "Bearer " + key, "X-User-ID": "legacy-researcher-owner"}
+
+
+def test_users_in_same_tenant_are_isolated(postgres_dsn):
+    _, client, invoke = setup(postgres_dsn)
+    first = {**headers(), "X-User-ID": "user-1"}
+    second = {**headers(), "X-User-ID": "user-2"}
+    body = request().model_dump()
+    assert client.post('/v1/turns', json=body, headers={'Authorization': 'Bearer ' + KEY_A}).status_code == 422
+    result = client.post('/v1/turns', json=body, headers=first)
+    assert result.status_code == 200
+    assert result.json()['userId'] == 'user-1'
+    assert result.json()['usage']['steps'][0]['userId'] == 'user-1'
+    for path in ('/v1/requests/r', '/v1/requests/r/events'):
+        assert client.get(path, headers=second).status_code == 404
+    assert client.post('/v1/requests/r/stop', headers=second).status_code == 404
+    assert client.post('/v1/turns', json=body, headers=second).status_code == 409
+    assert invoke.await_count == 1
+    assert client.get('/v1/usage/events', headers=second).json()['items'] == []
+    assert client.get('/v1/usage/summary', headers=second).json()['totals']['calls'] == 0
+    assert client.post('/v1/turns', json={**body, 'requestId': 'r2'}, headers=second).status_code == 200
+    for owner in (first, second):
+        page = client.get('/v1/usage/events', headers=owner).json()
+        assert len(page['items']) == 1
+        assert page['userId'] == page['items'][0]['userId'] == owner['X-User-ID']
+    stream = client.get('/v1/requests/r/events', headers=first)
+    assert stream.status_code == 200
+    assert 'user-1' in stream.text and 'user-2' not in stream.text
 
 
 def test_progress_is_durable_ordered_and_fenced(postgres_dsn):

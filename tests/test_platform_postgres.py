@@ -4,6 +4,7 @@ import psycopg
 from concurrent.futures import ThreadPoolExecutor
 from psycopg.types.json import Jsonb
 from core.platform.database import Database
+from core.platform.identity import user_scope
 from database.migrations import migrate
 from core.platform.store import PlatformStore, ServiceError
 from core.llm.usage import start_call, finish_call, usage_scope
@@ -24,8 +25,9 @@ def test_migrations_are_idempotent_and_runtime_cannot_migrate(postgres):
 def test_rls_applies_even_without_tenant_filters(postgres):
     db = Database(postgres["runtime"])
     with db.connect("a") as conn:
-        conn.execute("""INSERT INTO researcher.platform_requests VALUES
-            ('a','r','s','hash','running','starting',now(),now()+interval '1 minute',NULL,NULL,NULL)""")
+        db.ensure_user(conn, "a")
+        conn.execute("""INSERT INTO researcher.platform_requests (tenant_id,request_id,session_id,input_hash,status,stage,started_at,expires_at,finished_at,result,error,user_id) VALUES
+            ('a','r','s','hash','running','starting',now(),now()+interval '1 minute',NULL,NULL,NULL,'legacy-researcher-owner')""")
     with db.connect("b") as conn:
         assert conn.execute("SELECT * FROM researcher.platform_requests").fetchall() == []
         assert conn.execute("UPDATE researcher.platform_requests SET stage='stolen'").rowcount == 0
@@ -34,16 +36,37 @@ def test_rls_applies_even_without_tenant_filters(postgres):
         assert conn.execute("SELECT * FROM researcher.platform_requests").fetchall() == []
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         with db.connect("b") as conn:
-            conn.execute("""INSERT INTO researcher.platform_requests VALUES
-                ('a','forged','s','hash','running','starting',now(),now(),NULL,NULL,NULL)""")
+            conn.execute("""INSERT INTO researcher.platform_requests (tenant_id,request_id,session_id,input_hash,status,stage,started_at,expires_at,finished_at,result,error,user_id) VALUES
+                ('a','forged','s','hash','running','starting',now(),now(),NULL,NULL,NULL,'legacy-researcher-owner')""")
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         with db.connect("a") as conn:
+            db.ensure_user(conn, "a")
             conn.execute("ALTER TABLE researcher.platform_requests DISABLE ROW LEVEL SECURITY")
 
 
 def test_database_target_is_explicit():
     with pytest.raises(ValueError, match="dedicated"):
         Database("postgresql://localhost/qc")
+
+
+def test_same_tenant_user_rls_and_shared_capacity(postgres_dsn):
+    store = PlatformStore(postgres_dsn)
+    with user_scope('first'):
+        store.claim('a', 'r', 's', 'hash', 60)
+        with usage_scope('a', 'r', sink=store.record):
+            event = start_call('chat', 'provider', 'model')
+    with user_scope('second'):
+        with store.connect('a') as conn:
+            assert conn.execute('SELECT * FROM researcher.platform_requests').fetchall() == []
+            assert conn.execute('SELECT * FROM researcher.llm_usage').fetchall() == []
+            assert conn.execute("UPDATE researcher.platform_requests SET stage='stolen'").rowcount == 0
+        with pytest.raises(ValueError):
+            store.record(event)
+        with pytest.raises(ServiceError) as exc:
+            store.claim('a', 'r2', 's', 'hash', 60, tenant_limit=1)
+        assert exc.value.status == 429
+    with user_scope('first'):
+        assert store.get_request('a', 'r')['stage'] == 'starting'
 
 
 def test_runtime_rejects_role_administration_privilege(postgres):
@@ -102,11 +125,11 @@ def test_usage_rls_identity_and_terminal_event_are_preserved(postgres_dsn):
         assert conn.execute("UPDATE researcher.llm_usage SET request_id='stolen' WHERE tenant_id='a'").rowcount == 0
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         with store.connect("b") as conn:
-            conn.execute("INSERT INTO researcher.llm_usage VALUES ('a','forged','r',now(),%s)",
+            conn.execute("INSERT INTO researcher.llm_usage (tenant_id,call_id,request_id,started_at,event,user_id) VALUES ('a','forged','r',now(),%s,'legacy-researcher-owner')",
                 (Jsonb({**completed, "callId": "forged"}),))
     with pytest.raises(psycopg.errors.CheckViolation):
         with store.connect("b") as conn:
-            conn.execute("INSERT INTO researcher.llm_usage VALUES ('b','forged','r',now(),%s)",
+            conn.execute("INSERT INTO researcher.llm_usage (tenant_id,call_id,request_id,started_at,event,user_id) VALUES ('b','forged','r',now(),%s,'legacy-researcher-owner')",
                 (Jsonb({**completed, "callId": "forged"}),))
     assert store.usage_summary("a", since=event["startedAt"])[0]["knownInputTokens"] == 11
     assert store.usage_summary("a", until=event["startedAt"]) == []
@@ -140,8 +163,9 @@ def test_transaction_identity_resets_and_rollback_does_not_publish(postgres_dsn)
     db = Database(postgres_dsn)
     with pytest.raises(RuntimeError, match="abort"):
         with db.connect("a") as conn:
-            conn.execute("""INSERT INTO researcher.platform_requests VALUES
-                ('a','r','s','hash','running','starting',now(),now(),NULL,NULL,NULL)""")
+            db.ensure_user(conn, "a")
+            conn.execute("""INSERT INTO researcher.platform_requests (tenant_id,request_id,session_id,input_hash,status,stage,started_at,expires_at,finished_at,result,error,user_id) VALUES
+                ('a','r','s','hash','running','starting',now(),now(),NULL,NULL,NULL,'legacy-researcher-owner')""")
             raise RuntimeError("abort")
     with db.connect() as conn:
         assert conn.execute("SELECT current_setting('app.tenant_id')").fetchone()[0] == ""

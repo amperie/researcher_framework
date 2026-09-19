@@ -2,6 +2,7 @@
 import ast
 from datetime import datetime, timezone
 from uuid import uuid4
+from core.platform.identity import current_user
 from core.platform.models import ComponentContext, Validation, content_hash
 
 COMPONENT_INTERFACES = {
@@ -54,7 +55,7 @@ def validate_component(tenant_id: str, component: ComponentContext, *, source: s
     diagnostics.append({"code": "runtime_not_checked", "severity": "warning",
         "message": "Static checks do not execute source or establish runtime compatibility, safety, or profitability.",
         "actionable": "Run QC's isolated runtime validator before publishing a component version."})
-    return Validation(tenantId=tenant_id, validationId=str(uuid4()), componentId=component.componentId,
+    return Validation(tenantId=tenant_id, userId=current_user(), validationId=str(uuid4()), componentId=component.componentId,
         draftId=component.draftId, revision=component.revision, contentHash=content_hash(code),
         target="draft" if source is None else "proposal", checks=checks, diagnostics=diagnostics,
         status="failed" if any(c["status"] == "failed" for c in checks) else "passed",

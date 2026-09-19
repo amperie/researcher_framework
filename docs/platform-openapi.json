@@ -242,15 +242,31 @@
       "post": {
         "summary": "Turn",
         "operationId": "turn_v1_turns_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-User-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-User-Id"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/TurnRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -264,111 +280,106 @@
             }
           },
           "401": {
-            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Unauthorized"
           },
           "403": {
-            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Forbidden"
           },
           "404": {
-            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Not Found"
           },
           "409": {
-            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Conflict"
           },
           "413": {
-            "description": "Request Entity Too Large",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Request Entity Too Large"
           },
           "422": {
-            "description": "Unprocessable Entity",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
           },
           "429": {
-            "description": "Too Many Requests",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Too Many Requests"
           },
           "502": {
-            "description": "Bad Gateway",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Bad Gateway"
           },
           "503": {
-            "description": "Service Unavailable",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Service Unavailable"
           },
           "504": {
-            "description": "Gateway Timeout",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            }
+            },
+            "description": "Gateway Timeout"
           }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
+        }
       }
     },
     "/v1/requests/{request_id}": {
@@ -391,6 +402,15 @@
               "maxLength": 160,
               "pattern": "^[A-Za-z0-9_.:-]+$",
               "title": "Request Id"
+            }
+          },
+          {
+            "name": "X-User-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-User-Id"
             }
           }
         ],
@@ -528,6 +548,15 @@
               "maxLength": 160,
               "pattern": "^[A-Za-z0-9_.:-]+$",
               "title": "Request Id"
+            }
+          },
+          {
+            "name": "X-User-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-User-Id"
             }
           }
         ],
@@ -694,6 +723,15 @@
                 }
               ],
               "title": "Last-Event-Id"
+            }
+          },
+          {
+            "name": "X-User-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-User-Id"
             }
           }
         ],
@@ -862,6 +900,15 @@
               "default": 100,
               "title": "Pagesize"
             }
+          },
+          {
+            "name": "X-User-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-User-Id"
+            }
           }
         ],
         "responses": {
@@ -1020,6 +1067,15 @@
                 }
               ],
               "title": "Until"
+            }
+          },
+          {
+            "name": "X-User-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-User-Id"
             }
           }
         ],
@@ -1352,6 +1408,20 @@
             ],
             "title": "Tenantid"
           },
+          "userId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Userid"
+          },
           "error": {
             "$ref": "#/components/schemas/OperationError"
           },
@@ -1612,6 +1682,13 @@
             "pattern": "^[A-Za-z0-9_.:-]+$",
             "title": "Tenantid"
           },
+          "userId": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Userid"
+          },
           "proposalId": {
             "type": "string",
             "maxLength": 160,
@@ -1688,6 +1765,7 @@
         "type": "object",
         "required": [
           "tenantId",
+          "userId",
           "proposalId",
           "sessionId",
           "componentId",
@@ -1709,6 +1787,13 @@
             "minLength": 1,
             "pattern": "^[A-Za-z0-9_.:-]+$",
             "title": "Tenantid"
+          },
+          "userId": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Userid"
           },
           "requestId": {
             "type": "string",
@@ -1800,6 +1885,7 @@
         "type": "object",
         "required": [
           "tenantId",
+          "userId",
           "requestId",
           "sessionId",
           "status",
@@ -1936,6 +2022,13 @@
             "pattern": "^[A-Za-z0-9_.:-]+$",
             "title": "Tenantid"
           },
+          "userId": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Userid"
+          },
           "requestId": {
             "type": "string",
             "maxLength": 160,
@@ -2011,6 +2104,7 @@
         "type": "object",
         "required": [
           "tenantId",
+          "userId",
           "requestId",
           "sessionId",
           "content",
@@ -2024,6 +2118,13 @@
           "callId": {
             "type": "string",
             "title": "Callid"
+          },
+          "userId": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Userid"
           },
           "tenantId": {
             "anyOf": [
@@ -2161,6 +2262,7 @@
         "type": "object",
         "required": [
           "callId",
+          "userId",
           "tenantId",
           "requestId",
           "sessionId",
@@ -2188,6 +2290,13 @@
             "pattern": "^[A-Za-z0-9_.:-]+$",
             "title": "Tenantid"
           },
+          "userId": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Userid"
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/UsageEvent"
@@ -2214,6 +2323,7 @@
         "type": "object",
         "required": [
           "tenantId",
+          "userId",
           "items",
           "pagination"
         ],
@@ -2289,6 +2399,13 @@
             "pattern": "^[A-Za-z0-9_.:-]+$",
             "title": "Tenantid"
           },
+          "userId": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Userid"
+          },
           "models": {
             "items": {
               "$ref": "#/components/schemas/ModelUsage"
@@ -2304,6 +2421,7 @@
         "type": "object",
         "required": [
           "tenantId",
+          "userId",
           "models",
           "totals"
         ],
@@ -2346,6 +2464,13 @@
             "minLength": 1,
             "pattern": "^[A-Za-z0-9_.:-]+$",
             "title": "Tenantid"
+          },
+          "userId": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Userid"
           },
           "validationId": {
             "type": "string",
@@ -2428,6 +2553,7 @@
         "type": "object",
         "required": [
           "tenantId",
+          "userId",
           "validationId",
           "componentId",
           "draftId",

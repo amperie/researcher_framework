@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from core.llm.factory import get_llm
 from core.llm.usage import get_usage_report
+from core.platform.identity import current_user
 from core.platform.models import ModelOutput, Proposal, TurnRequest, TurnResult, content_hash
 from core.platform.research import collect_public_research
 from core.platform.validation import validate_component
@@ -93,7 +94,7 @@ class PlatformWorkflow:
                     raise InvalidModelOutput("Generated source is empty", response.content)
                 component = request.component
                 if output.sourceCode != component.sourceCode:
-                    proposal = Proposal(tenantId=request.tenantId, proposalId=str(uuid4()), sessionId=request.sessionId,
+                    proposal = Proposal(tenantId=request.tenantId, userId=current_user(), proposalId=str(uuid4()), sessionId=request.sessionId,
                         componentId=component.componentId, draftId=component.draftId, baseVersionId=component.baseVersionId,
                         baseDraftRevision=component.revision, baseContentHash=component.contentHash,
                         contentHash=content_hash(output.sourceCode), explanation=output.content,
@@ -102,7 +103,7 @@ class PlatformWorkflow:
         content = "\n\n".join(item.content for item in outputs.values())
         if not content and validation:
             content = f"Static checks {validation.status}; runtime validation is still required."
-        return TurnResult(tenantId=request.tenantId, requestId=request.requestId, sessionId=request.sessionId,
+        return TurnResult(tenantId=request.tenantId, userId=current_user(), requestId=request.requestId, sessionId=request.sessionId,
             content=content, ideas=ideas, evidence=evidence,
             evidenceIds=sorted({key for output in outputs.values() for key in output.evidenceIds}),
             proposal=proposal, validation=validation, usage=get_usage_report(),

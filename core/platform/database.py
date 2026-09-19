@@ -4,6 +4,7 @@ import os
 
 import psycopg
 from database.target import validate_target
+from core.platform.identity import current_user
 
 
 class Database:
@@ -28,13 +29,20 @@ class Database:
             if role[0]:
                 raise ValueError("Researcher runtime requires a non-owner role without administrative privileges or privileged memberships")
             conn.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant,))
+            conn.execute("SELECT set_config('app.user_id', %s, true)", (current_user(),))
             yield conn
+
+    @staticmethod
+    def ensure_user(conn, tenant):
+        conn.execute('INSERT INTO researcher.users(tenant_id,user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING',
+                     (tenant, current_user()))
 
     def check_ready(self):
         with self.connect() as conn:
-            secured = conn.execute("""SELECT count(*)=2 AND bool_and(relrowsecurity AND relforcerowsecurity)
-                FROM pg_class WHERE oid IN ('researcher.platform_requests'::regclass, 'researcher.llm_usage'::regclass)""").fetchone()[0]
+            secured = conn.execute("""SELECT count(*)=3 AND bool_and(relrowsecurity AND relforcerowsecurity)
+                FROM pg_class WHERE oid IN ('researcher.platform_requests'::regclass, 'researcher.llm_usage'::regclass,
+                'researcher.users'::regclass)""").fetchone()[0]
             if not secured:
                 raise psycopg.OperationalError("Researcher tables require forced row-level security")
-            conn.execute("SELECT tenant_id, progress FROM researcher.platform_requests LIMIT 0")
-            conn.execute("SELECT tenant_id FROM researcher.llm_usage LIMIT 0")
+            conn.execute("SELECT tenant_id, user_id, progress FROM researcher.platform_requests LIMIT 0")
+            conn.execute("SELECT tenant_id, user_id FROM researcher.llm_usage LIMIT 0")

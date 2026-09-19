@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 from core.platform.database import Database
+from core.platform.identity import current_user
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ def start_call(step: str, provider: str, model: str) -> dict:
     scope = _scope.get()
     event = {
         "callId": str(uuid4()), "tenantId": scope.tenant_id if scope else None,
+        "userId": current_user(),
         "requestId": scope.request_id if scope else None,
         "sessionId": scope.session_id if scope else None,
         "step": step, "provider": provider, "requestedModel": model, "model": model,
@@ -102,17 +104,22 @@ class UsageLedger(Database):
     """PostgreSQL usage ledger; each event commits independently of LLM work."""
 
     def record(self, event: dict) -> None:
+        event = {**event, 'userId': event.get('userId', current_user())}
+        if event['userId'] != current_user():
+            raise ValueError('Usage user context mismatch')
         if not event.get("tenantId") or not event.get("requestId"):
             raise ValueError("Durable usage requires tenant and request identity")
         with self.connect(event["tenantId"]) as conn:
-            changed = conn.execute("""INSERT INTO researcher.llm_usage VALUES (%s, %s, %s, %s, %s)
+            self.ensure_user(conn, event['tenantId'])
+            changed = conn.execute("""INSERT INTO researcher.llm_usage (tenant_id,call_id,request_id,started_at,event,user_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT(tenant_id, call_id) DO UPDATE SET event=excluded.event
                 WHERE llm_usage.request_id=excluded.request_id AND llm_usage.event->>'status'='started'""",
-                (event["tenantId"], event["callId"], event["requestId"], event["startedAt"], Jsonb(event))).rowcount
+                (event["tenantId"], event["callId"], event["requestId"], event["startedAt"], Jsonb(event), event['userId'])).rowcount
             if not changed:
                 old = conn.execute("SELECT request_id FROM researcher.llm_usage WHERE tenant_id=%s AND call_id=%s",
                     (event["tenantId"], event["callId"])).fetchone()
-                if old[0] != event["requestId"]:
+                if not old or old[0] != event["requestId"]:
                     raise ValueError("callId already belongs to another request")
 
     def list_events(self, tenant_id: str, *, request_id: str | None = None, limit=100, offset=0) -> list[dict]:
